@@ -41,6 +41,10 @@ struct CatalogRow: Identifiable {
   let isTranslatable: Bool
   /// Source-language display text (explicit source value, else the key text).
   let sourceText: String
+  /// Longest value across all languages (override-aware, source included).
+  let longestText: String
+  let longestLanguage: String
+  let longestLength: Int
   let commentText: String
   let commentIsEditable: Bool
   let commentHasOverride: Bool
@@ -72,9 +76,9 @@ struct LangCell {
 /// missing/absent values always sort last, in either direction.
 struct CatalogSort: SortComparator, Hashable {
   enum Column: Hashable {
-    case key
     case comment
     case source
+    case longest
     case language(String)
   }
 
@@ -99,6 +103,9 @@ struct CatalogSort: SortComparator, Hashable {
   }
 
   func compare(_ lhs: CatalogRow, _ rhs: CatalogRow) -> ComparisonResult {
+    if column == .longest {
+      return Self.compareLongest(lhs, rhs, order: order)
+    }
     let a = text(of: lhs)
     let b = text(of: rhs)
     var result = Self.compareText(a, b)
@@ -116,11 +123,32 @@ struct CatalogSort: SortComparator, Hashable {
 
   private func text(of row: CatalogRow) -> String {
     switch column {
-    case .key: return row.key
     case .comment: return row.commentText
     case .source: return row.sourceText
+    case .longest: return row.longestText
     case .language(let language): return row.cells[language]?.text ?? ""
     }
+  }
+
+  /// Longest-column comparison: by character count, then text, then key.
+  /// Zero-length values sort last in both directions.
+  private static func compareLongest(_ lhs: CatalogRow, _ rhs: CatalogRow, order: SortOrder) -> ComparisonResult {
+    if lhs.longestLength == 0 && rhs.longestLength == 0 {
+      return compareText(lhs.key, rhs.key)
+    }
+    if lhs.longestLength == 0 { return .orderedDescending }
+    if rhs.longestLength == 0 { return .orderedAscending }
+    var result: ComparisonResult =
+      lhs.longestLength < rhs.longestLength ? .orderedAscending
+      : lhs.longestLength > rhs.longestLength ? .orderedDescending
+      : compareText(lhs.longestText, rhs.longestText)
+    if result == .orderedSame, lhs.key != rhs.key {
+      result = compareText(lhs.key, rhs.key)
+    }
+    if order == .reverse {
+      result = result.reversed
+    }
+    return result
   }
 
   /// Text comparison with empty/missing sorting last, after any text.
@@ -167,10 +195,11 @@ final class LocalizationStore {
   var includeNonTranslatable = false
   /// Non-source languages with a visible column (source column is permanent).
   private(set) var selectedLanguages: [String] = []
-  var sortOrder: [CatalogSort] = [CatalogSort(.key)]
+  var sortOrder: [CatalogSort] = [CatalogSort(.source)]
 
-  /// Default language columns on open: source + ar, de, es, fr, ja, ru, zh-Hans.
-  static let defaultColumns = ["ar", "de", "es", "fr", "ja", "ru", "zh-Hans"]
+  /// Default language columns on open: none selected (user picks via buttons).
+  /// Kept for reference; `open` resets to an empty selection.
+  static let defaultColumns: [String] = []
 
   var isLoaded: Bool { catalog != nil }
 
@@ -284,6 +313,7 @@ final class LocalizationStore {
   }
 
   /// Full (re)load: parse + reset everything. Used by Open….
+  /// No language is selected by default; the user picks via the buttons.
   func open(_ url: URL) {
     do {
       let catalog = try StringCatalog.load(url: url)
@@ -293,9 +323,8 @@ final class LocalizationStore {
       searchText = ""
       filter = .all
       includeNonTranslatable = false
-      sortOrder = [CatalogSort(.key)]
-      let present = Set(catalog.languages)
-      selectedLanguages = Self.defaultColumns.filter { present.contains($0) && $0 != catalog.sourceLanguage }
+      sortOrder = [CatalogSort(.source)]
+      selectedLanguages = []
     } catch {
       catalog = nil
       catalogURL = nil
@@ -339,7 +368,7 @@ final class LocalizationStore {
         rows.append(row)
       }
     }
-    let sort = sortOrder.isEmpty ? [CatalogSort(.key)] : sortOrder
+    let sort = sortOrder.isEmpty ? [CatalogSort(.source)] : sortOrder
     return rows.sorted(using: sort)
   }
 
@@ -363,16 +392,61 @@ final class LocalizationStore {
         hasVariations: variations,
         isEditable: translatable && !variations)
     }
+    let sourceText = catalog.sourceDisplay(for: key)
+    let (longestText, longestLanguage) = Self.longestValue(
+      catalog: catalog, key: key, sourceText: sourceText,
+      overrides: valueOverrides[key])
     let commentOverride = commentOverrides[key]
     return CatalogRow(
       key: key,
       isTranslatable: translatable,
-      sourceText: catalog.sourceDisplay(for: key),
+      sourceText: sourceText,
+      longestText: longestText,
+      longestLanguage: longestLanguage,
+      longestLength: longestText.count,
       commentText: commentOverride ?? entry.comment ?? "",
       commentIsEditable: translatable,
       commentHasOverride: commentOverride != nil,
       cells: cells,
       searchBlob: searching ? folded(searchBlobText(key: key, entry: entry)) : "")
+  }
+
+  /// Longest value across the source display text and every language
+  /// (parsed + overrides), with variations contributing their parsed values.
+  /// Returns (text, languageCode) — the source code appears as-is.
+  private static func longestValue(
+    catalog: StringCatalog,
+    key: String,
+    sourceText: String,
+    overrides: [String: String]?
+  ) -> (String, String) {
+    var best = (text: sourceText, language: catalog.sourceLanguage)
+    guard let localizations = catalog.strings[key]?.localizations else {
+      return best
+    }
+    for (language, loc) in localizations {
+      let candidates: [String]
+      if let override = overrides?[language] {
+        candidates = [override]
+      } else if let value = loc.stringUnit?.value {
+        candidates = [value]
+      } else if let variations = loc.variations {
+        candidates = variations.values.compactMap { $0.values.compactMap(\.stringUnit?.value) }.flatMap { $0 }
+      } else {
+        candidates = []
+      }
+      for text in candidates where text.count > best.text.count {
+        best = (text, language)
+      }
+    }
+    // Overrides for languages with no parsed entry at all.
+    if let overrides {
+      for (language, text) in overrides where localizations[language] == nil
+        && text.count > best.text.count {
+        best = (text, language)
+      }
+    }
+    return best
   }
 
   private func searchBlobText(key: String, entry: StringCatalog.Entry) -> String {
@@ -472,6 +546,8 @@ struct LocalizationView: View {
     VStack(spacing: 0) {
       ControlsBar(store: store)
       Divider()
+      LanguageButtonsRow(store: store)
+      Divider()
       CatalogTable(store: store)
       Divider()
       FooterBar(store: store)
@@ -527,25 +603,42 @@ private struct ControlsBar: View {
       Toggle("Non-translatable", isOn: $store.includeNonTranslatable)
         .toggleStyle(.checkbox)
         .help("Include the \(store.nonTranslatableCount) keys marked shouldTranslate = false (hidden by default)")
-
-      Menu {
-        ForEach(store.pickerLanguages, id: \.self) { language in
-          Button {
-            store.toggleLanguage(language)
-          } label: {
-            if store.isLanguageSelected(language) {
-              Image(systemName: "checkmark")
-            }
-            Text(language)
-          }
-        }
-      } label: {
-        Label("Columns", systemImage: "tablecells")
-      }
-      .disabled(store.pickerLanguages.isEmpty)
     }
     .padding(.horizontal, 12)
     .padding(.vertical, 8)
+  }
+}
+
+// MARK: - Language buttons
+
+/// Horizontal strip of language buttons on the second row; selected ones are
+/// highlighted. Tapping toggles the language column.
+private struct LanguageButtonsRow: View {
+  let store: LocalizationStore
+
+  var body: some View {
+    ScrollView(.horizontal, showsIndicators: false) {
+      HStack(spacing: 6) {
+        ForEach(store.pickerLanguages, id: \.self) { language in
+          let selected = store.isLanguageSelected(language)
+          Button {
+            store.toggleLanguage(language)
+          } label: {
+            Text(language)
+              .font(.callout)
+              .foregroundStyle(selected ? .white : .primary)
+              .padding(.horizontal, 10)
+              .padding(.vertical, 4)
+              .background(selected ? Color.accentColor : Color.secondary.opacity(0.12), in: Capsule())
+          }
+          .buttonStyle(.plain)
+          .help(selected ? "Hide \(language) column" : "Show \(language) column")
+        }
+      }
+      .padding(.horizontal, 12)
+      .padding(.vertical, 6)
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
   }
 }
 
@@ -557,11 +650,6 @@ private struct CatalogTable: View {
   var body: some View {
     @Bindable var store = store
     Table(store.visibleRows, sortOrder: $store.sortOrder) {
-      TableColumn("Key", sortUsing: CatalogSort(.key)) { row in
-        keyCell(row)
-      }
-      .width(min: 140, ideal: 280, max: 600)
-
       TableColumn("Comment", sortUsing: CatalogSort(.comment)) { row in
         commentCell(row)
       }
@@ -570,6 +658,11 @@ private struct CatalogTable: View {
       TableColumn(store.sourceLanguageTitle, sortUsing: CatalogSort(.source)) { row in
         sourceCell(row)
       }
+
+      TableColumn("Longest", sortUsing: CatalogSort(.longest)) { row in
+        longestCell(row)
+      }
+      .width(min: 140, ideal: 300, max: 700)
 
       TableColumnForEach(store.selectedLanguages, id: \.self) { language in
         TableColumn(language, sortUsing: CatalogSort(.language(language))) { row in
@@ -581,7 +674,7 @@ private struct CatalogTable: View {
 
   // MARK: cells
 
-  private func keyCell(_ row: CatalogRow) -> some View {
+  private func longestCell(_ row: CatalogRow) -> some View {
     HStack(spacing: 5) {
       if !row.isTranslatable {
         Image(systemName: "nosign")
@@ -589,12 +682,18 @@ private struct CatalogTable: View {
           .foregroundStyle(.tertiary)
           .help("Not translatable")
       }
-      Text(row.key)
-        .monospaced()
-        .lineLimit(2)
-        .help(row.key)
+      Text(row.longestText)
+        .lineLimit(3)
+        .help(longestTooltip(row))
     }
     .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  private func longestTooltip(_ row: CatalogRow) -> String {
+    if row.longestLanguage.isEmpty {
+      return row.longestText
+    }
+    return "\(row.longestLanguage) · \(row.longestLength) chars\n\(row.longestText)"
   }
 
   private func commentCell(_ row: CatalogRow) -> some View {
