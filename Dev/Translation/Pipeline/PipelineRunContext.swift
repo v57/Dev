@@ -35,6 +35,10 @@ final class PipelineRunContext {
   /// records; every other record is skipped by `isTarget`. Neighbors and
   /// context still come from the whole project.
   let targetKey: String?
+  /// When set (a row's "Translate" with columns selected), machine stages
+  /// act on ONLY these target-language codes within the targeted key — the
+  /// columns visible as sections. Nil = every language (whole-project run).
+  let targetLanguages: Set<String>?
   /// BCP-47 code of the catalog's source language ("en" fallback).
   var sourceLanguage: String
   /// All context documents that exist right now; created docs are appended.
@@ -56,11 +60,13 @@ final class PipelineRunContext {
     context: ModelContext,
     project: Project,
     sourceLanguage: String? = nil,
-    targetKey: String? = nil
+    targetKey: String? = nil,
+    targetLanguages: Set<String>? = nil
   ) {
     self.context = context
     self.project = project
     self.targetKey = targetKey
+    self.targetLanguages = targetLanguages
     // Catalog wins over the caller's guess: the file IS the source of truth
     // for the source language and comments.
     let catalog = (try? StringCatalog.load(url: project.catalogURL))
@@ -78,10 +84,14 @@ final class PipelineRunContext {
   // MARK: - context docs
 
   /// True when a record belongs to this run's work set: `targetKey` is nil
-  /// (whole-project run) or the record is the targeted key. Applied by every
-  /// stage's candidate filter so a single-item run touches exactly one key.
+  /// (whole-project run) or the record is the targeted key, AND (when the
+  /// run is language-scoped) the record's language is one of the selected
+  /// columns. Applied by every stage's candidate filter so a single-item run
+  /// touches exactly the selected languages of one key.
   func isTarget(_ record: TranslationRecord) -> Bool {
-    targetKey == nil || record.key == targetKey
+    if let targetKey, record.key != targetKey { return false }
+    if let targetLanguages, !targetLanguages.contains(record.language) { return false }
+    return true
   }
 
   /// The global document, nil before Stage 0 ever created one.

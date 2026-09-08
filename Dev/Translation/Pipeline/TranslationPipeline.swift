@@ -62,6 +62,7 @@ struct TranslationPipeline {
     project: Project,
     sourceLanguage: String? = nil,
     key: String? = nil,
+    languages: Set<String>? = nil,
     progress: TranslateRunProgress? = nil
   ) async -> PipelineRunSummary {
     await run(
@@ -69,18 +70,21 @@ struct TranslationPipeline {
       context: TranslationStore.shared.context,
       sourceLanguage: sourceLanguage,
       key: key,
+      languages: languages,
       progress: progress
     )
   }
 
   /// Runs the pipeline for one project (or, when `key` is set, for exactly
-  /// one key of it). `sourceLanguage` is only a fallback — the project's
-  /// catalog file, when readable, is authoritative.
+  /// one key of it — and, when `languages` is set, only those target
+  /// languages of that key). `sourceLanguage` is only a fallback — the
+  /// project's catalog file, when readable, is authoritative.
   static func run(
     project: Project,
     context: ModelContext,
     sourceLanguage: String? = nil,
     key: String? = nil,
+    languages: Set<String>? = nil,
     progress: TranslateRunProgress? = nil
   ) async -> PipelineRunSummary {
     var summary = PipelineRunSummary()
@@ -89,11 +93,12 @@ struct TranslationPipeline {
       context: context,
       project: project,
       sourceLanguage: sourceLanguage,
-      targetKey: key
+      targetKey: key,
+      targetLanguages: languages
     )
     progress?.note(key == nil
       ? "Translate run: \(project.name) (\(env.allRecords.count) records, source \(env.sourceLanguage))"
-      : "Translate \(key!): source \(env.sourceLanguage)")
+      : "Translate \(key!)\(languages.map { " (\($0.count) columns)" } ?? ""): source \(env.sourceLanguage)")
 
     guard !env.allRecords.isEmpty else {
       progress?.note("No records to translate")
