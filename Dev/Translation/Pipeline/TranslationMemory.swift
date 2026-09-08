@@ -73,7 +73,12 @@ enum TranslationMemory {
         sourceText: sourceText,
         sourceLanguage: sourceLanguage,
         targetLanguage: targetLanguage,
-        value: value
+        value: value,
+        // Set at init, not via the model's all-nil ContextVersions() default:
+        // the caller's value is already persistable-guarded (snapshot routes
+        // through Reconcile.persistableVersions), so the inserted row never
+        // holds an all-nil ContextVersions even transiently.
+        contextVersions: contextVersions
       )
       context.insert(entry)
     }

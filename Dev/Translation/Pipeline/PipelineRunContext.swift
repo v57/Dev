@@ -104,11 +104,21 @@ final class PipelineRunContext {
   }
 
   /// The three versions a translation written NOW should be stamped with.
+  /// Routed through Reconcile.persistableVersions so an all-nil snapshot
+  /// (no ContextDoc exists yet — nil members, which SwiftData on this SDK
+  /// crashes on when re-faulting a persisted all-nil row) is lifted to
+  /// ContextVersions(global: 0). Docs start at v1, so 0 is the safe "no doc
+  /// existed" sentinel: staleness math is identical ((v ?? -1) < docVersion,
+  /// and 0 < 1 once a doc exists). Every pipeline write — writeFill,
+  /// rewriteValue, Stage-0's reviewed upsert, TM machine hints, and the
+  /// TranslationEdit audits they append — receives this function's output.
   func snapshot(for language: String) -> ContextVersions {
-    ContextVersions(
-      global: version(scope: .global),
-      project: version(scope: .project),
-      language: version(scope: .language, language: language)
+    Reconcile.persistableVersions(
+      ContextVersions(
+        global: version(scope: .global),
+        project: version(scope: .project),
+        language: version(scope: .language, language: language)
+      )
     )
   }
 
