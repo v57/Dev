@@ -193,6 +193,8 @@ final class LocalizationStore {
   var searchText = ""
   var filter: RowFilter = .all
   var includeNonTranslatable = false
+  /// Longest column hidden unless the user opts in (off by default).
+  var showLongest = false
   /// Non-source languages with a visible column (source column is permanent).
   private(set) var selectedLanguages: [String] = []
   var sortOrder: [CatalogSort] = [CatalogSort(.source)]
@@ -274,6 +276,18 @@ final class LocalizationStore {
     }
   }
 
+  /// Show/hide the Longest column; hiding also drops it from the sort so a
+  /// hidden column never drives the row order.
+  func setShowLongest(_ show: Bool) {
+    showLongest = show
+    if !show {
+      sortOrder.removeAll { $0.column == .longest }
+      if sortOrder.isEmpty {
+        sortOrder = [CatalogSort(.source)]
+      }
+    }
+  }
+
   /// Dismiss the load-error alert.
   func dismissError() {
     loadError = nil
@@ -323,6 +337,7 @@ final class LocalizationStore {
       searchText = ""
       filter = .all
       includeNonTranslatable = false
+      showLongest = false
       sortOrder = [CatalogSort(.source)]
       selectedLanguages = []
     } catch {
@@ -603,6 +618,12 @@ private struct ControlsBar: View {
       Toggle("Non-translatable", isOn: $store.includeNonTranslatable)
         .toggleStyle(.checkbox)
         .help("Include the \(store.nonTranslatableCount) keys marked shouldTranslate = false (hidden by default)")
+
+      Toggle("Show Longest", isOn: Binding(
+        get: { store.showLongest },
+        set: { store.setShowLongest($0) }))
+        .toggleStyle(.checkbox)
+        .help("Show the Longest column (longest value across all languages)")
     }
     .padding(.horizontal, 12)
     .padding(.vertical, 8)
@@ -659,10 +680,12 @@ private struct CatalogTable: View {
         sourceCell(row)
       }
 
-      TableColumn("Longest", sortUsing: CatalogSort(.longest)) { row in
-        longestCell(row)
+      if store.showLongest {
+        TableColumn("Longest", sortUsing: CatalogSort(.longest)) { row in
+          longestCell(row)
+        }
+        .width(min: 140, ideal: 300, max: 700)
       }
-      .width(min: 140, ideal: 300, max: 700)
 
       TableColumnForEach(store.selectedLanguages, id: \.self) { language in
         TableColumn(language, sortUsing: CatalogSort(.language(language))) { row in
