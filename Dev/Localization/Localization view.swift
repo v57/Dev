@@ -821,9 +821,10 @@ private struct CatalogTable: View {
   }
 }
 
-/// Editable language cell with a local draft: keystrokes mutate @State only,
-/// so the editing field is never rebuilt while typing. The store override is
-/// committed on Return or focus loss. `revision` resyncs the draft on reload.
+/// Editable language cell: read-only Text until clicked, then a focused
+/// TextEditor for multiline editing. Keystrokes mutate @State draft only, so
+/// the field is never rebuilt while typing; the store override commits on
+/// focus loss (Escape cancels). `revision` resyncs the draft on reload.
 private struct LanguageEditCell: View {
   let store: LocalizationStore
   let rowKey: String
@@ -831,44 +832,77 @@ private struct LanguageEditCell: View {
   let cell: LangCell
 
   @State private var draft: String = ""
+  @State private var isEditing = false
   @State private var initializedRevision = -1
   @FocusState private var focused: Bool
 
   var body: some View {
-    TextField("", text: $draft, prompt: Text("missing").foregroundStyle(.tertiary), axis: .vertical)
-      .textFieldStyle(.plain)
-      .focused($focused)
-      .disabled(!cell.isEditable)
-      .background(store.valueOverrides[rowKey]?[language] != nil ? editedTint : Color.clear)
-      .if(store.valueOverrides[rowKey]?[language] != nil) { $0.help("Edited — in memory only") }
-      .onAppear {
-        draft = cell.text
-        initializedRevision = store.revision
-      }
-      .onChange(of: store.revision) { _, revision in
-        if revision != initializedRevision {
+    Group {
+      if isEditing {
+        TextEditor(text: $draft)
+          .focused($focused)
+          .scrollContentBackground(.hidden)
+          .background(hasOverride ? editedTint : Color.clear)
+          .frame(minHeight: 44)
+          .onAppear { focused = true }
+          .onExitCommand { cancel() }
+          .onChange(of: focused) { _, isFocused in
+            if !isFocused { commit() }
+          }
+      } else {
+        Group {
+          if cell.text.isEmpty {
+            Text("missing")
+              .foregroundStyle(.tertiary)
+          } else {
+            Text(cell.text)
+              .lineLimit(3)
+          }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .help(cell.text.isEmpty ? "Missing — click to add" : cell.text)
+        .background(hasOverride ? editedTint : Color.clear)
+        .onTapGesture {
+          guard cell.isEditable else { return }
           draft = store.value(for: rowKey, language: language)
-          initializedRevision = revision
+          isEditing = true
         }
       }
-      .onChange(of: cell.text) { _, newText in
-        // External change (e.g. a sort or reload rebuilt the row while we
-        // were NOT the editor): adopt it unless we are mid-edit.
-        if !focused {
-          draft = newText
-        }
+    }
+    .onAppear {
+      draft = cell.text
+      initializedRevision = store.revision
+    }
+    .onChange(of: store.revision) { _, revision in
+      if revision != initializedRevision {
+        draft = store.value(for: rowKey, language: language)
+        initializedRevision = revision
+        isEditing = false
       }
-      .onSubmit {
-        store.setValue(draft, for: rowKey, language: language)
+    }
+    .onChange(of: cell.text) { _, newText in
+      // Adopt external changes (sort/reload/commit) unless mid-edit.
+      if !isEditing && !focused {
+        draft = newText
       }
-      .onChange(of: focused) { _, isFocused in
-        if !isFocused {
-          store.setValue(draft, for: rowKey, language: language)
-          // Adopt the canonical value (commit may normalize to an override
-          // drop when the draft equals the parsed text).
-          draft = store.value(for: rowKey, language: language)
-        }
-      }
+    }
+  }
+
+  private var hasOverride: Bool {
+    store.valueOverrides[rowKey]?[language] != nil
+  }
+
+  private func commit() {
+    store.setValue(draft, for: rowKey, language: language)
+    // Adopt the canonical value (commit may drop the override when the
+    // draft equals the parsed text).
+    draft = store.value(for: rowKey, language: language)
+    isEditing = false
+  }
+
+  private func cancel() {
+    draft = store.value(for: rowKey, language: language)
+    isEditing = false
   }
 
   private var editedTint: Color {
