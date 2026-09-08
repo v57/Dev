@@ -181,8 +181,12 @@ private extension ComparisonResult {
 // MARK: - Store
 
 /// Owns the parsed catalog, load state, view state and the in-memory edit
-/// overrides. Edits never mutate the parsed document, so Reload = drop
-/// overrides + re-read the file.
+/// overrides. Since Phase C the catalog is reconciled into SwiftData
+/// (Reconcile): every (re)load upserts TranslationRecords from the file —
+/// DB-owned provenance (provider, context-versions, state) survives the
+/// reload — and every committed cell edit is written through to the DB
+/// record AND back into the .xcstrings stringUnit, so edits survive Reload.
+/// The file stays the artifact; the DB is the working/provenance store.
 @Observable
 final class LocalizationStore {
   // MARK: load state
@@ -190,6 +194,13 @@ final class LocalizationStore {
   private(set) var catalog: StringCatalog?
   private(set) var catalogURL: URL?
   private(set) var loadError: String?
+
+  // MARK: SwiftData reconcile
+
+  /// The project this catalog reconciles into (nil until the first load).
+  private(set) var project: Project?
+  /// Non-nil when the last durable save of an edit failed.
+  private(set) var saveError: String?
 
   // MARK: in-memory edits
 
@@ -249,8 +260,38 @@ final class LocalizationStore {
     let parsed = catalog?.rawValue(for: key, language: language) ?? ""
     if text == parsed {
       removeOverride(key: key, language: language)
-    } else {
-      valueOverrides[key, default: [:]][language] = text
+      return
+    }
+    valueOverrides[key, default: [:]][language] = text
+    // Only a real value is durable. Clearing a cell to empty is a display
+    // affordance in this phase (shows "missing" until Reload) — it never
+    // deletes the file's translation, so it has nothing to write through.
+    if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      writeThrough(text: text, key: key, language: language)
+    }
+  }
+
+  /// Durable half of a cell commit: upsert the record (human edit ->
+  /// .manual/.reviewed + user-confirmed edit row) and write value + state
+  /// back into the .xcstrings stringUnit. The override stays as the
+  /// in-memory display value; a failure surfaces as saveError instead of
+  /// silently dropping the edit.
+  private func writeThrough(text: String, key: String, language: String) {
+    guard let catalog, let project else {
+      saveError = "No catalog open"
+      return
+    }
+    let context = TranslationStore.shared.context
+    do {
+      let sourceText = catalog.sourceDisplay(for: key)
+      Reconcile.applyHumanEdit(
+        key: key, language: language, value: text,
+        sourceText: sourceText, project: project, context: context)
+      let updated = try Reconcile.commit(catalog, project: project)
+      self.catalog = updated
+      saveError = nil
+    } catch {
+      saveError = error.localizedDescription
     }
   }
 
@@ -300,9 +341,23 @@ final class LocalizationStore {
     }
   }
 
-  /// Dismiss the load-error alert.
+  /// Dismiss the load-error alert (and any save error).
   func dismissError() {
     loadError = nil
+    saveError = nil
+  }
+
+  /// True when either the catalog failed to load or a save failed.
+  var hasError: Bool { loadError != nil || saveError != nil }
+
+  /// Alert title for the current error.
+  var errorTitle: String {
+    saveError != nil ? "Couldn't save catalog" : "Couldn't open catalog"
+  }
+
+  /// Alert message for the current error (save error wins).
+  var errorMessage: String? {
+    saveError ?? loadError
   }
 
   // MARK: - loading
@@ -377,6 +432,23 @@ final class LocalizationStore {
     catalogURL = url
     valueOverrides = [:]
     revision += 1
+    reconcile(catalog, url: url)
+  }
+
+  /// Upsert the parsed catalog into SwiftData: find-or-create the project
+  /// for this file and mirror every (key, language) slot into
+  /// TranslationRecords. DB-owned provenance survives the reload; only
+  /// unowned empty slots adopt what the file now says. Browsing never
+  /// depends on the DB — if reconcile fails the file stays open and the
+  /// next edit surfaces saveError.
+  private func reconcile(_ catalog: StringCatalog, url: URL) {
+    let context = TranslationStore.shared.context
+    let project = Reconcile.ensureProject(catalogURL: url, in: context)
+    let stats = Reconcile.upsertFromCatalog(catalog, project: project, context: context)
+    self.project = project
+    NSLog(
+      "[Localization] reconciled %@: %d created, %d refreshed, %d kept",
+      url.lastPathComponent, stats.created, stats.refreshed, stats.kept)
   }
 
   // MARK: - rows
@@ -554,16 +626,16 @@ struct LocalizationView: View {
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .task { store.openDefaultIfPresent() }
-    .alert("Couldn't open catalog", isPresented: errorBinding) {
+    .alert(store.errorTitle, isPresented: errorBinding) {
       Button("OK") { store.dismissError() }
     } message: {
-      Text(store.loadError ?? "")
+      Text(store.errorMessage ?? "")
     }
   }
 
   private var errorBinding: Binding<Bool> {
     Binding(
-      get: { store.loadError != nil },
+      get: { store.hasError },
       set: { if !$0 { store.dismissError() } })
   }
 
