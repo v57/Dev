@@ -702,18 +702,20 @@ private struct CatalogTable: View {
       TableColumn(store.sourceLanguageTitle, sortUsing: CatalogSort(.source)) { row in
         sourceCell(row)
       }
+      .width(min: 160, ideal: 300, max: 300)
 
       if store.showLongest {
         TableColumn("Longest", sortUsing: CatalogSort(.longest)) { row in
           longestCell(row)
         }
-        .width(min: 140, ideal: 300, max: 700)
+        .width(min: 140, ideal: 300, max: 300)
       }
 
       TableColumnForEach(store.selectedLanguages, id: \.self) { language in
         TableColumn(language, sortUsing: CatalogSort(.language(language))) { row in
           languageCell(row, language: language)
         }
+        .width(min: 120, ideal: 240, max: 300)
       }
     }
   }
