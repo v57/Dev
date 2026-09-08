@@ -584,7 +584,10 @@ struct LocalizationView: View {
 
   private var loadedContent: some View {
     VStack(spacing: 0) {
-      CatalogTable(store: store).safeAreaBar(edge: .top) {
+      CatalogTable(store: store)
+        .searchable(text: $store.searchText,
+                    prompt: "Search keys, comments, translations")
+        .safeAreaBar(edge: .top) {
         VStack {
           ControlsBar(store: store)
           Divider()
@@ -633,10 +636,6 @@ private struct ControlsBar: View {
           Label(rowFilter.title, systemImage: rowFilter.icon).tag(rowFilter)
         }
       }.pickerStyle(.segmented).fixedSize()
-
-      TextField("Search keys, comments, translations", text: $store.searchText)
-        .textFieldStyle(.roundedBorder)
-        .frame(minWidth: 160, maxWidth: 260)
 
       Spacer()
 
