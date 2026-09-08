@@ -73,6 +73,11 @@ struct LangCell {
   let hasOverride: Bool
   let hasVariations: Bool
   let isEditable: Bool
+  /// Live SwiftData record of the (key, language) slot — the cell's dot,
+  /// spinner, provenance tooltip and mid-run text read it directly. Nil for
+  /// variation holders and non-translatable keys, which reconcile does not
+  /// model.
+  let record: TranslationRecord?
 
   /// No value at all: no parsed unit, no override, and no variations to show.
   var isMissing: Bool { !hasParsed && !hasOverride && !hasVariations }
@@ -244,10 +249,53 @@ final class LocalizationStore {
     catalog?.strings.values.filter { $0.shouldTranslate == false }.count ?? 0
   }
 
-  // MARK: override-aware accessors
+  // MARK: - SwiftData working store (records + run)
 
+  /// Live SwiftData records of the open project, indexed (key, language).
+  /// Rebuilt on every reconcile (open/reload); record objects are mutated
+  /// in place by edits and pipeline runs, so the refs stay valid.
+  private var recordIndex: [String: [String: TranslationRecord]] = [:]
+
+  /// Drives the Translate run lifecycle — progress, cancel, per-cell
+  /// in-flight state and the last-run summary. One instance per store.
+  let run = TranslateRunController()
+
+  /// True when the Translate button may start a run.
+  var canTranslate: Bool { isLoaded && project != nil && !run.isRunning }
+
+  /// Kicks the pipeline off from the Translate button (async Task; re-entry
+  /// is guarded by `begin`). When the run returns, the DB is flushed back
+  /// into the .xcstrings artifact and the updated catalog is adopted so the
+  /// table shows the machine output without a reload.
+  func startTranslate() {
+    guard let project, run.begin(project: project) else { return }
+    Task { await performTranslate(project: project) }
+  }
+
+  private func performTranslate(project: Project) async {
+    let summary = await run.execute(project: project)
+    defer { run.finish(summary) }
+    guard let catalog else { return }
+    do {
+      self.catalog = try Reconcile.commit(catalog, project: project)
+      saveError = nil
+    } catch {
+      saveError = error.localizedDescription
+    }
+  }
+
+  /// Translates the open catalog; nil record slots fall back to the file.
   func value(for key: String, language: String) -> String {
     if let override = valueOverrides[key]?[language] { return override }
+    // Working-store value first: pipeline fills land in the DB record
+    // mid-run and only reach the .xcstrings file at the end-of-run commit,
+    // so cells must read the record (not the parsed file) to update as the
+    // run writes them.
+    if let record = recordIndex[key]?[language],
+       let recordValue = record.value,
+       !recordValue.isBlankOrEmpty {
+      return recordValue
+    }
     return catalog?.rawValue(for: key, language: language) ?? ""
   }
 
@@ -408,9 +456,12 @@ final class LocalizationStore {
       showLongest = false
       sortOrder = [CatalogSort(.source)]
       selectedLanguages = []
+      // A different catalog: drop the previous project's run summary.
+      run.reset()
     } catch {
       catalog = nil
       catalogURL = nil
+      recordIndex = [:]
       loadError = error.localizedDescription
     }
   }
@@ -446,9 +497,25 @@ final class LocalizationStore {
     let project = Reconcile.ensureProject(catalogURL: url, in: context)
     let stats = Reconcile.upsertFromCatalog(catalog, project: project, context: context)
     self.project = project
+    rebuildRecordIndex()
     NSLog(
       "[Localization] reconciled %@: %d created, %d refreshed, %d kept",
       url.lastPathComponent, stats.created, stats.refreshed, stats.kept)
+  }
+
+  /// Re-indexes the project's live records by (key, language) for O(1)
+  /// per-cell lookups. Runs after every upsert, so newly seeded slots
+  /// (open/reload) are visible to the table immediately.
+  private func rebuildRecordIndex() {
+    guard let project else {
+      recordIndex = [:]
+      return
+    }
+    var index: [String: [String: TranslationRecord]] = [:]
+    for record in project.records {
+      index[record.key, default: [:]][record.language] = record
+    }
+    recordIndex = index
   }
 
   // MARK: - rows
@@ -490,7 +557,8 @@ final class LocalizationStore {
         hasParsed: loc?.stringUnit != nil,
         hasOverride: valueOverrides[key]?[language] != nil,
         hasVariations: variations,
-        isEditable: translatable && !variations)
+        isEditable: translatable && !variations,
+        record: recordIndex[key]?[language])
     }
     let sourceText = catalog.sourceDisplay(for: key)
     let (longestText, longestLanguage) = Self.longestValue(
@@ -681,12 +749,13 @@ private struct ControlsBar: View {
     @Bindable var store = store
     HStack(spacing: 12) {
       Button("Open…") { store.openPanelAndLoad() }
+        .disabled(store.run.isRunning)
       Button {
         store.reload()
       } label: {
         Label("Reload", systemImage: "arrow.clockwise")
       }
-      .disabled(!store.isLoaded)
+      .disabled(!store.isLoaded || store.run.isRunning)
 
       Picker(selection: $store.filter, label: EmptyView()) {
         ForEach(RowFilter.allCases) { rowFilter in
@@ -713,6 +782,17 @@ private struct ControlsBar: View {
           Image(systemName: "ruler")
         }
         .help("Show the Longest column (longest value across all languages)")
+
+      Button {
+        store.startTranslate()
+      } label: {
+        Label("Translate", systemImage: "translate")
+      }
+      .buttonStyle(.borderedProminent)
+      .disabled(!store.canTranslate)
+      .help(store.run.isRunning
+        ? "A translation run is in progress — cancel it from the footer"
+        : "Run the translation pipeline: learn from confirmed edits, resolve translation memory, then Apple, Ollama and review")
     }.toggleStyle(ToggleButtonStyle())
     .padding(.horizontal, 12)
     .padding(.vertical, 8)
@@ -838,9 +918,8 @@ private struct CatalogTable: View {
   private func languageCell(_ row: CatalogRow, language: String) -> some View {
     let cell = row.cells[language] ?? LangCell(
       text: "", state: nil, hasParsed: false, hasOverride: false,
-      hasVariations: false, isEditable: row.isTranslatable)
+      hasVariations: false, isEditable: row.isTranslatable, record: nil)
     return HStack(spacing: 5) {
-      stateDot(cell.state)
       if cell.hasVariations {
         Text(cell.text)
           .lineLimit(3)
@@ -848,36 +927,19 @@ private struct CatalogTable: View {
           .foregroundStyle(.tertiary)
           .help("Variations present — read-only in this phase")
       } else {
-        LanguageEditCell(store: store, rowKey: row.key, language: language, cell: cell)
+        CellStatusAccessory(
+          record: cell.record,
+          isInFlight: store.run.isInFlight(cell.record))
+        if let record = cell.record,
+           record.lastEditor == ProvenanceMarkers.translationMemory {
+          TranslationMemoryBadge(record: record)
+        }
+        LanguageEditCell(
+          store: store, rowKey: row.key, language: language,
+          cell: cell, record: cell.record)
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
-  }
-
-  @ViewBuilder
-  private func stateDot(_ state: String?) -> some View {
-    if let state {
-      let color: Color = {
-        switch state {
-        case "needs_review": return .orange
-        case "translated": return .green
-        case "new": return .blue
-        default: return .gray
-        }
-      }()
-      let tooltip: String = {
-        switch state {
-        case "needs_review": return "Needs review"
-        case "translated": return "Translated"
-        case "new": return "New"
-        default: return state
-        }
-      }()
-      Circle()
-        .fill(color)
-        .frame(width: 6, height: 6)
-        .help(tooltip)
-    }
   }
 
   private var editedTint: Color {
@@ -902,6 +964,9 @@ private struct LanguageEditCell: View {
   let rowKey: String
   let language: String
   let cell: LangCell
+  /// Live record of the slot (nil for variation/non-translatable cells);
+  /// its value feeds the read-only display and its provenance the tooltip.
+  let record: TranslationRecord?
 
   @State private var draft: String = ""
   @State private var isEditing = false
@@ -923,16 +988,16 @@ private struct LanguageEditCell: View {
           }
       } else {
         Group {
-          if cell.text.isEmpty {
+          if liveText.isEmpty {
             Text("missing")
               .foregroundStyle(.tertiary)
           } else {
-            Text(cell.text)
+            Text(liveText)
               .lineLimit(3)
           }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .help(cell.text.isEmpty ? "Missing — click to add" : cell.text)
+        .help(helpText)
         .background(hasOverride ? editedTint : Color.clear)
         .onTapGesture {
           guard cell.isEditable else { return }
@@ -942,7 +1007,7 @@ private struct LanguageEditCell: View {
       }
     }
     .onAppear {
-      draft = cell.text
+      draft = store.value(for: rowKey, language: language)
       initializedRevision = store.revision
     }
     .onChange(of: store.revision) { _, revision in
@@ -958,6 +1023,22 @@ private struct LanguageEditCell: View {
         draft = newText
       }
     }
+  }
+
+  /// Override-aware, record-aware display value. Reads the live SwiftData
+  /// record so mid-run machine fills appear the moment the pipeline writes
+  /// them — before the end-of-run commit reaches the .xcstrings file.
+  private var liveText: String {
+    store.value(for: rowKey, language: language)
+  }
+
+  /// Cell tooltip: full provenance when the record carries a value
+  /// (producer + context versions + state), else the plain prompt.
+  private var helpText: String {
+    if let record, let provenance = record.provenanceSummary {
+      return provenance
+    }
+    return liveText.isEmpty ? "Missing — click to add" : liveText
   }
 
   private var hasOverride: Bool {
@@ -999,6 +1080,7 @@ private struct FooterBar: View {
         }
       }
       Spacer()
+      TranslateRunStatus(controller: store.run)
     }
     .font(.caption)
     .lineLimit(1)
