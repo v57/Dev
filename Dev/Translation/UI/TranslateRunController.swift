@@ -53,19 +53,26 @@ final class TranslateRunController {
     begin(project: project, key: nil)
   }
 
-  /// Whole-key run (all languages); see the language-scoped variant.
+  /// Whole-key run; see the language-scoped variant.
   func begin(project: Project, key: String?) -> Bool {
     begin(project: project, key: key, languages: nil)
   }
 
-  /// Same as `begin(project:)` but scopes the run (and its per-cell spinner
-  /// candidates) to a single key, and — when `languages` is set — only that
-  /// key's records in those languages (the selected columns).
+  /// `languages`-scoped run; force=false (incremental). See the canonical
+  /// variant below.
   func begin(project: Project, key: String?, languages: Set<String>?) -> Bool {
+    begin(project: project, key: key, languages: languages, force: false)
+  }
+
+  /// Same as `begin(project:)` but scopes the run (and its per-cell spinner
+  /// candidates) to a single key and `languages` (the selected columns), and
+  /// — when `force` — lifts the freshness gate so fresh machine values are
+  /// re-targeted (row "Translate").
+  func begin(project: Project, key: String?, languages: Set<String>?, force: Bool) -> Bool {
     guard !isRunning else { return false }
     progress = TranslateRunProgress()
     summary = nil
-    candidates = Self.candidateRecords(of: project, key: key, languages: languages)
+    candidates = Self.candidateRecords(of: project, key: key, languages: languages, force: force)
     startedAt = .now
     isRunning = true
     return true
@@ -82,10 +89,16 @@ final class TranslateRunController {
     await execute(project: project, key: key, languages: nil)
   }
 
-  /// Runs the pipeline scoped to one key (row-menu "Translate"), restricted
-  /// to `languages` when set — else the whole project.
+  /// `languages`-scoped run; force=false (incremental).
   func execute(project: Project, key: String?, languages: Set<String>?) async -> PipelineRunSummary {
-    await TranslationPipeline.run(project: project, key: key, languages: languages, progress: progress)
+    await execute(project: project, key: key, languages: languages, force: false)
+  }
+
+  /// Runs the pipeline scoped to one key (row-menu "Translate"), restricted
+  /// to `languages` when set — else the whole project. `force` lifts the
+  /// freshness gate for the targeted records.
+  func execute(project: Project, key: String?, languages: Set<String>?, force: Bool) async -> PipelineRunSummary {
+    await TranslationPipeline.run(project: project, key: key, languages: languages, force: force, progress: progress)
   }
 
   /// Ends the run and publishes the summary. Called after the caller has
@@ -118,7 +131,7 @@ final class TranslateRunController {
   /// pipeline's `needsTarget` rule so cells stop spinning exactly when the
   /// run writes their record — read-only duplication, since the pipeline's
   /// selector is private to Dev/Translation/Pipeline.
-  private static func candidateRecords(of project: Project, key: String? = nil, languages: Set<String>? = nil) -> Set<PersistentIdentifier> {
+  private static func candidateRecords(of project: Project, key: String? = nil, languages: Set<String>? = nil, force: Bool = false) -> Set<PersistentIdentifier> {
     let context = TranslationStore.shared.context
     let docs = (try? context.fetch(FetchDescriptor<ContextDoc>())) ?? []
     let globalVersion = docs.first { $0.scope == .global }?.version
@@ -149,7 +162,7 @@ final class TranslateRunController {
       if let key, record.key != key { continue }
       if let languages, !languages.contains(record.language) { continue }
       guard record.state != .reviewed, record.provider != .manual else { continue }
-      if record.state == .empty || isStale(record) {
+      if record.state == .empty || force || isStale(record) {
         ids.insert(record.persistentModelID)
       }
     }

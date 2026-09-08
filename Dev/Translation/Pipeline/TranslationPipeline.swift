@@ -63,6 +63,7 @@ struct TranslationPipeline {
     sourceLanguage: String? = nil,
     key: String? = nil,
     languages: Set<String>? = nil,
+    force: Bool = false,
     progress: TranslateRunProgress? = nil
   ) async -> PipelineRunSummary {
     await run(
@@ -71,6 +72,7 @@ struct TranslationPipeline {
       sourceLanguage: sourceLanguage,
       key: key,
       languages: languages,
+      force: force,
       progress: progress
     )
   }
@@ -85,6 +87,7 @@ struct TranslationPipeline {
     sourceLanguage: String? = nil,
     key: String? = nil,
     languages: Set<String>? = nil,
+    force: Bool = false,
     progress: TranslateRunProgress? = nil
   ) async -> PipelineRunSummary {
     var summary = PipelineRunSummary()
@@ -94,7 +97,8 @@ struct TranslationPipeline {
       project: project,
       sourceLanguage: sourceLanguage,
       targetKey: key,
-      targetLanguages: languages
+      targetLanguages: languages,
+      force: force
     )
     progress?.note(key == nil
       ? "Translate run: \(project.name) (\(env.allRecords.count) records, source \(env.sourceLanguage))"
@@ -188,7 +192,9 @@ struct TranslationPipeline {
   /// True when a machine stage may re-examine a record: it is not
   /// human-owned (no .manual provider, not .reviewed) and it is either NEW
   /// (empty, needs any value) or STALE (context moved on since its value was
-  /// written). TM-resolved records of this run are excluded by the caller.
+  /// written). On a forced run (row "Translate") a fresh machine value is
+  /// treated as a target too. TM-resolved records of this run are excluded
+  /// by the caller.
   private static func needsTarget(
     _ record: TranslationRecord,
     env: PipelineRunContext
@@ -199,7 +205,7 @@ struct TranslationPipeline {
     if record.state == .empty {
       return true
     }
-    return env.isStale(record)
+    return env.force || env.isStale(record)
   }
 
   /// True when the run itself wrote this record (updatedAt after run start).
@@ -513,9 +519,10 @@ struct TranslationPipeline {
         && !excluded.contains($0.persistentModelID)
         && hasUsableSource($0)
         && (($0.state == .empty)  // (a) Apple could not cover these
-            || ($0.provider == .apple  // (b) Apple output, fresh or stale
-                && $0.state == .needs_review
-                && (justWritten($0, runStart: runStart) || env.isStale($0))))
+            || ($0.state == .needs_review
+                && (env.force  // forced single-item: re-translate machine output
+                    || ($0.provider == .apple  // (b) Apple output, fresh or stale
+                        && (justWritten($0, runStart: runStart) || env.isStale($0))))))
     }
     guard !candidateRecords.isEmpty else { return outcome }
 
@@ -584,6 +591,11 @@ struct TranslationPipeline {
       }
       if $0.state == .empty {
         return true  // survivors nobody filled
+      }
+      // Forced single-item: the target row's machine output always gets a
+      // final review pass, even when fresh.
+      if env.force, $0.state == .needs_review {
+        return true
       }
       // Survivors with a value: Ollama output that is fresh or stale, and
       // Apple output that is fresh or stale AND high-stakes (placeholders /

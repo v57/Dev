@@ -39,6 +39,11 @@ final class PipelineRunContext {
   /// act on ONLY these target-language codes within the targeted key — the
   /// columns visible as sections. Nil = every language (whole-project run).
   let targetLanguages: Set<String>?
+  /// When true (row-menu "Translate"), the incremental freshness gate is
+  /// lifted for the run's records: non-human-owned `needs_review` machine
+  /// values are re-translated/reviewed even when fresh. The whole-catalog
+  /// button leaves this false so it stays incremental.
+  let force: Bool
   /// BCP-47 code of the catalog's source language ("en" fallback).
   var sourceLanguage: String
   /// All context documents that exist right now; created docs are appended.
@@ -61,12 +66,14 @@ final class PipelineRunContext {
     project: Project,
     sourceLanguage: String? = nil,
     targetKey: String? = nil,
-    targetLanguages: Set<String>? = nil
+    targetLanguages: Set<String>? = nil,
+    force: Bool = false
   ) {
     self.context = context
     self.project = project
     self.targetKey = targetKey
     self.targetLanguages = targetLanguages
+    self.force = force
     // Catalog wins over the caller's guess: the file IS the source of truth
     // for the source language and comments.
     let catalog = (try? StringCatalog.load(url: project.catalogURL))

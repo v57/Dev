@@ -273,17 +273,19 @@ final class LocalizationStore {
   }
 
   /// Row-menu "Translate": runs the pipeline scoped to a single key AND only
-  /// the currently-selected language columns (the visible sections) — reusing
-  /// the shared run controller so the footer shows progress and re-entry is
-  /// guarded. No columns selected => no targets (nothing is translated).
+  /// the currently-selected language columns (the visible sections), with the
+  /// freshness gate lifted so even a fresh `needs_review` machine value is
+  /// re-translated/reviewed. Reuses the shared run controller so the footer
+  /// shows progress and re-entry is guarded. No columns selected => no
+  /// targets (nothing is translated).
   func translateKey(_ key: String) {
     let languages = Set(selectedLanguages)
-    guard let project, run.begin(project: project, key: key, languages: languages) else { return }
-    Task { await performTranslate(project: project, key: key, languages: languages) }
+    guard let project, run.begin(project: project, key: key, languages: languages, force: true) else { return }
+    Task { await performTranslate(project: project, key: key, languages: languages, force: true) }
   }
 
-  private func performTranslate(project: Project, key: String? = nil, languages: Set<String>? = nil) async {
-    let summary = await run.execute(project: project, key: key, languages: languages)
+  private func performTranslate(project: Project, key: String? = nil, languages: Set<String>? = nil, force: Bool = false) async {
+    let summary = await run.execute(project: project, key: key, languages: languages, force: force)
     defer { run.finish(summary) }
     guard let catalog else { return }
     do {
