@@ -5,10 +5,708 @@
 //  Created by Dmitry on 08.09.26.
 //
 
+import AppKit
+import Foundation
 import SwiftUI
+import UniformTypeIdentifiers
+
+// MARK: - Row filter
+
+enum RowFilter: String, CaseIterable, Identifiable {
+  case all
+  case needsReview
+  case missing
+  case translated
+  case new
+
+  var id: String { rawValue }
+
+  var title: String {
+    switch self {
+    case .all: return "All"
+    case .needsReview: return "Needs review"
+    case .missing: return "Missing"
+    case .translated: return "Translated"
+    case .new: return "New"
+    }
+  }
+}
+
+// MARK: - Row model
+
+/// One table row = one catalog key, with override-aware display values.
+struct CatalogRow: Identifiable {
+  let key: String
+  /// shouldTranslate == false keys get a glyph and no editable cells.
+  let isTranslatable: Bool
+  /// Source-language display text (explicit source value, else the key text).
+  let sourceText: String
+  let commentText: String
+  let commentIsEditable: Bool
+  let commentHasOverride: Bool
+  /// Display state of every selected non-source language column.
+  let cells: [String: LangCell]
+  /// Pre-folded haystack for search (empty when search is inactive).
+  let searchBlob: String
+
+  var id: String { key }
+}
+
+/// Display state of one language cell (missing, edited, variation…).
+struct LangCell {
+  let text: String
+  /// Parsed file state — display only, never flipped by edits.
+  let state: String?
+  let hasParsed: Bool
+  let hasOverride: Bool
+  let hasVariations: Bool
+  let isEditable: Bool
+
+  /// No value at all: no parsed unit, no override, and no variations to show.
+  var isMissing: Bool { !hasParsed && !hasOverride && !hasVariations }
+}
+
+// MARK: - Sort comparator
+
+/// Custom comparator so language columns (chosen at runtime) can sort, and so
+/// missing/absent values always sort last, in either direction.
+struct CatalogSort: SortComparator, Hashable {
+  enum Column: Hashable {
+    case key
+    case comment
+    case source
+    case language(String)
+  }
+
+  var column: Column
+  var order: SortOrder = .forward
+
+  typealias Compared = CatalogRow
+
+  init(_ column: Column, order: SortOrder = .forward) {
+    self.column = column
+    self.order = order
+  }
+
+  /// Column identity only — ascending/descending of the same column is one
+  /// sort key for the header state machine.
+  static func == (lhs: CatalogSort, rhs: CatalogSort) -> Bool {
+    lhs.column == rhs.column
+  }
+
+  func hash(into hasher: inout Hasher) {
+    hasher.combine(column)
+  }
+
+  func compare(_ lhs: CatalogRow, _ rhs: CatalogRow) -> ComparisonResult {
+    let a = text(of: lhs)
+    let b = text(of: rhs)
+    var result = Self.compareText(a, b)
+    // Deterministic tie-break: rows are identical on the sort key only when
+    // they are the same key, so rows stay stable while other cells edit.
+    if result == .orderedSame, lhs.key != rhs.key {
+      result = Self.compareText(lhs.key, rhs.key)
+    }
+    // Flip direction, but keep empty/missing values last in both directions.
+    if order == .reverse, !a.isEmpty, !b.isEmpty {
+      result = result.reversed
+    }
+    return result
+  }
+
+  private func text(of row: CatalogRow) -> String {
+    switch column {
+    case .key: return row.key
+    case .comment: return row.commentText
+    case .source: return row.sourceText
+    case .language(let language): return row.cells[language]?.text ?? ""
+    }
+  }
+
+  /// Text comparison with empty/missing sorting last, after any text.
+  private static func compareText(_ a: String, _ b: String) -> ComparisonResult {
+    if a.isEmpty && b.isEmpty { return .orderedSame }
+    if a.isEmpty { return .orderedDescending }
+    if b.isEmpty { return .orderedAscending }
+    return a.localizedStandardCompare(b)
+  }
+}
+
+private extension ComparisonResult {
+  var reversed: ComparisonResult {
+    switch self {
+    case .orderedAscending: return .orderedDescending
+    case .orderedDescending: return .orderedAscending
+    case .orderedSame: return .orderedSame
+    }
+  }
+}
+
+// MARK: - Store
+
+/// Owns the parsed catalog, load state, view state and the in-memory edit
+/// overrides. Edits never mutate the parsed document, so Reload = drop
+/// overrides + re-read the file.
+@Observable
+final class LocalizationStore {
+  // MARK: load state
+
+  private(set) var catalog: StringCatalog?
+  private(set) var catalogURL: URL?
+  private(set) var loadError: String?
+
+  // MARK: in-memory edits
+
+  private(set) var valueOverrides: [String: [String: String]] = [:]  // key -> language -> text
+  private(set) var commentOverrides: [String: String] = [:]          // key -> text
+
+  // MARK: view state
+
+  var searchText = ""
+  var filter: RowFilter = .all
+  var includeNonTranslatable = false
+  /// Non-source languages with a visible column (source column is permanent).
+  private(set) var selectedLanguages: [String] = []
+  var sortOrder: [CatalogSort] = [CatalogSort(.key)]
+
+  /// Default language columns on open: source + ar, de, es, fr, ja, ru, zh-Hans.
+  static let defaultColumns = ["ar", "de", "es", "fr", "ja", "ru", "zh-Hans"]
+
+  var isLoaded: Bool { catalog != nil }
+
+  var pickerLanguages: [String] {
+    guard let catalog else { return [] }
+    return catalog.languages.filter { $0 != catalog.sourceLanguage }
+  }
+
+  var sourceLanguageTitle: String {
+    guard let catalog else { return "" }
+    return "\(catalog.sourceLanguage) (source)"
+  }
+
+  var totalKeyCount: Int { catalog?.strings.count ?? 0 }
+
+  /// Keys explicitly marked shouldTranslate = false.
+  var nonTranslatableCount: Int {
+    catalog?.strings.values.filter { $0.shouldTranslate == false }.count ?? 0
+  }
+
+  // MARK: override-aware accessors
+
+  func value(for key: String, language: String) -> String {
+    if let override = valueOverrides[key]?[language] { return override }
+    return catalog?.rawValue(for: key, language: language) ?? ""
+  }
+
+  func comment(for key: String) -> String {
+    if let override = commentOverrides[key] { return override }
+    return catalog?.strings[key]?.comment ?? ""
+  }
+
+  func setValue(_ text: String, for key: String, language: String) {
+    guard catalog != nil else { return }
+    let parsed = catalog?.rawValue(for: key, language: language) ?? ""
+    if text == parsed {
+      removeOverride(key: key, language: language)
+    } else {
+      valueOverrides[key, default: [:]][language] = text
+    }
+  }
+
+  func setComment(_ text: String, for key: String) {
+    guard catalog != nil else { return }
+    let parsed = catalog?.strings[key]?.comment ?? ""
+    if text == parsed {
+      commentOverrides.removeValue(forKey: key)
+    } else {
+      commentOverrides[key] = text
+    }
+  }
+
+  private func removeOverride(key: String, language: String) {
+    guard valueOverrides[key] != nil else { return }
+    valueOverrides[key]?.removeValue(forKey: language)
+    if valueOverrides[key]?.isEmpty == true {
+      valueOverrides.removeValue(forKey: key)
+    }
+  }
+
+  // MARK: language columns
+
+  func isLanguageSelected(_ language: String) -> Bool {
+    selectedLanguages.contains(language)
+  }
+
+  func toggleLanguage(_ language: String) {
+    if let index = selectedLanguages.firstIndex(of: language) {
+      selectedLanguages.remove(at: index)
+    } else {
+      selectedLanguages.append(language)
+    }
+  }
+
+  /// Dismiss the load-error alert.
+  func dismissError() {
+    loadError = nil
+  }
+
+  // MARK: - loading
+
+  /// <root>/Dev/Localization/<this file> — drop 3 path components to reach
+  /// the repo root, then the gitignored fixture sits next to it.
+  static var defaultFixtureURL: URL {
+    let root = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+    return root.appendingPathComponent("Localizable.xcstrings")
+  }
+
+  /// Auto-open the repo-root fixture on first appearance, if it exists.
+  func openDefaultIfPresent() {
+    guard catalog == nil else { return }
+    let url = Self.defaultFixtureURL
+    guard FileManager.default.fileExists(atPath: url.path) else { return }
+    open(url)
+  }
+
+  func openPanelAndLoad() {
+    let panel = NSOpenPanel()
+    panel.canChooseFiles = true
+    panel.canChooseDirectories = false
+    panel.allowsMultipleSelection = false
+    panel.message = "Choose an .xcstrings catalog"
+    if let type = UTType(filenameExtension: "xcstrings") {
+      panel.allowedContentTypes = [type]
+    }
+    guard panel.runModal() == .OK, let url = panel.url else { return }
+    open(url)
+  }
+
+  /// Full (re)load: parse + reset everything. Used by Open….
+  func open(_ url: URL) {
+    do {
+      let catalog = try StringCatalog.load(url: url)
+      apply(catalog, url: url)
+      loadError = nil
+      // Fresh file: reset view state to defaults.
+      searchText = ""
+      filter = .all
+      includeNonTranslatable = false
+      sortOrder = [CatalogSort(.key)]
+      let present = Set(catalog.languages)
+      selectedLanguages = Self.defaultColumns.filter { present.contains($0) && $0 != catalog.sourceLanguage }
+    } catch {
+      catalog = nil
+      catalogURL = nil
+      loadError = error.localizedDescription
+    }
+  }
+
+  /// Re-read the current file and drop overrides; view state is untouched.
+  func reload() {
+    guard let catalogURL else { return }
+    do {
+      let catalog = try StringCatalog.load(url: catalogURL)
+      apply(catalog, url: catalogURL)
+      loadError = nil
+    } catch {
+      loadError = error.localizedDescription
+    }
+  }
+
+  private func apply(_ catalog: StringCatalog, url: URL) {
+    self.catalog = catalog
+    catalogURL = url
+    valueOverrides = [:]
+    commentOverrides = [:]
+  }
+
+  // MARK: - rows
+
+  /// Rows after include-toggle, filter, search and sort — rebuilt from store
+  /// state, so edits survive any sort/filter toggling.
+  var visibleRows: [CatalogRow] {
+    guard let catalog else { return [] }
+    let query = folded(searchText)
+    let searching = !query.isEmpty
+    var rows: [CatalogRow] = []
+    rows.reserveCapacity(catalog.strings.count)
+    for (key, entry) in catalog.strings {
+      if !includeNonTranslatable && entry.shouldTranslate == false { continue }
+      let row = makeRow(catalog: catalog, key: key, entry: entry, query: query, searching: searching)
+      if matchesFilter(row) && (!searching || row.searchBlob.contains(query)) {
+        rows.append(row)
+      }
+    }
+    let sort = sortOrder.isEmpty ? [CatalogSort(.key)] : sortOrder
+    return rows.sorted(using: sort)
+  }
+
+  private func makeRow(
+    catalog: StringCatalog,
+    key: String,
+    entry: StringCatalog.Entry,
+    query: String,
+    searching: Bool
+  ) -> CatalogRow {
+    let translatable = entry.shouldTranslate != false
+    var cells: [String: LangCell] = [:]
+    for language in selectedLanguages {
+      let loc = entry.localizations?[language]
+      let variations = loc?.variations?.isEmpty == false
+      cells[language] = LangCell(
+        text: valueOverrides[key]?[language] ?? loc?.stringUnit?.value ?? "",
+        state: loc?.stringUnit?.state,
+        hasParsed: loc?.stringUnit != nil,
+        hasOverride: valueOverrides[key]?[language] != nil,
+        hasVariations: variations,
+        isEditable: translatable && !variations)
+    }
+    let commentOverride = commentOverrides[key]
+    return CatalogRow(
+      key: key,
+      isTranslatable: translatable,
+      sourceText: catalog.sourceDisplay(for: key),
+      commentText: commentOverride ?? entry.comment ?? "",
+      commentIsEditable: translatable,
+      commentHasOverride: commentOverride != nil,
+      cells: cells,
+      searchBlob: searching ? folded(searchBlobText(key: key, entry: entry)) : "")
+  }
+
+  private func searchBlobText(key: String, entry: StringCatalog.Entry) -> String {
+    var parts = [key, entry.comment ?? ""]
+    if let localizations = entry.localizations {
+      for language in localizations.values {
+        if let value = language.stringUnit?.value {
+          parts.append(value)
+        }
+      }
+    }
+    return parts.joined(separator: "\n")
+  }
+
+  /// Filter across the visible non-source language columns only: a key
+  /// matches when the chosen state occurs in at least one of them.
+  private func matchesFilter(_ row: CatalogRow) -> Bool {
+    switch filter {
+    case .all:
+      return true
+    case .needsReview:
+      return row.cells.values.contains { $0.state == "needs_review" }
+    case .missing:
+      return row.cells.values.contains { $0.isMissing }
+    case .translated:
+      return row.cells.values.contains { $0.state == "translated" }
+    case .new:
+      return row.cells.values.contains { $0.state == "new" }
+    }
+  }
+
+  /// Missing count for one language over the base key set (respects the
+  /// non-translatable toggle, ignores search/filter).
+  func missingCount(for language: String) -> Int {
+    guard let catalog else { return 0 }
+    var count = 0
+    for (key, entry) in catalog.strings {
+      if !includeNonTranslatable && entry.shouldTranslate == false { continue }
+      let hasOverride = valueOverrides[key]?[language] != nil
+      if !catalog.hasValue(for: key, language: language) && !hasOverride {
+        count += 1
+      }
+    }
+    return count
+  }
+}
+
+// MARK: - Folding helper
+
+/// Case- and diacritic-insensitive folding used by search.
+func folded(_ string: String) -> String {
+  string.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+}
+
+// MARK: - Conditional modifier helper
+
+extension View {
+  @ViewBuilder
+  func `if`<Content: View>(_ condition: Bool, transform: (Self) -> Content) -> some View {
+    if condition {
+      transform(self)
+    } else {
+      self
+    }
+  }
+}
+
+// MARK: - View
 
 struct LocalizationView: View {
+  @State private var store = LocalizationStore()
+
   var body: some View {
-    
+    Group {
+      if store.isLoaded {
+        loadedContent
+      } else {
+        emptyState
+      }
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .task { store.openDefaultIfPresent() }
+    .alert("Couldn't open catalog", isPresented: errorBinding) {
+      Button("OK") { store.dismissError() }
+    } message: {
+      Text(store.loadError ?? "")
+    }
   }
+
+  private var errorBinding: Binding<Bool> {
+    Binding(
+      get: { store.loadError != nil },
+      set: { if !$0 { store.dismissError() } })
+  }
+
+  private var loadedContent: some View {
+    VStack(spacing: 0) {
+      ControlsBar(store: store)
+      Divider()
+      CatalogTable(store: store)
+      Divider()
+      FooterBar(store: store)
+    }
+  }
+
+  private var emptyState: some View {
+    VStack(spacing: 12) {
+      Image(systemName: "globe")
+        .font(.system(size: 44))
+        .foregroundStyle(.tertiary)
+      Text("No string catalog open")
+        .font(.title3)
+      Text("Open a .xcstrings file to browse its keys and translations.")
+        .foregroundStyle(.secondary)
+      Button("Open Catalog…") { store.openPanelAndLoad() }
+        .padding(.top, 4)
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+  }
+}
+
+// MARK: - Controls
+
+private struct ControlsBar: View {
+  let store: LocalizationStore
+
+  var body: some View {
+    @Bindable var store = store
+    HStack(spacing: 12) {
+      Button("Open…") { store.openPanelAndLoad() }
+      Button {
+        store.reload()
+      } label: {
+        Label("Reload", systemImage: "arrow.clockwise")
+      }
+      .disabled(!store.isLoaded)
+
+      Picker("Filter", selection: $store.filter) {
+        ForEach(RowFilter.allCases) { rowFilter in
+          Text(rowFilter.title).tag(rowFilter)
+        }
+      }
+      .pickerStyle(.menu)
+      .frame(width: 140)
+
+      TextField("Search keys, comments, translations", text: $store.searchText)
+        .textFieldStyle(.roundedBorder)
+        .frame(minWidth: 160, maxWidth: 260)
+
+      Spacer()
+
+      Toggle("Non-translatable", isOn: $store.includeNonTranslatable)
+        .toggleStyle(.checkbox)
+        .help("Include the \(store.nonTranslatableCount) keys marked shouldTranslate = false (hidden by default)")
+
+      Menu {
+        ForEach(store.pickerLanguages, id: \.self) { language in
+          Button {
+            store.toggleLanguage(language)
+          } label: {
+            if store.isLanguageSelected(language) {
+              Image(systemName: "checkmark")
+            }
+            Text(language)
+          }
+        }
+      } label: {
+        Label("Columns", systemImage: "tablecells")
+      }
+      .disabled(store.pickerLanguages.isEmpty)
+    }
+    .padding(.horizontal, 12)
+    .padding(.vertical, 8)
+  }
+}
+
+// MARK: - Table
+
+private struct CatalogTable: View {
+  let store: LocalizationStore
+
+  var body: some View {
+    @Bindable var store = store
+    Table(store.visibleRows, sortOrder: $store.sortOrder) {
+      TableColumn("Key", sortUsing: CatalogSort(.key)) { row in
+        keyCell(row)
+      }
+      .width(min: 140, ideal: 280, max: 600)
+
+      TableColumn("Comment", sortUsing: CatalogSort(.comment)) { row in
+        commentCell(row)
+      }
+      .width(min: 120, ideal: 260, max: 600)
+
+      TableColumn(store.sourceLanguageTitle, sortUsing: CatalogSort(.source)) { row in
+        sourceCell(row)
+      }
+
+      TableColumnForEach(store.selectedLanguages, id: \.self) { language in
+        TableColumn(language, sortUsing: CatalogSort(.language(language))) { row in
+          languageCell(row, language: language)
+        }
+      }
+    }
+  }
+
+  // MARK: cells
+
+  private func keyCell(_ row: CatalogRow) -> some View {
+    HStack(spacing: 5) {
+      if !row.isTranslatable {
+        Image(systemName: "nosign")
+          .font(.system(size: 9))
+          .foregroundStyle(.tertiary)
+          .help("Not translatable")
+      }
+      Text(row.key)
+        .monospaced()
+        .lineLimit(2)
+        .help(row.key)
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  private func commentCell(_ row: CatalogRow) -> some View {
+    TextField("", text: commentBinding(for: row.key), prompt: Text("Comment"))
+      .textFieldStyle(.plain)
+      .disabled(!row.commentIsEditable)
+      .background(row.commentHasOverride ? editedTint : Color.clear)
+      .if(row.commentHasOverride) { $0.help("Edited — in memory only") }
+  }
+
+  private func sourceCell(_ row: CatalogRow) -> some View {
+    Text(row.sourceText)
+      .lineLimit(3)
+      .help(row.sourceText)
+      .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  private func languageCell(_ row: CatalogRow, language: String) -> some View {
+    let cell = row.cells[language] ?? LangCell(
+      text: "", state: nil, hasParsed: false, hasOverride: false,
+      hasVariations: false, isEditable: row.isTranslatable)
+    return HStack(spacing: 5) {
+      stateDot(cell.state)
+      if cell.hasVariations {
+        Text(cell.text)
+          .lineLimit(3)
+        Image(systemName: "ellipsis.curlybraces")
+          .foregroundStyle(.tertiary)
+          .help("Variations present — read-only in this phase")
+      } else {
+        TextField("", text: valueBinding(for: row.key, language: language),
+                  prompt: Text("missing").foregroundStyle(.tertiary))
+          .textFieldStyle(.plain)
+          .disabled(!cell.isEditable)
+          .background(cell.hasOverride ? editedTint : Color.clear)
+          .if(cell.hasOverride) { $0.help("Edited — in memory only") }
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  @ViewBuilder
+  private func stateDot(_ state: String?) -> some View {
+    if let state {
+      let color: Color = {
+        switch state {
+        case "needs_review": return .orange
+        case "translated": return .green
+        case "new": return .blue
+        default: return .gray
+        }
+      }()
+      let tooltip: String = {
+        switch state {
+        case "needs_review": return "Needs review"
+        case "translated": return "Translated"
+        case "new": return "New"
+        default: return state
+        }
+      }()
+      Circle()
+        .fill(color)
+        .frame(width: 6, height: 6)
+        .help(tooltip)
+    }
+  }
+
+  private var editedTint: Color {
+    Color.accentColor.opacity(0.08)
+  }
+
+  // MARK: bindings (store-backed, survive sort/filter)
+
+  private func valueBinding(for key: String, language: String) -> Binding<String> {
+    Binding(
+      get: { store.value(for: key, language: language) },
+      set: { store.setValue($0, for: key, language: language) })
+  }
+
+  private func commentBinding(for key: String) -> Binding<String> {
+    Binding(
+      get: { store.comment(for: key) },
+      set: { store.setComment($0, for: key) })
+  }
+}
+
+// MARK: - Footer
+
+private struct FooterBar: View {
+  let store: LocalizationStore
+
+  var body: some View {
+    HStack(spacing: 6) {
+      Text("\(store.totalKeyCount) keys, showing \(store.visibleRows.count)")
+        .foregroundStyle(.secondary)
+      if !store.selectedLanguages.isEmpty {
+        Text("·").foregroundStyle(.tertiary)
+        ForEach(store.selectedLanguages, id: \.self) { language in
+          Text("\(language): \(store.missingCount(for: language)) missing")
+            .foregroundStyle(.secondary)
+        }
+      }
+      Spacer()
+    }
+    .font(.caption)
+    .lineLimit(1)
+    .padding(.horizontal, 12)
+    .padding(.vertical, 4)
+  }
+}
+
+#Preview {
+  LocalizationView()
+    .frame(width: 1100, height: 600)
 }
