@@ -56,8 +56,6 @@ struct CatalogRow: Identifiable {
   let longestLanguage: String
   let longestLength: Int
   let commentText: String
-  let commentIsEditable: Bool
-  let commentHasOverride: Bool
   /// Display state of every selected non-source language column.
   let cells: [String: LangCell]
   /// Pre-folded haystack for search (empty when search is inactive).
@@ -196,7 +194,6 @@ final class LocalizationStore {
   // MARK: in-memory edits
 
   private(set) var valueOverrides: [String: [String: String]] = [:]  // key -> language -> text
-  private(set) var commentOverrides: [String: String] = [:]          // key -> text
 
   // MARK: view state
 
@@ -242,8 +239,7 @@ final class LocalizationStore {
   }
 
   func comment(for key: String) -> String {
-    if let override = commentOverrides[key] { return override }
-    return catalog?.strings[key]?.comment ?? ""
+    catalog?.strings[key]?.comment ?? ""
   }
 
   func setValue(_ text: String, for key: String, language: String) {
@@ -253,16 +249,6 @@ final class LocalizationStore {
       removeOverride(key: key, language: language)
     } else {
       valueOverrides[key, default: [:]][language] = text
-    }
-  }
-
-  func setComment(_ text: String, for key: String) {
-    guard catalog != nil else { return }
-    let parsed = catalog?.strings[key]?.comment ?? ""
-    if text == parsed {
-      commentOverrides.removeValue(forKey: key)
-    } else {
-      commentOverrides[key] = text
     }
   }
 
@@ -388,7 +374,6 @@ final class LocalizationStore {
     self.catalog = catalog
     catalogURL = url
     valueOverrides = [:]
-    commentOverrides = [:]
   }
 
   // MARK: - rows
@@ -436,7 +421,6 @@ final class LocalizationStore {
     let (longestText, longestLanguage) = Self.longestValue(
       catalog: catalog, key: key, sourceText: sourceText,
       overrides: valueOverrides[key])
-    let commentOverride = commentOverrides[key]
     return CatalogRow(
       key: key,
       isTranslatable: translatable,
@@ -444,9 +428,7 @@ final class LocalizationStore {
       longestText: longestText,
       longestLanguage: longestLanguage,
       longestLength: longestText.count,
-      commentText: commentOverride ?? entry.comment ?? "",
-      commentIsEditable: translatable,
-      commentHasOverride: commentOverride != nil,
+      commentText: entry.comment ?? "",
       cells: cells,
       searchBlob: searching ? folded(searchBlobText(key: key, entry: entry)) : "")
   }
@@ -765,14 +747,12 @@ private struct CatalogTable: View {
       Text(row.sourceText)
         .lineLimit(3)
         .help(row.sourceText)
-      if store.showComments {
-        TextField("", text: commentBinding(for: row.key), prompt: Text("Comment"))
-          .textFieldStyle(.plain)
+      if store.showComments, !row.commentText.isEmpty {
+        Text(row.commentText)
           .font(.caption)
           .foregroundStyle(.secondary)
-          .disabled(!row.commentIsEditable)
-          .background(row.commentHasOverride ? editedTint : Color.clear)
-          .if(row.commentHasOverride) { $0.help("Edited — in memory only") }
+          .lineLimit(3)
+          .help(row.commentText)
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
@@ -838,12 +818,6 @@ private struct CatalogTable: View {
     Binding(
       get: { store.value(for: key, language: language) },
       set: { store.setValue($0, for: key, language: language) })
-  }
-
-  private func commentBinding(for key: String) -> Binding<String> {
-    Binding(
-      get: { store.comment(for: key) },
-      set: { store.setComment($0, for: key) })
   }
 }
 
