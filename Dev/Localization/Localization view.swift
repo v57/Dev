@@ -30,6 +30,16 @@ enum RowFilter: String, CaseIterable, Identifiable {
     case .new: return "New"
     }
   }
+
+  var icon: String {
+    switch self {
+    case .all: return "tray.full"
+    case .needsReview: return "exclamationmark.magnifyingglass"
+    case .missing: return "questionmark.circle"
+    case .translated: return "checkmark.circle"
+    case .new: return "sparkles"
+    }
+  }
 }
 
 // MARK: - Row model
@@ -616,13 +626,13 @@ private struct ControlsBar: View {
       }
       .disabled(!store.isLoaded)
 
-      Picker("Filter", selection: $store.filter) {
+      Picker(selection: $store.filter, label: EmptyView()) {
         ForEach(RowFilter.allCases) { rowFilter in
-          Text(rowFilter.title).tag(rowFilter)
+          Label(rowFilter.title, systemImage: rowFilter.icon).tag(rowFilter)
         }
       }
-      .pickerStyle(.menu)
-      .frame(width: 140)
+      .pickerStyle(.segmented)
+      .fixedSize()
 
       TextField("Search keys, comments, translations", text: $store.searchText)
         .textFieldStyle(.roundedBorder)
