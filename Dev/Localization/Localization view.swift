@@ -584,13 +584,15 @@ struct LocalizationView: View {
 
   private var loadedContent: some View {
     VStack(spacing: 0) {
-      ControlsBar(store: store)
-      Divider()
-      LanguageButtonsRow(store: store)
-      Divider()
-      CatalogTable(store: store)
-      Divider()
-      FooterBar(store: store)
+      CatalogTable(store: store).safeAreaBar(edge: .top) {
+        VStack {
+          ControlsBar(store: store)
+          Divider()
+          LanguageButtonsRow(store: store)
+        }
+      }.safeAreaBar(edge: .bottom) {
+        FooterBar(store: store)
+      }
     }
   }
 
@@ -630,9 +632,7 @@ private struct ControlsBar: View {
         ForEach(RowFilter.allCases) { rowFilter in
           Label(rowFilter.title, systemImage: rowFilter.icon).tag(rowFilter)
         }
-      }
-      .pickerStyle(.segmented)
-      .fixedSize()
+      }.pickerStyle(.segmented).fixedSize()
 
       TextField("Search keys, comments, translations", text: $store.searchText)
         .textFieldStyle(.roundedBorder)
@@ -640,24 +640,40 @@ private struct ControlsBar: View {
 
       Spacer()
 
-      Toggle("Non-translatable", isOn: $store.includeNonTranslatable)
-        .toggleStyle(.checkbox)
-        .help("Include the \(store.nonTranslatableCount) keys marked shouldTranslate = false (hidden by default)")
+      Toggle(isOn: $store.includeNonTranslatable) {
+        Image(systemName: "eye")
+      }.help("Include the \(store.nonTranslatableCount) keys marked shouldTranslate = false (hidden by default)")
 
-      Toggle("Show comments", isOn: Binding(
+      Toggle(isOn: Binding(
         get: { store.showComments },
-        set: { store.setShowComments($0) }))
-        .toggleStyle(.checkbox)
+        set: { store.setShowComments($0) })) {
+          Image(systemName: "text.bubble")
+        }
         .help("Show comment text under each source value")
 
-      Toggle("Show Longest", isOn: Binding(
+      Toggle(isOn: Binding(
         get: { store.showLongest },
-        set: { store.setShowLongest($0) }))
-        .toggleStyle(.checkbox)
+        set: { store.setShowLongest($0) })) {
+          Image(systemName: "ruler")
+        }
         .help("Show the Longest column (longest value across all languages)")
-    }
+    }.toggleStyle(ToggleButtonStyle())
     .padding(.horizontal, 12)
     .padding(.vertical, 8)
+  }
+  struct ToggleButtonStyle: ToggleStyle {
+    func makeBody(configuration: Configuration) -> some View {
+      Button {
+        withAnimation {
+          configuration.isOn.toggle()
+        }
+      } label: {
+        configuration.label
+          .foregroundStyle(configuration.isOn ? .blue : .secondary)
+          .symbolVariant(configuration.isOn ? .fill : .none.slash)
+          .contentTransition(.symbolEffect)
+      }.buttonStyle(.plain)
+    }
   }
 }
 
