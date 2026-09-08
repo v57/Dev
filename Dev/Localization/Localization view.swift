@@ -269,13 +269,36 @@ final class LocalizationStore {
   /// table shows the machine output without a reload.
   func startTranslate() {
     guard let project, run.begin(project: project) else { return }
-    Task { await performTranslate(project: project) }
+    Task { await performTranslate(project: project, key: nil) }
   }
 
-  private func performTranslate(project: Project) async {
-    let summary = await run.execute(project: project)
+  /// Row-menu "Translate": runs the pipeline scoped to a single key (its
+  /// records across every target language), reusing the shared run
+  /// controller so the footer shows progress and re-entry is guarded.
+  func translateKey(_ key: String) {
+    guard let project, run.begin(project: project, key: key) else { return }
+    Task { await performTranslate(project: project, key: key) }
+  }
+
+  private func performTranslate(project: Project, key: String? = nil) async {
+    let summary = await run.execute(project: project, key: key)
     defer { run.finish(summary) }
     guard let catalog else { return }
+    do {
+      self.catalog = try Reconcile.commit(catalog, project: project)
+      saveError = nil
+    } catch {
+      saveError = error.localizedDescription
+    }
+  }
+
+  /// Marks a whole row (key) `reviewed` / `needs_review` across every filled
+  /// language slot, then writes the state back to the artifact. Empty slots
+  /// are left untouched.
+  func setRowState(_ key: String, _ state: TranslationState) {
+    guard let catalog, let project else { return }
+    let context = TranslationStore.shared.context
+    Reconcile.applyReviewState(key: key, state: state, project: project, context: context)
     do {
       self.catalog = try Reconcile.commit(catalog, project: project)
       saveError = nil
@@ -890,6 +913,7 @@ private struct CatalogTable: View {
         .help(longestTooltip(row))
     }
     .frame(maxWidth: .infinity, alignment: .leading)
+    .contextMenu { rowMenu(row) }
   }
 
   private func longestTooltip(_ row: CatalogRow) -> String {
@@ -913,6 +937,7 @@ private struct CatalogTable: View {
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
+    .contextMenu { rowMenu(row) }
   }
 
   private func languageCell(_ row: CatalogRow, language: String) -> some View {
@@ -940,6 +965,37 @@ private struct CatalogTable: View {
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
+    .contextMenu { rowMenu(row) }
+  }
+
+  // MARK: row context menu
+
+  /// Right-click menu for a row: Translate (single item) / Reviewed /
+  /// Needs Review. Translate is disabled while a run is active and for
+  /// non-translatable keys; the review actions are hidden for them (they
+  /// hold no records).
+  @ViewBuilder
+  private func rowMenu(_ row: CatalogRow) -> some View {
+    Button {
+      store.translateKey(row.key)
+    } label: {
+      Label("Translate", systemImage: "translate")
+    }
+    .disabled(!row.isTranslatable || store.run.isRunning)
+
+    if row.isTranslatable {
+      Divider()
+      Button {
+        store.setRowState(row.key, .reviewed)
+      } label: {
+        Label("Reviewed", systemImage: "checkmark.circle")
+      }
+      Button {
+        store.setRowState(row.key, .needs_review)
+      } label: {
+        Label("Needs Review", systemImage: "exclamationmark.circle")
+      }
+    }
   }
 
   private var editedTint: Color {

@@ -61,22 +61,26 @@ struct TranslationPipeline {
   static func run(
     project: Project,
     sourceLanguage: String? = nil,
+    key: String? = nil,
     progress: TranslateRunProgress? = nil
   ) async -> PipelineRunSummary {
     await run(
       project: project,
       context: TranslationStore.shared.context,
       sourceLanguage: sourceLanguage,
+      key: key,
       progress: progress
     )
   }
 
-  /// Runs the whole pipeline for one project. `sourceLanguage` is only a
-  /// fallback — the project's catalog file, when readable, is authoritative.
+  /// Runs the pipeline for one project (or, when `key` is set, for exactly
+  /// one key of it). `sourceLanguage` is only a fallback — the project's
+  /// catalog file, when readable, is authoritative.
   static func run(
     project: Project,
     context: ModelContext,
     sourceLanguage: String? = nil,
+    key: String? = nil,
     progress: TranslateRunProgress? = nil
   ) async -> PipelineRunSummary {
     var summary = PipelineRunSummary()
@@ -84,9 +88,12 @@ struct TranslationPipeline {
     let env = PipelineRunContext(
       context: context,
       project: project,
-      sourceLanguage: sourceLanguage
+      sourceLanguage: sourceLanguage,
+      targetKey: key
     )
-    progress?.note("Translate run: \(project.name) (\(env.allRecords.count) records, source \(env.sourceLanguage))")
+    progress?.note(key == nil
+      ? "Translate run: \(project.name) (\(env.allRecords.count) records, source \(env.sourceLanguage))"
+      : "Translate \(key!): source \(env.sourceLanguage)")
 
     guard !env.allRecords.isEmpty else {
       progress?.note("No records to translate")
@@ -231,7 +238,7 @@ struct TranslationPipeline {
     progress: TranslateRunProgress?
   ) -> TMResolveOutcome {
     var outcome = TMResolveOutcome()
-    let candidates = env.allRecords.filter { needsTarget($0, env: env) }
+    let candidates = env.allRecords.filter { env.isTarget($0) && needsTarget($0, env: env) }
     guard !candidates.isEmpty else { return outcome }
     progress?.begin(.tmResolve, total: candidates.count)
 
@@ -438,7 +445,8 @@ struct TranslationPipeline {
     var outcome = StageOutcome()
     let backend = AppleTranslator()
     let candidates = env.allRecords.filter {
-      !excluded.contains($0.persistentModelID)
+      env.isTarget($0)
+        && !excluded.contains($0.persistentModelID)
         && $0.state == .empty
         && hasUsableSource($0)
     }
@@ -496,7 +504,8 @@ struct TranslationPipeline {
     var outcome = StageOutcome()
     let backend = OllamaTranslator()
     let candidateRecords = env.allRecords.filter {
-      !excluded.contains($0.persistentModelID)
+      env.isTarget($0)
+        && !excluded.contains($0.persistentModelID)
         && hasUsableSource($0)
         && (($0.state == .empty)  // (a) Apple could not cover these
             || ($0.provider == .apple  // (b) Apple output, fresh or stale
@@ -561,7 +570,8 @@ struct TranslationPipeline {
     var outcome = StageOutcome()
     let backend = CommandCodeTranslator()
     let candidateRecords = env.allRecords.filter {
-      guard !excluded.contains($0.persistentModelID),
+      guard env.isTarget($0),
+            !excluded.contains($0.persistentModelID),
             hasUsableSource($0),
             $0.state != .reviewed,
             $0.provider != .manual else {

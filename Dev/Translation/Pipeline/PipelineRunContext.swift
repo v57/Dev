@@ -27,7 +27,14 @@ final class PipelineRunContext {
   let context: ModelContext
   let project: Project
   /// Every record of the project, sorted (language, key) for determinism.
+  /// Always the FULL set — neighbors/comments/prompts sample across the
+  /// project even on a single-key run; only candidate *selection* honors
+  /// `targetKey`.
   let allRecords: [TranslationRecord]
+  /// When set (a row's "Translate"), machine stages act on ONLY this key's
+  /// records; every other record is skipped by `isTarget`. Neighbors and
+  /// context still come from the whole project.
+  let targetKey: String?
   /// BCP-47 code of the catalog's source language ("en" fallback).
   var sourceLanguage: String
   /// All context documents that exist right now; created docs are appended.
@@ -48,10 +55,12 @@ final class PipelineRunContext {
   init(
     context: ModelContext,
     project: Project,
-    sourceLanguage: String? = nil
+    sourceLanguage: String? = nil,
+    targetKey: String? = nil
   ) {
     self.context = context
     self.project = project
+    self.targetKey = targetKey
     // Catalog wins over the caller's guess: the file IS the source of truth
     // for the source language and comments.
     let catalog = (try? StringCatalog.load(url: project.catalogURL))
@@ -67,6 +76,13 @@ final class PipelineRunContext {
   }
 
   // MARK: - context docs
+
+  /// True when a record belongs to this run's work set: `targetKey` is nil
+  /// (whole-project run) or the record is the targeted key. Applied by every
+  /// stage's candidate filter so a single-item run touches exactly one key.
+  func isTarget(_ record: TranslationRecord) -> Bool {
+    targetKey == nil || record.key == targetKey
+  }
 
   /// The global document, nil before Stage 0 ever created one.
   func globalDoc() -> ContextDoc? {

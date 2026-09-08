@@ -50,10 +50,16 @@ final class TranslateRunController {
   /// Snapshots the run state and the candidate record set. Returns false
   /// when a run is already active (caller must not start another).
   func begin(project: Project) -> Bool {
+    begin(project: project, key: nil)
+  }
+
+  /// Same as `begin(project:)` but scopes the run (and its per-cell spinner
+  /// candidates) to a single key — the row menu's "Translate".
+  func begin(project: Project, key: String?) -> Bool {
     guard !isRunning else { return false }
     progress = TranslateRunProgress()
     summary = nil
-    candidates = Self.candidateRecords(of: project)
+    candidates = Self.candidateRecords(of: project, key: key)
     startedAt = .now
     isRunning = true
     return true
@@ -62,7 +68,13 @@ final class TranslateRunController {
   /// Runs the whole pipeline for `project` against the app's one shared
   /// SwiftData context. Progress and cancellation flow through `progress`.
   func execute(project: Project) async -> PipelineRunSummary {
-    await TranslationPipeline.run(project: project, progress: progress)
+    await execute(project: project, key: nil)
+  }
+
+  /// Runs the pipeline scoped to one key (row-menu "Translate"), else the
+  /// whole project.
+  func execute(project: Project, key: String?) async -> PipelineRunSummary {
+    await TranslationPipeline.run(project: project, key: key, progress: progress)
   }
 
   /// Ends the run and publishes the summary. Called after the caller has
@@ -95,7 +107,7 @@ final class TranslateRunController {
   /// pipeline's `needsTarget` rule so cells stop spinning exactly when the
   /// run writes their record — read-only duplication, since the pipeline's
   /// selector is private to Dev/Translation/Pipeline.
-  private static func candidateRecords(of project: Project) -> Set<PersistentIdentifier> {
+  private static func candidateRecords(of project: Project, key: String? = nil) -> Set<PersistentIdentifier> {
     let context = TranslationStore.shared.context
     let docs = (try? context.fetch(FetchDescriptor<ContextDoc>())) ?? []
     let globalVersion = docs.first { $0.scope == .global }?.version
@@ -123,6 +135,7 @@ final class TranslateRunController {
 
     var ids = Set<PersistentIdentifier>()
     for record in project.records {
+      if let key, record.key != key { continue }
       guard record.state != .reviewed, record.provider != .manual else { continue }
       if record.state == .empty || isStale(record) {
         ids.insert(record.persistentModelID)

@@ -294,6 +294,45 @@ enum Reconcile {
     return record
   }
 
+  // MARK: - row review state (DB side)
+
+  /// Marks a whole key's filled slots as `reviewed` (human-confirmed — keeps
+  /// the producing provider and value, so provenance survives; records the
+  /// confirming user) or `needs_review` (un-confirm: keeps provider, clears
+  /// reviewedAt). Empty slots are left untouched — a reviewed empty slot has
+  /// no value to confirm, and committing one would write a bogus
+  /// "translated" unit into the file. Pure confirmation of an existing value
+  /// appends NO TranslationEdit (that is the learning signal for a value
+  /// *change*; here nothing changed). Never touches the file; call `commit`
+  /// to write it back. Returns how many records changed.
+  @discardableResult
+  static func applyReviewState(
+    key: String,
+    state: TranslationState,
+    project: Project,
+    context: ModelContext
+  ) -> Int {
+    let userName = ProcessInfo.processInfo.fullUserName
+    var touched = 0
+    for record in project.records where record.key == key {
+      guard let value = record.value,
+            !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        continue
+      }
+      record.state = state
+      record.updatedAt = .now
+      if state == .reviewed {
+        record.reviewedAt = .now
+        record.lastEditor = userName.isEmpty ? "Manual" : userName
+      } else {
+        record.reviewedAt = nil
+      }
+      touched += 1
+    }
+    try? context.save()
+    return touched
+  }
+
   // MARK: - commit (DB -> file)
 
   /// Writes the working store back to the artifact: for every DB-OWNED
