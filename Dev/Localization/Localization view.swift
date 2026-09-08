@@ -835,7 +835,7 @@ private struct LanguageEditCell: View {
   @FocusState private var focused: Bool
 
   var body: some View {
-    TextField("", text: $draft, prompt: Text("missing").foregroundStyle(.tertiary))
+    TextField("", text: $draft, prompt: Text("missing").foregroundStyle(.tertiary), axis: .vertical)
       .textFieldStyle(.plain)
       .focused($focused)
       .disabled(!cell.isEditable)
