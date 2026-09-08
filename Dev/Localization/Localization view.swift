@@ -193,6 +193,8 @@ final class LocalizationStore {
   var searchText = ""
   var filter: RowFilter = .all
   var includeNonTranslatable = false
+  /// Comments hidden unless the user opts in (off by default).
+  var showComments = false
   /// Longest column hidden unless the user opts in (off by default).
   var showLongest = false
   /// Non-source languages with a visible column (source column is permanent).
@@ -288,6 +290,18 @@ final class LocalizationStore {
     }
   }
 
+  /// Show/hide inline comments; hiding also drops the comment sort so a
+  /// hidden field never drives the row order.
+  func setShowComments(_ show: Bool) {
+    showComments = show
+    if !show {
+      sortOrder.removeAll { $0.column == .comment }
+      if sortOrder.isEmpty {
+        sortOrder = [CatalogSort(.source)]
+      }
+    }
+  }
+
   /// Dismiss the load-error alert.
   func dismissError() {
     loadError = nil
@@ -337,6 +351,7 @@ final class LocalizationStore {
       searchText = ""
       filter = .all
       includeNonTranslatable = false
+      showComments = false
       showLongest = false
       sortOrder = [CatalogSort(.source)]
       selectedLanguages = []
@@ -619,6 +634,12 @@ private struct ControlsBar: View {
         .toggleStyle(.checkbox)
         .help("Include the \(store.nonTranslatableCount) keys marked shouldTranslate = false (hidden by default)")
 
+      Toggle("Show comments", isOn: Binding(
+        get: { store.showComments },
+        set: { store.setShowComments($0) }))
+        .toggleStyle(.checkbox)
+        .help("Show comment text under each source value")
+
       Toggle("Show Longest", isOn: Binding(
         get: { store.showLongest },
         set: { store.setShowLongest($0) }))
@@ -671,11 +692,6 @@ private struct CatalogTable: View {
   var body: some View {
     @Bindable var store = store
     Table(store.visibleRows, sortOrder: $store.sortOrder) {
-      TableColumn("Comment", sortUsing: CatalogSort(.comment)) { row in
-        commentCell(row)
-      }
-      .width(min: 120, ideal: 260, max: 600)
-
       TableColumn(store.sourceLanguageTitle, sortUsing: CatalogSort(.source)) { row in
         sourceCell(row)
       }
@@ -719,19 +735,22 @@ private struct CatalogTable: View {
     return "\(row.longestLanguage) · \(row.longestLength) chars\n\(row.longestText)"
   }
 
-  private func commentCell(_ row: CatalogRow) -> some View {
-    TextField("", text: commentBinding(for: row.key), prompt: Text("Comment"))
-      .textFieldStyle(.plain)
-      .disabled(!row.commentIsEditable)
-      .background(row.commentHasOverride ? editedTint : Color.clear)
-      .if(row.commentHasOverride) { $0.help("Edited — in memory only") }
-  }
-
   private func sourceCell(_ row: CatalogRow) -> some View {
-    Text(row.sourceText)
-      .lineLimit(3)
-      .help(row.sourceText)
-      .frame(maxWidth: .infinity, alignment: .leading)
+    VStack(alignment: .leading, spacing: 2) {
+      Text(row.sourceText)
+        .lineLimit(3)
+        .help(row.sourceText)
+      if store.showComments {
+        TextField("", text: commentBinding(for: row.key), prompt: Text("Comment"))
+          .textFieldStyle(.plain)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .disabled(!row.commentIsEditable)
+          .background(row.commentHasOverride ? editedTint : Color.clear)
+          .if(row.commentHasOverride) { $0.help("Edited — in memory only") }
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
   }
 
   private func languageCell(_ row: CatalogRow, language: String) -> some View {
