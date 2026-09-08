@@ -194,6 +194,8 @@ final class LocalizationStore {
   // MARK: in-memory edits
 
   private(set) var valueOverrides: [String: [String: String]] = [:]  // key -> language -> text
+  /// Bumped on every (re)load so editing cells can resync their drafts.
+  private(set) var revision = 0
 
   // MARK: view state
 
@@ -374,6 +376,7 @@ final class LocalizationStore {
     self.catalog = catalog
     catalogURL = url
     valueOverrides = [:]
+    revision += 1
   }
 
   // MARK: - rows
@@ -773,12 +776,7 @@ private struct CatalogTable: View {
           .foregroundStyle(.tertiary)
           .help("Variations present — read-only in this phase")
       } else {
-        TextField("", text: valueBinding(for: row.key, language: language),
-                  prompt: Text("missing").foregroundStyle(.tertiary))
-          .textFieldStyle(.plain)
-          .disabled(!cell.isEditable)
-          .background(cell.hasOverride ? editedTint : Color.clear)
-          .if(cell.hasOverride) { $0.help("Edited — in memory only") }
+        LanguageEditCell(store: store, rowKey: row.key, language: language, cell: cell)
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
@@ -820,6 +818,61 @@ private struct CatalogTable: View {
     Binding(
       get: { store.value(for: key, language: language) },
       set: { store.setValue($0, for: key, language: language) })
+  }
+}
+
+/// Editable language cell with a local draft: keystrokes mutate @State only,
+/// so the editing field is never rebuilt while typing. The store override is
+/// committed on Return or focus loss. `revision` resyncs the draft on reload.
+private struct LanguageEditCell: View {
+  let store: LocalizationStore
+  let rowKey: String
+  let language: String
+  let cell: LangCell
+
+  @State private var draft: String = ""
+  @State private var initializedRevision = -1
+  @FocusState private var focused: Bool
+
+  var body: some View {
+    TextField("", text: $draft, prompt: Text("missing").foregroundStyle(.tertiary))
+      .textFieldStyle(.plain)
+      .focused($focused)
+      .disabled(!cell.isEditable)
+      .background(store.valueOverrides[rowKey]?[language] != nil ? editedTint : Color.clear)
+      .if(store.valueOverrides[rowKey]?[language] != nil) { $0.help("Edited — in memory only") }
+      .onAppear {
+        draft = cell.text
+        initializedRevision = store.revision
+      }
+      .onChange(of: store.revision) { _, revision in
+        if revision != initializedRevision {
+          draft = store.value(for: rowKey, language: language)
+          initializedRevision = revision
+        }
+      }
+      .onChange(of: cell.text) { _, newText in
+        // External change (e.g. a sort or reload rebuilt the row while we
+        // were NOT the editor): adopt it unless we are mid-edit.
+        if !focused {
+          draft = newText
+        }
+      }
+      .onSubmit {
+        store.setValue(draft, for: rowKey, language: language)
+      }
+      .onChange(of: focused) { _, isFocused in
+        if !isFocused {
+          store.setValue(draft, for: rowKey, language: language)
+          // Adopt the canonical value (commit may normalize to an override
+          // drop when the draft equals the parsed text).
+          draft = store.value(for: rowKey, language: language)
+        }
+      }
+  }
+
+  private var editedTint: Color {
+    Color.accentColor.opacity(0.08)
   }
 }
 
