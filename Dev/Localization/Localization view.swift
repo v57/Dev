@@ -840,10 +840,10 @@ private struct LanguageEditCell: View {
     Group {
       if isEditing {
         TextEditor(text: $draft)
+          .font(.body)
           .focused($focused)
           .scrollContentBackground(.hidden)
           .background(hasOverride ? editedTint : Color.clear)
-          .frame(minHeight: 44)
           .onAppear { focused = true }
           .onExitCommand { cancel() }
           .onChange(of: focused) { _, isFocused in
