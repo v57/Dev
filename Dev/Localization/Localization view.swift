@@ -1150,14 +1150,14 @@ struct LocalizationView: View {
         .searchable(text: $store.searchText,
                     prompt: "Search keys, comments, translations")
         .safeAreaBar(edge: .top) {
-        VStack {
-          ControlsBar(store: store, allowsOpenCatalog: allowsOpenCatalog)
-          Divider()
           LanguageButtonsRow(store: store)
         }
-      }.safeAreaBar(edge: .bottom) {
-        FooterBar(store: store)
-      }
+        .safeAreaBar(edge: .bottom) {
+          FooterBar(store: store)
+        }
+    }
+    .toolbar {
+      ControlsBar(store: store, allowsOpenCatalog: allowsOpenCatalog)
     }
   }
 
@@ -1179,16 +1179,15 @@ struct LocalizationView: View {
 
 // MARK: - Controls
 
-private struct ControlsBar: View {
+private struct ControlsBar: ToolbarContent {
   let store: LocalizationStore
   /// Projectless mode offers Open…; a project-bound catalog (P40) doesn't —
   /// opening an arbitrary file would re-target the store's reconcile away
   /// from the selected project.
   var allowsOpenCatalog = true
 
-  var body: some View {
-    @Bindable var store = store
-    HStack(spacing: 12) {
+  var body: some ToolbarContent {
+    ToolbarItemGroup(placement: .primaryAction) {
       if allowsOpenCatalog {
         Button("Open…") { store.openPanelAndLoad() }
           .disabled(store.run.isRunning)
@@ -1199,18 +1198,26 @@ private struct ControlsBar: View {
         Label("Reload", systemImage: "arrow.clockwise")
       }
       .disabled(!store.isLoaded || store.run.isRunning)
-
-      Picker(selection: $store.filter, label: EmptyView()) {
+    }
+    ToolbarItemGroup(placement: .principal) {
+      Picker(
+        selection: Binding(get: { store.filter }, set: { store.filter = $0 }),
+        label: EmptyView()) {
         ForEach(RowFilter.allCases) { rowFilter in
           Label(rowFilter.title, systemImage: rowFilter.icon).tag(rowFilter)
         }
-      }.pickerStyle(.segmented).fixedSize()
-
-      Spacer()
-
-      Toggle(isOn: $store.includeNonTranslatable) {
-        Image(systemName: "eye")
-      }.help("Include the \(store.nonTranslatableCount) keys marked shouldTranslate = false (hidden by default)")
+      }
+      .pickerStyle(.segmented)
+      .fixedSize()
+    }
+    ToolbarItemGroup(placement: .primaryAction) {
+      Toggle(isOn: Binding(
+        get: { store.includeNonTranslatable },
+        set: { store.includeNonTranslatable = $0 })) {
+          Image(systemName: "eye")
+        }
+        .help("Include the \\(store.nonTranslatableCount) keys marked shouldTranslate = false (hidden by default)")
+        .toggleStyle(ToggleButtonStyle())
 
       Toggle(isOn: Binding(
         get: { store.showComments },
@@ -1218,6 +1225,7 @@ private struct ControlsBar: View {
           Image(systemName: "text.bubble")
         }
         .help("Show comment text under each source value")
+        .toggleStyle(ToggleButtonStyle())
 
       Toggle(isOn: Binding(
         get: { store.showLongest },
@@ -1225,6 +1233,7 @@ private struct ControlsBar: View {
           Image(systemName: "ruler")
         }
         .help("Show the Longest column (longest value across all languages)")
+        .toggleStyle(ToggleButtonStyle())
 
       Button {
         store.startTranslate()
@@ -1236,9 +1245,7 @@ private struct ControlsBar: View {
       .help(store.run.isRunning
         ? "A translation run is in progress — cancel it from the footer"
         : "Run the translation pipeline: learn from confirmed edits, resolve translation memory, then Apple, Ollama and review")
-    }.toggleStyle(ToggleButtonStyle())
-    .padding(.horizontal, 12)
-    .padding(.vertical, 8)
+    }
   }
   struct ToggleButtonStyle: ToggleStyle {
     func makeBody(configuration: Configuration) -> some View {
