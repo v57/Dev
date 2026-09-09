@@ -232,6 +232,27 @@ struct StringCatalog: Codable {
     strings[key] = entry
   }
 
+  /// Adds an empty localization slot for `language` to every key that lacks
+  /// one (a bare unit-less entry — no stringUnit, no variations). The
+  /// language then appears in `languages`, the column buttons and reconcile
+  /// (which seeds empty records Translate fills). Returns how many keys
+  /// gained the slot.
+  @discardableResult
+  mutating func addLanguage(_ language: String) -> Int {
+    var added = 0
+    for key in strings.keys {
+      guard var entry = strings[key] else { continue }
+      var localizations = entry.localizations ?? [:]
+      if localizations[language] == nil {
+        localizations[language] = Language()
+        entry.localizations = localizations
+        strings[key] = entry
+        added += 1
+      }
+    }
+    return added
+  }
+
   /// Collapses a key's plural variations back to a flat stringUnit per
   /// language (the "other" form's value/state wins, else the first filled
   /// form). Used by "Remove plural variations".
