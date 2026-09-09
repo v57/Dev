@@ -37,17 +37,25 @@ extension Provider {
 ///                (sourceText, targetLanguage) TranslationMemory hits:
 ///                reviewed -> copied as .reviewed (gold), machine-only ->
 ///                copied as .needs_review hint; both skip the pipeline.
-///   2. APPLE   — fill the still-empty records Apple can serve.
-///   3. OLLAMA  — fill empty records Apple could not cover, and re-translate
+///   2. IMPORTED DB — when a translation DB is imported (Phase D), resolve
+///                the still-untouched candidates against it BEFORE any AI
+///                backend: exact source-text hits copy shipped human
+///                translations as .reviewed + autoReviewed (the UI shows the
+///                auto badge until a human confirms); misses fall through.
+///   3. APPLE   — fill the still-empty records Apple can serve.
+///   4. OLLAMA  — fill empty records Apple could not cover, and re-translate
 ///                Apple output with context (diff -> apple->ollama edit).
-///   4. DEEPSEEK — review the survivors: still-empty, Ollama-corrected, or
+///   5. DEEPSEEK — review the survivors: still-empty, Ollama-corrected, or
 ///                stale/high-stakes machine values. Final suggestions.
 ///
 /// Incremental: a record is only touched when it is NEW (empty) or STALE
 /// (any recorded context-version is older than the current ContextDoc
 /// version for its scope), and never when a human owns it (provider ==
-/// .manual or state == .reviewed). Every machine write stamps provider +
-/// context-versions + needs_review; nothing is ever auto-promoted.
+/// .manual or state == .reviewed — DB hits land .reviewed, so they too are
+/// never re-run). Every machine write stamps provider + context-versions +
+/// needs_review; nothing is ever auto-promoted (the imported DB is the one
+/// deliberate exception: shipped human translations land reviewed + a local
+/// auto marker, and a single human confirm clears the marker).
 ///
 /// Backend calls run ~3 at a time (off-main, the backends are nonisolated);
 /// SwiftData reads/writes stay on the main actor. Progress + cancellation
@@ -144,6 +152,25 @@ struct TranslationPipeline {
       summary.failures += tm.failures
       excludedByTM = tm.excluded
       progress?.note("TM: \(tm.gold) gold, \(tm.hints) hints")
+    }
+
+    // Imported-DB resolve — shipped human translations (Phase D), BEFORE any
+    // AI backend: hits land .reviewed + autoReviewed and never reach the
+    // machine stages (their reviewed state already excludes them); misses
+    // fall through exactly as today. Inert with no DB imported.
+    var db = DBResolveOutcome()
+    if progress?.isCancelled != true {
+      db = await importedDBResolve(
+        env: env,
+        excluded: excludedByTM,
+        progress: progress
+      )
+      summary.dbFilled += db.filled
+      summary.dbUpgraded += db.upgraded
+      summary.failures += db.failures
+    }
+    if db.ran {
+      progress?.note("Imported DB: \(db.filled) filled, \(db.upgraded) upgraded")
     }
 
     // Stage 1 — Apple fills empty records.
@@ -298,6 +325,131 @@ struct TranslationPipeline {
     }
     try? env.context.save()
     return outcome
+  }
+
+  // MARK: - imported-DB resolve (Phase D)
+
+  /// Outcome of the imported-translation-DB stage.
+  private struct DBResolveOutcome {
+    var filled = 0       // empty slot got a shipped translation
+    var upgraded = 0     // existing machine value replaced/promoted to auto-reviewed
+    var failures: [String] = []
+    var ran = false      // a DB was imported and opened (false = stage inert)
+  }
+
+  /// Resolves every record that needs a target value against the imported
+  /// translation DB (when one is active): exact source-text rows are matched
+  /// per record language via ImportedDBLanguage.hit, and a winner is copied
+  /// as .reviewed + autoReviewed (shipped human translations are final; only
+  /// a human confirm promotes them past the auto marker). Records the TM
+  /// stage already resolved this run (`excluded`) are left alone. Misses
+  /// tick through untouched — they flow to the AI stages as today.
+  /// Sequential on the main actor: each source's rows are fetched ONCE per
+  /// run (all languages of one catalog key share the source text) and cached
+  /// in `rowsBySource`, so a whole-catalog run costs one index seek per
+  /// unique source, not per record.
+  private static func importedDBResolve(
+    env: PipelineRunContext,
+    excluded: Set<PersistentIdentifier>,
+    progress: TranslateRunProgress?
+  ) async -> DBResolveOutcome {
+    var outcome = DBResolveOutcome()
+    let db = ImportedTranslationDB.shared
+    guard db.isImported else { return outcome }
+    do {
+      try await db.ensureOpen()
+    } catch {
+      let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+      outcome.failures.append("Imported DB unavailable: \(message)")
+      progress?.note("Imported DB: unavailable (\(message)) — AI stages run instead")
+      return outcome
+    }
+    outcome.ran = true
+
+    let candidates = env.allRecords.filter {
+      env.isTarget($0)
+        && !excluded.contains($0.persistentModelID)
+        && hasUsableSource($0)
+        && needsTarget($0, env: env)
+    }
+    guard !candidates.isEmpty else { return outcome }
+    progress?.begin(.dbResolve, total: candidates.count)
+
+    let appRowCounts = db.stats?.apps ?? [:]
+    var rowsBySource: [String: [ImportedDBRow]] = [:]
+    for record in candidates {
+      if progress?.isCancelled == true { break }
+      do {
+        let source = record.sourceText
+        if rowsBySource[source] == nil {
+          rowsBySource[source] = try await db.rows(forSource: source)
+        }
+        let rows = rowsBySource[source] ?? []
+        guard let hit = ImportedDBLanguage.hit(
+          in: rows,
+          forCatalogLanguage: record.language,
+          appRowCounts: appRowCounts
+        ) else {
+          progress?.tick(key: displayKey(record))
+          continue
+        }
+        switch applyDBHit(env: env, record: record, hit: hit) {
+        case .filled: outcome.filled += 1
+        case .upgraded: outcome.upgraded += 1
+        }
+        progress?.tick(key: displayKey(record))
+      } catch {
+        let message = error.localizedDescription
+        outcome.failures.append("db \(displayKey(record)): \(message)")
+        progress?.fail(key: displayKey(record), message: message)
+      }
+    }
+    try? env.context.save()
+    return outcome
+  }
+
+  /// What a DB hit did to a candidate record.
+  private enum DBHitWrite {
+    case filled      // empty slot
+    case upgraded    // existing machine value replaced or promoted
+  }
+
+  /// Applies an imported-DB hit: value + provider .importedDB + state
+  /// .reviewed + autoReviewed, stamped with the run's context snapshot and
+  /// audited as a TranslationEdit when the text changed (a same-value hit is
+  /// a pure promotion — no edit, mirroring TM gold promotions). reviewedAt
+  /// stays nil: NO human confirmed this yet, and the auto flag says so in
+  /// the UI. No TM upsert here — DB output must not mint gold; the human
+  /// one-click confirm does that (upsertReviewed, TM gold).
+  private static func applyDBHit(
+    env: PipelineRunContext,
+    record: TranslationRecord,
+    hit: ImportedDBHit
+  ) -> DBHitWrite {
+    let versions = env.snapshot(for: record.language)
+    let wasEmpty = (record.value?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+    let oldValue = record.value
+    let changed = oldValue != hit.value
+    let appName = hit.app.isEmpty ? "the imported translation DB" : hit.app
+
+    record.value = hit.value
+    record.provider = .importedDB
+    record.state = .reviewed
+    record.autoReviewed = true
+    record.reviewedAt = nil
+    record.confidence = nil
+    record.contextVersions = versions
+    record.updatedAt = .now
+    record.lastEditor = "\(ProvenanceMarkers.importedDB) — \(appName)"
+    if changed {
+      appendEdit(
+        env: env, record: record, from: oldValue, to: hit.value,
+        reason: wasEmpty
+          ? "Filled from imported translation DB (\(appName))"
+          : "Upgraded machine output from imported translation DB (\(appName))",
+        versions: versions)
+    }
+    return wasEmpty ? .filled : .upgraded
   }
 
   // MARK: - stage plumbing

@@ -78,14 +78,21 @@ extension ContextVersions {
 
 extension TranslationRecord {
   /// Multi-line provenance for a cell tooltip: who produced the current
-  /// value (backend / human / translation memory), against which context
-  /// versions, and the confirmation state. Nil while the slot has no value —
-  /// an empty cell's help stays the plain "Missing" prompt.
+  /// value (backend / human / translation memory / imported DB), against
+  /// which context versions, and the confirmation state. Nil while the slot
+  /// has no value — an empty cell's help stays the plain "Missing" prompt.
   var provenanceSummary: String? {
     guard let value, !value.isBlankOrEmpty else { return nil }
 
     let producer: String
-    if lastEditor == ProvenanceMarkers.translationMemory {
+    if autoReviewed {
+      // Imported-DB copy: lastEditor is "Imported DB — <owning app>".
+      let prefix = ProvenanceMarkers.importedDB + " — "
+      let app = lastEditor.flatMap {
+        $0.hasPrefix(prefix) ? String($0.dropFirst(prefix.count)) : nil
+      }
+      producer = "Imported translation DB — \(app ?? "source")"
+    } else if lastEditor == ProvenanceMarkers.translationMemory {
       producer = state == .reviewed
         ? "Translation memory — human-confirmed copy (gold)"
         : "Translation memory — machine hint"
@@ -107,7 +114,9 @@ extension TranslationRecord {
     case .needs_review:
       lines.append("Machine output — needs review")
     case .reviewed:
-      lines.append("Reviewed")
+      lines.append(autoReviewed
+        ? "Automatically reviewed — click the auto badge to confirm"
+        : "Reviewed")
     }
     return lines.joined(separator: "\n")
   }

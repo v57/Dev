@@ -15,6 +15,7 @@ import Observation
 enum TranslateStage: String, CaseIterable, Sendable {
   case stage0Learn
   case tmResolve
+  case dbResolve
   case stage1Apple
   case stage2Ollama
   case stage3Deepseek
@@ -27,6 +28,8 @@ enum TranslateStage: String, CaseIterable, Sendable {
       return "Learn (Stage 0)"
     case .tmResolve:
       return "Translation memory"
+    case .dbResolve:
+      return "Imported DB"
     case .stage1Apple:
       return "Apple (Stage 1)"
     case .stage2Ollama:
@@ -120,6 +123,9 @@ nonisolated struct PipelineRunSummary: Sendable {
   // TM resolve
   var tmResolvedGold = 0      // reviewed TM entry copied -> record reviewed
   var tmResolvedHints = 0     // machine-only TM entry copied -> needs_review hint
+  // Imported-DB resolve (Phase D)
+  var dbFilled = 0            // empty slot filled from the imported DB
+  var dbUpgraded = 0          // machine value replaced/promoted by a DB hit
   // Stage 1 Apple
   var stage1Filled = 0
   // Stage 2 Ollama
@@ -134,7 +140,7 @@ nonisolated struct PipelineRunSummary: Sendable {
 
   /// Every record whose value/provider/state the run wrote.
   var recordsTouched: Int {
-    tmResolvedGold + tmResolvedHints + stage1Filled + stage2Filled
-      + stage2Corrected + stage3Filled + stage3Reviewed
+    tmResolvedGold + tmResolvedHints + dbFilled + dbUpgraded + stage1Filled
+      + stage2Filled + stage2Corrected + stage3Filled + stage3Reviewed
   }
 }
