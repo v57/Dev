@@ -332,6 +332,74 @@ final class LocalizationStore {
     }
   }
 
+  /// Row-menu "Generate plural": AI-authors the SOURCE forms for a flat key,
+  /// varies the source + selected columns, then runs the normal single-key
+  /// Translate to fill the targets. Steps:
+  ///   1. Vary by plural (skeleton; flat value -> "other", empty forms).
+  ///   2. Ask the model for the missing source forms (existing ones are sent
+  ///      for consistency and never overwritten); write them to the file.
+  ///   3. Kick the forced single-key run over the selected columns.
+  /// A no-key backend surfaces saveError and stops (the skeleton stays, so a
+  /// retry costs nothing). Guarded by the shared run controller.
+  func generatePlural(key: String) {
+    guard catalog != nil, project != nil else { return }
+    varyByPlural(key: key)
+    guard let project else { return }
+    let languages = Set(selectedLanguages)
+    guard run.begin(project: project, key: key, languages: languages, force: true) else { return }
+    Task { await performGeneratePlural(project: project, key: key, languages: languages) }
+  }
+
+  /// Async half of Generate plural: author source forms, then fill targets.
+  /// Runs off-main (the model call is async); every store mutation hops back
+  /// to the main actor, matching the rest of the store.
+  private func performGeneratePlural(project: Project, key: String, languages: Set<String>) async {
+    // Step 2: author the missing source forms before the stages run.
+    if let catalog = self.catalog {
+      let source = catalog.sourceLanguage
+      let categories = PluralRules.categories(for: source)
+      let flat = catalog.sourceDisplay(for: key)
+      var existing: [String: String] = [:]
+      var missing: [String] = []
+      for category in categories {
+        if let value = catalog.pluralValue(for: key, language: source, category: category),
+           !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+          existing[category] = value
+        } else {
+          missing.append(category)
+        }
+      }
+      if !missing.isEmpty {
+        do {
+          let forms = try await PluralGenerator.sourceForms(
+            key: key,
+            comment: catalog.strings[key]?.comment,
+            text: missing.count == categories.count ? flat : (existing["other"] ?? flat),
+            language: source,
+            categories: categories,
+            existing: existing)
+          var mutated = catalog
+          for category in missing {
+            if let text = forms[category] {
+              mutated.setSourcePluralValue(text, key: key, category: category)
+            }
+          }
+          try mutated.save(to: project.catalogURL)
+          await MainActor.run { self.catalog = mutated }
+        } catch {
+          let message = error.localizedDescription
+          await MainActor.run {
+            self.saveError = message
+            self.run.finish(PipelineRunSummary())
+          }
+          return
+        }
+      }
+    }
+    // Step 3: the forced single-key run fills the target forms.
+    await performTranslate(project: project, key: key, languages: languages, force: true)
+  }
+
   /// Row-menu "Vary by plural": builds the CLDR plural skeleton for the
   /// source language + every selected non-source column, seeds one record
   /// per form, then writes the artifact. The flat stringUnit value moves
@@ -1258,6 +1326,12 @@ private struct CatalogTable: View {
     if row.isTranslatable {
       if row.hasPlurals {
         Button {
+          store.generatePlural(key: row.key)
+        } label: {
+          Label("Generate plural", systemImage: "sparkles")
+        }
+        .disabled(store.run.isRunning)
+        Button {
           store.removePlurals(key: row.key)
         } label: {
           Label("Remove plural variations", systemImage: "ellipsis.curlybraces")
@@ -1268,6 +1342,12 @@ private struct CatalogTable: View {
           store.varyByPlural(key: row.key)
         } label: {
           Label("Vary by plural", systemImage: "ellipsis.curlybraces")
+        }
+        .disabled(store.run.isRunning)
+        Button {
+          store.generatePlural(key: row.key)
+        } label: {
+          Label("Generate plural", systemImage: "sparkles")
         }
         .disabled(store.run.isRunning)
       }
