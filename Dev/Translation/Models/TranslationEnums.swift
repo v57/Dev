@@ -10,12 +10,17 @@ import Foundation
 // MARK: - Provider
 
 /// Which producer wrote a translation value. `manual` is a human; the rest
-/// are the machine backends. Persisted as raw values — do not rename.
+/// are the machine backends plus the imported translation DB. Persisted as
+/// raw values — do not rename.
 enum Provider: String, Codable, CaseIterable {
   case manual
   case apple
   case ollama
   case deepseek
+  /// A value copied from the app's imported translation database (shipped
+  /// human translations). Records carrying it are `.reviewed` with
+  /// `autoReviewed` set until a human confirms them.
+  case importedDB
 }
 
 // MARK: - TranslationState

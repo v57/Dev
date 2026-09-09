@@ -31,6 +31,14 @@ import SwiftData
   var category: String?
   /// What produced `value`; nil while the slot is empty.
   var provider: Provider?
+  /// True when the current value came from the imported translation DB and
+  /// was marked reviewed WITHOUT a human: state is .reviewed (so no stage or
+  /// run ever re-translates it) but nobody vouched for it yet. The UI shows
+  /// an "auto" badge; one click (human confirm) clears it. Persisted raw —
+  /// records reconciled from a file always carry false (the file cannot
+  /// express auto-reviewed). The inline default keeps the additive SwiftData
+  /// migration lightweight.
+  var autoReviewed: Bool = false
   /// empty / needs_review (machine output) / reviewed (human confirmed).
   var state: TranslationState
   /// Machine confidence in the current value (0...1); nil for manual output.
@@ -61,7 +69,7 @@ import SwiftData
     confidence: Double? = nil, contextVersions: ContextVersions = ContextVersions(),
     createdAt: Date = .now, updatedAt: Date = .now, reviewedAt: Date? = nil,
     lastEditor: String? = nil, project: Project? = nil, edits: [TranslationEdit] = [],
-    category: String? = nil
+    category: String? = nil, autoReviewed: Bool = false
   ) {
     self.key = key
     self.sourceText = sourceText
@@ -69,6 +77,7 @@ import SwiftData
     self.value = value
     self.category = category
     self.provider = provider
+    self.autoReviewed = autoReviewed
     self.state = state
     self.confidence = confidence
     self.contextVersions = contextVersions

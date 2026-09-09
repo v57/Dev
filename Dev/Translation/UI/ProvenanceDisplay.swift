@@ -17,6 +17,10 @@ enum ProvenanceMarkers {
   /// Set when a value was copied from the translation memory — the UI shows
   /// the "resolved from cache" indicator for these cells.
   static let translationMemory = "Translation Memory"
+  /// PREFIX of the editor stamp the imported-DB stage writes ("Imported DB —
+  /// <owning app>"). The `autoReviewed` record flag is the authoritative
+  /// marker; this only names the producer in tooltips.
+  static let importedDB = "Imported DB"
 }
 
 // MARK: - Provider
@@ -31,6 +35,7 @@ extension Provider {
     case .apple: return "Apple Translation"
     case .ollama: return "Ollama"
     case .deepseek: return "Command Code"
+    case .importedDB: return "Imported DB"
     }
   }
 }
@@ -110,7 +115,9 @@ extension TranslationRecord {
 
 // MARK: - String
 
-extension String {
+/// `nonisolated`: a pure predicate, callable from the pipeline's off-main
+/// stages too.
+nonisolated extension String {
   var isBlankOrEmpty: Bool {
     trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
   }

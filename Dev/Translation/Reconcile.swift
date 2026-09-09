@@ -428,6 +428,7 @@ enum Reconcile {
     }
     record.sourceText = sourceText
     record.state = .reviewed
+    record.autoReviewed = false  // any human action supersedes auto-reviewed
     record.reviewedAt = .now
     record.updatedAt = .now
     let userName = ProcessInfo.processInfo.fullUserName
@@ -462,6 +463,10 @@ enum Reconcile {
         continue
       }
       record.state = state
+      // A manual state flip ends auto-reviewed status either way: confirming
+      // makes it human-reviewed, un-confirming demotes it to plain machine
+      // output (the auto badge is a reviewed-state concept).
+      record.autoReviewed = false
       record.updatedAt = .now
       if state == .reviewed {
         record.reviewedAt = .now
