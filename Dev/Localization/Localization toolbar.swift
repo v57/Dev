@@ -17,6 +17,9 @@ struct ControlsBar: ToolbarContent {
   var allowsOpenCatalog = true
 
   var body: some ToolbarContent {
+    ToolbarItemGroup(placement: .secondaryAction) {
+      TranslationDBControl(store: store)
+    }
     ToolbarItemGroup(placement: .primaryAction) {
       if allowsOpenCatalog {
         Button("Open…") { store.openPanelAndLoad() }

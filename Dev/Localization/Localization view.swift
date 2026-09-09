@@ -325,6 +325,11 @@ private struct LanguageCell: View {
            record.lastEditor == ProvenanceMarkers.translationMemory {
           TranslationMemoryBadge(record: record)
         }
+        if let record = cell.record, record.autoReviewed {
+          AutoReviewedBadge {
+            store.confirmAutoReviewed(key: row.key, language: language)
+          }
+        }
         LanguageEditCell(
           store: store, rowKey: row.key, language: language,
           cell: cell, record: cell.record)
@@ -381,6 +386,15 @@ private struct RowContextMenu: View {
         }
         .disabled(store.run.isRunning)
       }
+      // One-click human confirm for every imported-DB auto-reviewed slot of
+      // the row (badge click does the same per cell).
+      if rowHasAutoReviewed {
+        Button {
+          store.confirmAutoReviewedRow(row.key)
+        } label: {
+          Label("Confirm Auto-Reviewed", systemImage: "checkmark.seal")
+        }
+      }
       Divider()
       // Reviewed shows only when the row is NOT fully reviewed; Needs Review
       // only when it is NOT fully needs_review. Mixed/half rows offer both,
@@ -420,6 +434,15 @@ private struct RowContextMenu: View {
       } label: {
         Label("Needs translate", systemImage: "translate")
       }
+    }
+  }
+
+  /// True when any slot of the row (flat cells or plural forms) carries an
+  /// imported-DB auto-reviewed value — offers the Confirm action.
+  private var rowHasAutoReviewed: Bool {
+    row.cells.values.contains { cell in
+      if cell.record?.autoReviewed == true { return true }
+      return cell.pluralRecords.values.contains { $0.autoReviewed }
     }
   }
 }
@@ -618,6 +641,12 @@ private struct PluralFormRow: View {
           Circle()
             .fill(record.state.dotColor)
             .frame(width: 6, height: 6)
+        }
+        if let record = formRecord, record.autoReviewed {
+          AutoReviewedBadge {
+            store.confirmAutoReviewed(
+              key: rowKey, language: language, category: category)
+          }
         }
         Text(PluralRules.displayName(for: category))
           .font(.caption)

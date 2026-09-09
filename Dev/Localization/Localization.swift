@@ -522,7 +522,61 @@ final class LocalizationStore {
     saveRow(key)
   }
 
-  /// Row-driven save: commits exactly ONE edited row's records — its cells'
+  // MARK: - imported-DB human confirm
+
+  /// One-click human confirm of an auto-reviewed slot (the "auto" badge):
+  /// the value is already .reviewed — this clears the auto marker so the
+  /// record counts as human-reviewed (reviewedAt stamped, producer stamp
+  /// kept) and upserts the TM gold entry, so any future catalog resolves
+  /// the same (sourceText, language, target) as gold immediately — no need
+  /// to wait for the next run's Stage 0. No-op unless the record really is
+  /// auto-reviewed with a value.
+  @discardableResult
+  func confirmAutoReviewed(_ record: TranslationRecord) -> Bool {
+    guard let project, let catalog,
+          record.autoReviewed,
+          let value = record.value,
+          !value.isBlankOrEmpty
+    else { return false }
+    let context = TranslationStore.shared.context
+    record.autoReviewed = false
+    record.reviewedAt = .now
+    record.updatedAt = .now
+    // Gold is gold: the human vouched for this (sourceText, target) triple.
+    TranslationMemory.upsertReviewed(
+      in: context,
+      sourceText: record.sourceText,
+      sourceLanguage: catalog.sourceLanguage,
+      targetLanguage: record.language,
+      value: value,
+      contextVersions: Reconcile.persistableVersions(record.contextVersions),
+      projectTag: project.name)
+    try? context.save()
+    return true
+  }
+
+  /// Cell-scoped confirm (flat slot, or one plural form when `category` is
+  /// set). Value unchanged; no file write needed (the file already carries
+  /// "translated" — the auto marker is DB-only provenance).
+  func confirmAutoReviewed(key: String, language: String, category: String? = nil) {
+    guard let project,
+          let record = Reconcile.record(
+            key: key, language: language, category: category, in: project)
+    else { return }
+    confirmAutoReviewed(record)
+  }
+
+  /// Row-scoped confirm: every auto-reviewed slot (flat + plural forms) of
+  /// one key becomes human-reviewed in one click.
+  func confirmAutoReviewedRow(_ key: String) {
+    guard let project else { return }
+    for record in project.records where record.key == key && record.autoReviewed {
+      confirmAutoReviewed(record)
+    }
+    saveRow(key)
+  }
+
+  /// Row-driven save: commit exactly ONE edited row's records — its cells'
   /// live records, flat + plural forms across every language — back into
   /// the artifact, scoped to that key instead of walking the whole project,
   /// then adopts the updated catalog. Per-slot semantics match

@@ -21,6 +21,11 @@ struct ContentView: View {
     }
     .environment(createIcon)
     .environment(localizationStore)
+    // Restore the remembered imported translation DB (path only — no open,
+    // no scan) so the toolbar control and the pipeline know it is active.
+    .task {
+      ImportedTranslationDB.shared.restoreIfNeeded()
+    }
     .toolbar {
       ToolbarItemGroup(placement: .primaryAction) {
         Picker("Tool", selection: Binding<SidebarTool?>(
