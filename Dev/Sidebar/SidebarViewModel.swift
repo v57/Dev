@@ -74,9 +74,21 @@ struct SidebarProjectRow: Identifiable {
 final class SidebarViewModel {
   // MARK: state
 
-  /// The one sidebar selection. Defaults to the projectless Create Icon
-  /// tool (the app's original launch state) until a project is chosen.
-  var selection: SidebarSelection? = .tool(.icon)
+  /// The one sidebar selection. nil = neither project nor tool selected
+  /// (the launch state — the toolbar tool picker is deselected by default).
+  var selection: SidebarSelection? = nil
+
+  /// The projectless tool currently open, or nil when none is selected
+  /// (or a project is). Drives the toolbar tool picker.
+  var currentTool: SidebarTool? {
+    get {
+      if case .tool(let tool) = selection { return tool }
+      return nil
+    }
+    set {
+      selection = newValue.map(SidebarSelection.tool)
+    }
+  }
 
   /// Fresh per-project rows, rebuilt by `refresh()`.
   private(set) var projects: [SidebarProjectRow] = []

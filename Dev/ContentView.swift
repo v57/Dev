@@ -21,6 +21,18 @@ struct ContentView: View {
     }
     .environment(createIcon)
     .environment(localizationStore)
+    .toolbar {
+      ToolbarItemGroup(placement: .primaryAction) {
+        Picker("Tool", selection: Binding<SidebarTool?>(
+          get: { model.currentTool },
+          set: { model.currentTool = $0 })) {
+          Text("App Icon").tag(SidebarTool.icon as SidebarTool?)
+          Text("Localization").tag(SidebarTool.localization as SidebarTool?)
+        }
+        .pickerStyle(.segmented)
+        .help("Open the Create Icon or Localization tool (projectless)")
+      }
+    }
   }
 
   @ViewBuilder
@@ -37,7 +49,7 @@ struct ContentView: View {
         ContentUnavailableView("Project not found", systemImage: "folder.badge.questionmark")
       }
     case nil:
-      ContentUnavailableView("Select a project", systemImage: "sidebar.left")
+      ContentUnavailableView("Select a tool or a project", systemImage: "square.grid.2x2")
     }
   }
 }
