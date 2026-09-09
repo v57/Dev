@@ -371,7 +371,7 @@ final class LocalizationStore {
     }
     guard let catalog else { return }
     do {
-      self.catalog = try Reconcile.commit(catalog, project: project)
+      self.catalog = try Reconcile.commit(catalog, project: project, keys: key.map { [$0] })
       rebuildRecordIndex()
       saveError = nil
       buildRows()
@@ -529,11 +529,22 @@ final class LocalizationStore {
   /// language slot AND every filled plural form, then writes the state back
   /// to the artifact. Empty slots are left untouched.
   func setRowState(_ key: String, _ state: TranslationState) {
-    guard let catalog, let project else { return }
+    guard let project else { return }
     let context = TranslationStore.shared.context
     Reconcile.applyReviewState(key: key, state: state, project: project, context: context)
+    saveRow(key)
+  }
+
+  /// Row-driven save: commits exactly ONE edited row's records — its cells'
+  /// live records, flat + plural forms across every language — back into
+  /// the artifact, scoped to that key instead of walking the whole project,
+  /// then adopts the updated catalog. Per-slot semantics match
+  /// `Reconcile.commit` (owned records write value+state; empty slots stay
+  /// absent; plural and flat slots never cross).
+  private func saveRow(_ key: String) {
+    guard let catalog, let project else { return }
     do {
-      self.catalog = try Reconcile.commit(catalog, project: project)
+      self.catalog = try Reconcile.commit(catalog, project: project, keys: [key])
       saveError = nil
       buildRows()
     } catch {
@@ -688,19 +699,12 @@ final class LocalizationStore {
       }
       return
     }
-    do {
-      let sourceText = catalog.sourcePluralDisplay(for: key, category: category)
-      Reconcile.applyHumanEdit(
-        key: key, language: language, value: trimmed,
-        sourceText: sourceText, project: project, context: context,
-        category: category)
-      let updated = try Reconcile.commit(catalog, project: project)
-      self.catalog = updated
-      saveError = nil
-      buildRows()
-    } catch {
-      saveError = error.localizedDescription
-    }
+    let sourceText = catalog.sourcePluralDisplay(for: key, category: category)
+    Reconcile.applyHumanEdit(
+      key: key, language: language, value: trimmed,
+      sourceText: sourceText, project: project, context: context,
+      category: category)
+    saveRow(key)
   }
 
   func setValue(_ text: String, for key: String, language: String) {
@@ -731,18 +735,11 @@ final class LocalizationStore {
       return
     }
     let context = TranslationStore.shared.context
-    do {
-      let sourceText = catalog.sourceDisplay(for: key)
-      Reconcile.applyHumanEdit(
-        key: key, language: language, value: text,
-        sourceText: sourceText, project: project, context: context)
-      let updated = try Reconcile.commit(catalog, project: project)
-      self.catalog = updated
-      saveError = nil
-      buildRows()
-    } catch {
-      saveError = error.localizedDescription
-    }
+    let sourceText = catalog.sourceDisplay(for: key)
+    Reconcile.applyHumanEdit(
+      key: key, language: language, value: text,
+      sourceText: sourceText, project: project, context: context)
+    saveRow(key)
   }
 
   private func removeOverride(key: String, language: String) {

@@ -494,16 +494,25 @@ enum Reconcile {
   /// Returns the updated
   /// catalog (the caller adopts it so the UI stays in sync without a
   /// reload). Throws on encode/write failure.
+  ///
+  /// Pass `keys` to scope the write to specific catalog keys — the
+  /// row-driven saves the UI issues (one edited row = its key) walk only
+  /// that row's records instead of the whole project. `nil` walks the full
+  /// record set (end-of-run flush). Per-record semantics are identical.
   @discardableResult
   static func commit(
     _ catalog: StringCatalog,
-    project: Project
+    project: Project,
+    keys: Set<String>? = nil
   ) throws -> StringCatalog {
     var updated = catalog
     var changed = false
     let sourceLanguage = catalog.sourceLanguage
 
-    for record in project.records {
+    let records = keys.map { wanted in
+      project.records.filter { wanted.contains($0.key) }
+    } ?? project.records
+    for record in records {
       guard let value = record.value,
             !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
         continue  // empty slots stay absent in the file
