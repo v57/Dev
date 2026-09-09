@@ -99,6 +99,47 @@ enum Reconcile {
     return project
   }
 
+  /// Resolves the project a DROPPED DIRECTORY imports as: name = the
+  /// folder's last path component, rootURL = the standardized folder URL,
+  /// catalogURL = <root>/Localizable.xcstrings and iconURL = <root>/
+  /// Assets.xcassets/AppIcon.appiconset — resolved whether or not those
+  /// files exist yet (a folder with neither still becomes a project; 'no
+  /// catalog' / placeholder icon are display-time derivations).
+  ///
+  /// Finds-or-creates so re-dropping the same folder never duplicates:
+  /// matched by rootURL first (an earlier directory drop), then by the
+  /// resolved catalog URL (a row first seen via its .xcstrings file is
+  /// adopted in place — records, contextDoc and name survive — and upgraded
+  /// to a directory-root project). The catalog-file path (`ensureProject`)
+  /// is untouched: LocalizationView reconcile still keys rows by catalog
+  /// URL alone.
+  static func resolveDirectoryProject(
+    rootDir: URL,
+    in context: ModelContext
+  ) -> Project {
+    let root = rootDir.standardizedFileURL
+    let catalogURL = root.appendingPathComponent("Localizable.xcstrings")
+    let iconURL = root
+      .appendingPathComponent("Assets.xcassets", isDirectory: true)
+      .appendingPathComponent("AppIcon.appiconset", isDirectory: true)
+    let projects = (try? context.fetch(FetchDescriptor<Project>())) ?? []
+    if let byRoot = projects.first(where: { $0.rootURL == root }) {
+      return byRoot
+    }
+    if let byCatalog = projects.first(where: { $0.catalogURL == catalogURL }) {
+      byCatalog.rootURL = root
+      byCatalog.iconURL = iconURL
+      return byCatalog
+    }
+    let project = Project(
+      name: root.lastPathComponent,
+      catalogURL: catalogURL,
+      rootURL: root,
+      iconURL: iconURL)
+    context.insert(project)
+    return project
+  }
+
   // MARK: - load (file -> DB)
 
   /// Outcome counts of one upsert, for logging.
