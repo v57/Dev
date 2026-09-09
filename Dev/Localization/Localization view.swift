@@ -1044,22 +1044,47 @@ extension View {
 
 // MARK: - View
 
-/// Detail tool for the shared projectless LocalizationStore. The store is
-/// owned and injected by ContentView (next to CreateIcon), so the sidebar's
-/// live 'Current (no project)' row and this tool read the SAME open catalog.
+/// Detail tool over the shared LocalizationStore (owned + injected by
+/// ContentView, so the sidebar's live 'Current (no project)' row and this
+/// tool read the SAME open catalog).
+///
+/// Two modes:
+///  - PROJECTLESS (projectCatalogURL == nil): arbitrary open — the app's
+///    original behavior; auto-opens the dev fixture when nothing is loaded.
+///  - PROJECT-BOUND (P40, projectCatalogURL set): the pane belongs to a
+///    selected sidebar project. It renders content ONLY while the store
+///    holds THAT project's catalog — a different open catalog is never
+///    shown under the project's name, and no arbitrary Open… is offered
+///    (opening another file would re-target reconcile away from the
+///    selected project). ProjectDetailView opens the catalog on selection;
+///    when the file is absent this view shows the 'no catalog' state.
 struct LocalizationView: View {
   @Environment(LocalizationStore.self) private var store
 
+  /// The catalog of the selected project this instance is bound to, or nil
+  /// for the projectless tool. Read from the shared sidebar view-model's
+  /// row snapshot by the caller — never tracked here.
+  var projectCatalogURL: URL?
+
   var body: some View {
     Group {
-      if store.isLoaded {
-        loadedContent
+      if let url = projectCatalogURL {
+        boundContent(url: url)
+      } else if store.isLoaded {
+        loadedContent(allowsOpenCatalog: true)
       } else {
         emptyState
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .task { store.openDefaultIfPresent() }
+    // The projectless auto-open (dev fixture) must never fire while bound —
+    // a bound pane only ever opens its project's catalog, which
+    // ProjectDetailView drives on selection. The id makes the bound/
+    // projectless flip re-evaluate the guard.
+    .task(id: projectCatalogURL) {
+      guard projectCatalogURL == nil else { return }
+      store.openDefaultIfPresent()
+    }
     .alert(store.errorTitle, isPresented: errorBinding) {
       Button("OK") { store.dismissError() }
     } message: {
@@ -1073,7 +1098,52 @@ struct LocalizationView: View {
       set: { if !$0 { store.dismissError() } })
   }
 
-  private var loadedContent: some View {
+  /// Bound pane: full table while the store holds the project's catalog;
+  /// a brief opening state (the binding open lands right after this frame)
+  /// or a permanent 'no catalog' state when the file is absent.
+  @ViewBuilder
+  private func boundContent(url: URL) -> some View {
+    if store.isLoaded, store.catalogURL == url {
+      loadedContent(allowsOpenCatalog: false)
+    } else if FileManager.default.fileExists(atPath: url.path) {
+      if store.hasError {
+        ContentUnavailableView(
+          "Couldn't open catalog",
+          systemImage: "exclamationmark.triangle",
+          description: Text("The project catalog failed to open."))
+      } else {
+        ProgressView("Opening catalog…")
+      }
+    } else {
+      noCatalogState(url: url)
+    }
+  }
+
+  /// 'No catalog' for a bound project without a Localizable.xcstrings yet:
+  /// nothing to open, so the pane explains instead of offering an arbitrary
+  /// file (which would reconcile into a DIFFERENT project).
+  private func noCatalogState(url: URL) -> some View {
+    VStack(spacing: 12) {
+      Image(systemName: "doc.text.magnifyingglass")
+        .font(.system(size: 44))
+        .foregroundStyle(.tertiary)
+      Text("No catalog")
+        .font(.title3)
+      VStack(spacing: 4) {
+        Text("This project has no Localizable.xcstrings yet.")
+          .foregroundStyle(.secondary)
+        Text(url.path)
+          .font(.caption)
+          .foregroundStyle(.tertiary)
+          .textSelection(.enabled)
+      }
+      .multilineTextAlignment(.center)
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .padding(20)
+  }
+
+  private func loadedContent(allowsOpenCatalog: Bool) -> some View {
     @Bindable var store = store
     return VStack(spacing: 0) {
       CatalogTable(store: store)
@@ -1081,7 +1151,7 @@ struct LocalizationView: View {
                     prompt: "Search keys, comments, translations")
         .safeAreaBar(edge: .top) {
         VStack {
-          ControlsBar(store: store)
+          ControlsBar(store: store, allowsOpenCatalog: allowsOpenCatalog)
           Divider()
           LanguageButtonsRow(store: store)
         }
@@ -1111,12 +1181,18 @@ struct LocalizationView: View {
 
 private struct ControlsBar: View {
   let store: LocalizationStore
+  /// Projectless mode offers Open…; a project-bound catalog (P40) doesn't —
+  /// opening an arbitrary file would re-target the store's reconcile away
+  /// from the selected project.
+  var allowsOpenCatalog = true
 
   var body: some View {
     @Bindable var store = store
     HStack(spacing: 12) {
-      Button("Open…") { store.openPanelAndLoad() }
-        .disabled(store.run.isRunning)
+      if allowsOpenCatalog {
+        Button("Open…") { store.openPanelAndLoad() }
+          .disabled(store.run.isRunning)
+      }
       Button {
         store.reload()
       } label: {

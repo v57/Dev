@@ -33,6 +33,13 @@ struct CreateIconView: View {
   @State private var isExporting = false
   @State private var alertMessage: String?
 
+  /// Non-nil binds this instance to a selected sidebar project (P40): the
+  /// export target defaults to the project's root directory, so Export
+  /// writes the project's own Assets.xcassets/AppIcon.appiconset without a
+  /// folder picker. nil = the projectless tool (arbitrary target via
+  /// NSOpenPanel, unchanged).
+  var exportRootURL: URL?
+
   var body: some View {
     @Bindable var create = create
     HStack(spacing: 0) {
@@ -112,10 +119,18 @@ struct CreateIconView: View {
           if isExporting {
             ProgressView().controlSize(.small)
           } else {
-            Text("Export AppIcon.appiconset…")
+            Text(exportRootURL == nil ? "Export AppIcon.appiconset…" : "Export to Project")
           }
         }
         .disabled(isExporting)
+        if let root = exportRootURL {
+          Text("Writes \(root.lastPathComponent)/Assets.xcassets/AppIcon.appiconset")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(2)
+            .truncationMode(.middle)
+            .help(root.appendingPathComponent("Assets.xcassets").appendingPathComponent("AppIcon.appiconset").path)
+        }
       }
     }
     .formStyle(.grouped)
@@ -211,7 +226,9 @@ struct CreateIconView: View {
   func exportIconSet() async {
     isExporting = true
     defer { isExporting = false }
-    guard let dir = chooseDirectory() else { return }
+    // Project-bound: the target IS the project root (no picker). Projectless:
+    // prompt for an arbitrary folder, as before.
+    guard let dir = exportRootURL ?? chooseDirectory() else { return }
     do {
       try await IconGenerator.exportIconSet(
         symbol: create.settings.symbol,

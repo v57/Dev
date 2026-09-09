@@ -32,7 +32,7 @@ struct ContentView: View {
       LocalizationView()
     case .project(let id):
       if let row = model.projectRow(id: id) {
-        ProjectDetailView(row: row)
+        ProjectDetailView(model: model, row: row)
       } else {
         ContentUnavailableView("Project not found", systemImage: "folder.badge.questionmark")
       }
