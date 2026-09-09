@@ -26,11 +26,12 @@ import SwiftData
 final class PipelineRunContext {
   let context: ModelContext
   let project: Project
-  /// Every record of the project, sorted (language, key) for determinism.
-  /// Always the FULL set — neighbors/comments/prompts sample across the
-  /// project even on a single-key run; only candidate *selection* honors
-  /// `targetKey`.
-  let allRecords: [TranslationRecord]
+  /// Every record of the project, sorted (language, key, category) for
+  /// determinism. Always the FULL set — neighbors/comments/prompts sample
+  /// across the project even on a single-key run; only candidate *selection*
+  /// honors `targetKey`. Plural-form records are appended by
+  /// `reconcilePluralForms()` before the stages run.
+  var allRecords: [TranslationRecord]
   /// When set (a row's "Translate"), machine stages act on ONLY this key's
   /// records; every other record is skipped by `isTarget`. Neighbors and
   /// context still come from the whole project.
@@ -50,7 +51,8 @@ final class PipelineRunContext {
   private var docs: [ContextDoc]
 
   /// Best-effort catalog mirror (nil when the file is missing/unreadable).
-  private let catalog: StringCatalog?
+  /// Refreshed by `reconcilePluralForms()` when it writes new skeletons.
+  private(set) var catalog: StringCatalog?
 
   /// Per-language neighbor pools, built lazily: target-language values of
   /// OTHER keys — register samples the model stays consistent with.
@@ -85,7 +87,7 @@ final class PipelineRunContext {
       allDocs = fetched
     }
     docs = allDocs
-    allRecords = project.records.sorted { ($0.language, $0.key) < ($1.language, $1.key) }
+    allRecords = project.records.sorted { ($0.language, $0.key, $0.category ?? "") < ($1.language, $1.key, $1.category ?? "") }
   }
 
   // MARK: - context docs
@@ -181,17 +183,117 @@ final class PipelineRunContext {
     catalog?.entry(for: key)?.comment
   }
 
+  // MARK: - plural reconcile
+
+  /// Ensures every targeted plural key carries a form record per CLDR
+  /// category of each targeted language: creates missing form records
+  /// (empty, from the source form) and missing CLDR forms in the file
+  /// skeleton. Runs BEFORE the stages on every Translate run (whole-catalog
+  /// and single-key), so AI fills forms the human never created by hand —
+  /// "Translate" creates the missing categories. A key whose source has no
+  /// plural variation gains no target forms (nothing to translate from).
+  /// Returns how many form records were created.
+  @discardableResult
+  func reconcilePluralForms() -> Int {
+    guard let catalog else { return 0 }
+    var created = 0
+    var keys = Set<String>()
+    for record in allRecords where isTarget(record) {
+      keys.insert(record.key)
+    }
+    if let targetKey {
+      keys = [targetKey]
+    }
+    for key in keys {
+      guard catalog.hasPlurals(for: key, language: catalog.sourceLanguage) else { continue }
+      let languages: [String]
+      if let targetLanguages {
+        languages = Array(targetLanguages)
+      } else {
+        languages = catalog.languages.filter { $0 != catalog.sourceLanguage }
+      }
+      for language in languages {
+        let entry = catalog.entry(for: key)
+        let loc = entry?.localizations?[language]
+        let hasPlural = loc?.variations?["plural"]?.isEmpty == false
+        let hasFlat = loc?.stringUnit != nil
+        // A flat-only target of a plural source: "other" moves into the
+        // skeleton (same rule as Vary by plural) so its value survives.
+        if !hasPlural && hasFlat {
+          var mutable = catalog
+          mutable.varyByPlural(key: key, languages: [language])
+          persistCatalog(mutable)
+        } else if !hasPlural && !hasFlat && (targetLanguages == nil || isTargetLanguage(language)) {
+          // Whole-catalog run, or this language is in scope: create the
+          // skeleton for the AI to fill. Single-key runs with no columns
+          // selected (empty set) create nothing.
+          if targetLanguages?.isEmpty == true { continue }
+          var mutable = catalog
+          mutable.varyByPlural(key: key, languages: [language])
+          persistCatalog(mutable)
+        }
+        guard catalog.hasPlurals(for: key, language: language) else { continue }
+        for category in PluralRules.categories(for: language) {
+          if formRecord(key: key, language: language, category: category) != nil { continue }
+          let record = TranslationRecord(
+            key: key,
+            sourceText: catalog.sourcePluralDisplay(for: key, category: category),
+            language: language,
+            value: nil, provider: nil, state: .empty,
+            contextVersions: Reconcile.persistableVersions(ContextVersions()),
+            category: category)
+          context.insert(record)
+          record.project = project
+          allRecords.append(record)
+          created += 1
+        }
+      }
+    }
+    if created > 0 {
+      try? context.save()
+    }
+    // Re-sort: candidate selection is order-independent, but determinism
+    // keeps progress + logs stable.
+    allRecords.sort { ($0.language, $0.key, $0.category ?? "") < ($1.language, $1.key, $1.category ?? "") }
+    return created
+  }
+
+  /// True when the language is in this run's scope (whole-catalog runs
+  /// target everything).
+  private func isTargetLanguage(_ language: String) -> Bool {
+    guard let targetLanguages else { return true }
+    return targetLanguages.contains(language)
+  }
+
+  /// The live form record for a slot, or nil.
+  private func formRecord(key: String, language: String, category: String) -> TranslationRecord? {
+    allRecords.first { $0.key == key && $0.language == language && $0.category == category }
+  }
+
+  /// Persists a mutated catalog copy back to the artifact and refreshes the
+  /// cached mirror so later stages see the skeleton.
+  private func persistCatalog(_ mutated: StringCatalog) {
+    do {
+      try mutated.save(to: project.catalogURL)
+    } catch {
+      return
+    }
+    catalog = mutated
+  }
+
   // MARK: - neighbor pool
 
   /// Up to `limit` target-language values of OTHER keys in the same
-  /// language, sorted by key — register and terminology samples.
+  /// language, sorted by key — register and terminology samples. Flat
+  /// values only: plural form fragments would read as broken sentences out
+  /// of context.
   func neighbors(for language: String, excluding key: String, limit: Int = 10) -> [String] {
     let pool: [(key: String, value: String)]
     if let cached = neighborPool[language] {
       pool = cached
     } else {
       var built: [(key: String, value: String)] = []
-      for record in allRecords where record.language == language {
+      for record in allRecords where record.language == language && record.category == nil {
         guard let value = record.value,
               !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
           continue
@@ -212,9 +314,11 @@ final class PipelineRunContext {
 
   /// Assembles the TranslationContext for one record: key, comment (from the
   /// catalog), same-language neighbor values, and the three ContextDoc
-  /// bodies. The backends' ContextPromptBuilder applies its own caps.
+  /// bodies. Plural form records also carry their category + every source
+  /// form, so the model translates with the right number agreement. The
+  /// backends' ContextPromptBuilder applies its own caps.
   func translationContext(for record: TranslationRecord) -> TranslationContext {
-    TranslationContext(
+    var context = TranslationContext(
       key: record.key,
       comment: comment(for: record.key),
       neighbors: neighbors(for: record.language, excluding: record.key),
@@ -222,5 +326,19 @@ final class PipelineRunContext {
       projectContext: projectDoc()?.content,
       languageContext: languageDoc(for: record.language)?.content
     )
+    if let category = record.category {
+      context.pluralCategory = category
+      if let catalog {
+        var forms: [String: String] = [:]
+        for sourceCategory in PluralRules.categories(for: catalog.sourceLanguage) {
+          let text = catalog.sourcePluralDisplay(for: record.key, category: sourceCategory)
+          if !text.isEmpty {
+            forms[sourceCategory] = text
+          }
+        }
+        context.sourcePluralForms = forms
+      }
+    }
+    return context
   }
 }

@@ -23,6 +23,12 @@ import SwiftData
   var language: String
   /// Current translated value; nil while the slot is empty.
   var value: String?
+  /// Plural category this record holds ("one", "other", …); nil for a flat
+  /// (non-varied) slot. Plural forms are full records — each form carries its
+  /// own sourceText, value, state and provenance, so the pipeline translates
+  /// them exactly like flat slots. Nil-able so the pre-plural store migrates
+  /// automatically (existing rows read back as flat).
+  var category: String?
   /// What produced `value`; nil while the slot is empty.
   var provider: Provider?
   /// empty / needs_review (machine output) / reviewed (human confirmed).
@@ -54,12 +60,14 @@ import SwiftData
     provider: Provider? = nil, state: TranslationState = .empty,
     confidence: Double? = nil, contextVersions: ContextVersions = ContextVersions(),
     createdAt: Date = .now, updatedAt: Date = .now, reviewedAt: Date? = nil,
-    lastEditor: String? = nil, project: Project? = nil, edits: [TranslationEdit] = []
+    lastEditor: String? = nil, project: Project? = nil, edits: [TranslationEdit] = [],
+    category: String? = nil
   ) {
     self.key = key
     self.sourceText = sourceText
     self.language = language
     self.value = value
+    self.category = category
     self.provider = provider
     self.state = state
     self.confidence = confidence

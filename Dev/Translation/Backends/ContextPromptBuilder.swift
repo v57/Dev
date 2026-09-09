@@ -83,6 +83,10 @@ nonisolated struct ContextPromptBuilder {
     idiomatic for that spot.
     6. "EXISTING TRANSLATIONS" shows the register already used in this \
     target language; stay consistent with it.
+    7. When a "PLURAL FORM" section is present, the text is ONE plural \
+    category of a localized string: translate it with the number agreement \
+    of that category in the target language (e.g. the "one" form reads \
+    naturally for exactly one item), keeping placeholders intact.
     When the text is ambiguous, pick the most natural option and translate \
     it — never ask back, never refuse.
     """
@@ -100,6 +104,14 @@ nonisolated struct ContextPromptBuilder {
 
     if let key = context?.key, !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
       sections.append("KEY\n\(clamp(key, to: maxKeyCharacters))")
+    }
+    if let category = context?.pluralCategory, !category.isEmpty {
+      sections.append("PLURAL FORM\n\(category)")
+      let forms = context?.sourcePluralForms ?? [:]
+      if !forms.isEmpty {
+        let lines = forms.sorted { $0.key < $1.key }.map { "\($0.key): \($0.value)" }
+        sections.append("SOURCE PLURAL FORMS\n" + lines.joined(separator: "\n"))
+      }
     }
     if let comment = context?.comment, !comment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
       sections.append("COMMENT\n\(clamp(comment, to: maxCommentCharacters))")

@@ -310,6 +310,10 @@ struct Stage0Learner {
     let value = item.edit.toValue
     let sourceLanguage = env.sourceLanguage
     let targetLanguage = record.language
+    // Plural forms learn under a form-tagged key ("key#one") so the TM
+    // triple (sourceText, source, target) stays unique per form: "one" and
+    // "other" of the same key never collide.
+    let lessonKey = record.category.map { "\(record.key)#\($0)" } ?? record.key
 
     // A reviewed TM entry carrying exactly this value means a previous run
     // already folded this lesson (the reviewed upsert is the fold marker).
@@ -332,7 +336,7 @@ struct Stage0Learner {
 
     let doc = env.languageDoc(for: targetLanguage)
     let docCovered = doc.map {
-      GlossaryFormat.isCovered(content: $0.content, key: record.key, source: record.sourceText, value: value)
+      GlossaryFormat.isCovered(content: $0.content, key: lessonKey, source: record.sourceText, value: value)
     } ?? false
     if docCovered {
       // The doc already holds the canonical lesson line (e.g. the store was
@@ -349,7 +353,7 @@ struct Stage0Learner {
     // own.
     if let doc, doc.content.count > PipelineRunContext.maxDocFoldCharacters {
       outcome.failures.append(
-        "learn \(targetLanguage).\(record.key): language doc exceeds "
+        "learn \(targetLanguage).\(lessonKey): language doc exceeds "
           + "\(PipelineRunContext.maxDocFoldCharacters) chars — needs human cleanup"
       )
       return
@@ -365,7 +369,7 @@ struct Stage0Learner {
     let prompt = foldPrompt(
       doc: doc?.content ?? "",
       language: targetLanguage,
-      key: record.key,
+      key: lessonKey,
       comment: env.comment(for: record.key),
       source: record.sourceText,
       value: value,
@@ -377,7 +381,7 @@ struct Stage0Learner {
       let raw = try await Stage0ModelClient.complete(system: prompt.system, user: prompt.user)
       reply = GlossaryFormat.parseFoldReply(raw)
     } catch {
-      outcome.failures.append("learn \(targetLanguage).\(record.key): \(error.localizedDescription)")
+      outcome.failures.append("learn \(targetLanguage).\(lessonKey): \(error.localizedDescription)")
       return
     }
 
@@ -387,11 +391,11 @@ struct Stage0Learner {
       outcome.covered += 1
       upsertMemory(env: env, record: record, value: value)
     case .unusable:
-      outcome.failures.append("learn \(targetLanguage).\(record.key): unusable model reply")
+      outcome.failures.append("learn \(targetLanguage).\(lessonKey): unusable model reply")
     case .revised(let revised):
       let trimmed = revised.trimmingCharacters(in: .whitespacesAndNewlines)
       guard !trimmed.isEmpty else {
-        outcome.failures.append("learn \(targetLanguage).\(record.key): empty revision")
+        outcome.failures.append("learn \(targetLanguage).\(lessonKey): empty revision")
         return
       }
       guard trimmed != (doc?.content ?? "") else {
@@ -404,7 +408,7 @@ struct Stage0Learner {
         doc: doc,
         language: targetLanguage,
         content: trimmed,
-        key: record.key,
+        key: lessonKey,
         value: value
       )
       if changed {

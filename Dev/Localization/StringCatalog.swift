@@ -126,4 +126,228 @@ struct StringCatalog: Codable {
     guard let localizations = strings[key]?.localizations else { return false }
     return localizations.values.contains { $0.variations?.isEmpty == false }
   }
+
+  /// True when any language entry of this key carries a *plural* variation.
+  /// Device variations do not count — they stay read-only.
+  func hasPlurals(for key: String) -> Bool {
+    guard let localizations = strings[key]?.localizations else { return false }
+    return localizations.values.contains { $0.variations?["plural"]?.isEmpty == false }
+  }
+
+  /// True when this key/language slot carries a plural variation.
+  func hasPlurals(for key: String, language: String) -> Bool {
+    strings[key]?.localizations?[language]?.variations?["plural"]?.isEmpty == false
+  }
+
+  /// True when this key/language slot carries a non-plural (device) variation.
+  /// Device slots stay read-only everywhere.
+  func hasDeviceVariations(for key: String, language: String) -> Bool {
+    guard let variations = strings[key]?.localizations?[language]?.variations else { return false }
+    return variations.keys.contains { $0 != "plural" }
+  }
+
+  /// Plural form values for a key/language pair: category -> stringUnit.
+  /// Nil when the slot has no plural variation.
+  func pluralUnits(for key: String, language: String) -> [String: StringUnit]? {
+    let plural = strings[key]?.localizations?[language]?.variations?["plural"]
+    guard let plural, !plural.isEmpty else { return nil }
+    var units: [String: StringUnit] = [:]
+    for (category, variation) in plural {
+      if let unit = variation.stringUnit {
+        units[category] = unit
+      }
+    }
+    return units.isEmpty ? nil : units
+  }
+
+  /// Raw parsed value of one plural form, or nil when the form is absent.
+  func pluralValue(for key: String, language: String, category: String) -> String? {
+    strings[key]?.localizations?[language]?.variations?["plural"]?[category]?.stringUnit?.value
+  }
+
+  /// Parsed state of one plural form, or nil.
+  func pluralState(for key: String, language: String, category: String) -> String? {
+    strings[key]?.localizations?[language]?.variations?["plural"]?[category]?.stringUnit?.state
+  }
+
+  /// All plural form values of the source language for a key (category ->
+  /// value), for AI reference prompts. Empty when the source is not varied.
+  func sourcePluralForms(for key: String) -> [String: String] {
+    guard let units = pluralUnits(for: key, language: sourceLanguage) else { return [:] }
+    var forms: [String: String] = [:]
+    for (category, unit) in units {
+      if let value = unit.value, !value.isEmpty {
+        forms[category] = value
+      }
+    }
+    return forms
+  }
+
+  /// Source display text for one plural form: the source form itself, else
+  /// the source "other" form, else the key text (the catalog convention).
+  func sourcePluralDisplay(for key: String, category: String) -> String {
+    if let value = pluralValue(for: key, language: sourceLanguage, category: category),
+       !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      return value
+    }
+    if category != "other",
+       let other = pluralValue(for: key, language: sourceLanguage, category: "other"),
+       !other.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      return other
+    }
+    return sourceDisplay(for: key)
+  }
+
+  // MARK: - plural mutations
+
+  /// "Vary by plural": gives each listed language a plural variation with the
+  /// CLDR categories of that language. A flat stringUnit value/state moves
+  /// into the "other" form (every CLDR set has "other"); the flat unit is
+  /// removed. Missing forms stay absent — records model them as empty slots
+  /// the pipeline fills. Languages already varied are left untouched.
+  mutating func varyByPlural(key: String, languages: [String]) {
+    guard var entry = strings[key], entry.shouldTranslate != false else { return }
+    for language in languages {
+      if hasPlurals(for: key, language: language) { continue }
+      var localizations = entry.localizations ?? [:]
+      var loc = localizations[language] ?? Language()
+      let flat = loc.stringUnit
+      var plural: [String: VariationUnit] = [:]
+      for category in PluralRules.categories(for: language) {
+        if category == "other", let flat, let value = flat.value {
+          plural[category] = VariationUnit(stringUnit: StringUnit(state: flat.state, value: value))
+        } else {
+          // Skeleton form: no stringUnit yet (absence IS empty). Keeps the
+          // variation non-empty so hasPlurals() is true for the new shape.
+          plural[category] = VariationUnit()
+        }
+      }
+      var variations = loc.variations ?? [:]
+      variations["plural"] = plural
+      loc.variations = variations
+      loc.stringUnit = nil
+      localizations[language] = loc
+      entry.localizations = localizations
+    }
+    strings[key] = entry
+  }
+
+  /// Collapses a key's plural variations back to a flat stringUnit per
+  /// language (the "other" form's value/state wins, else the first filled
+  /// form). Used by "Remove plural variations".
+  mutating func removePlurals(key: String) {
+    guard var entry = strings[key] else { return }
+    guard var localizations = entry.localizations else { return }
+    for (language, var loc) in localizations {
+      guard var variations = loc.variations, variations["plural"] != nil else { continue }
+      let plural = variations["plural"] ?? [:]
+      let ordered = (["other"] + plural.keys.sorted()).uniqued()
+      var winner: StringUnit?
+      for category in ordered {
+        if let unit = plural[category]?.stringUnit, unit.value != nil {
+          winner = unit
+          break
+        }
+      }
+      variations.removeValue(forKey: "plural")
+      loc.variations = variations.isEmpty ? nil : variations
+      if loc.stringUnit == nil {
+        loc.stringUnit = winner
+      }
+      localizations[language] = loc
+    }
+    entry.localizations = localizations
+    strings[key] = entry
+  }
+
+  /// Sets one plural form's value/state, creating the variation skeleton as
+  /// needed. Empty text removes the form's stringUnit (absence IS empty).
+  mutating func setPluralValue(_ text: String, state: String?, key: String, language: String, category: String) {
+    guard var entry = strings[key] else { return }
+    var localizations = entry.localizations ?? [:]
+    var loc = localizations[language] ?? Language()
+    var variations = loc.variations ?? [:]
+    var plural = variations["plural"] ?? [:]
+    if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      var unit = plural[category] ?? VariationUnit()
+      unit.stringUnit = nil
+      plural[category] = unit
+    } else {
+      plural[category] = VariationUnit(stringUnit: StringUnit(state: state, value: text))
+    }
+    variations["plural"] = plural
+    loc.variations = variations
+    localizations[language] = loc
+    entry.localizations = localizations
+    strings[key] = entry
+  }
+
+  /// Sets a source-language plural form directly (source has no DB records —
+  /// it is authored text, written straight to the file by the caller).
+  mutating func setSourcePluralValue(_ text: String, key: String, category: String) {
+    setPluralValue(text, state: nil, key: key, language: sourceLanguage, category: category)
+  }
+
+  // MARK: - saving
+
+  /// Atomically encodes the catalog back to its file. Shared by the
+  /// record-commit path and the direct source-plural writes.
+  func save(to url: URL) throws {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+    let data = try encoder.encode(self)
+    try data.write(to: url, options: .atomic)
+  }
+}
+
+// MARK: - PluralRules
+
+/// CLDR cardinal plural categories per language (base subtag match).
+/// "other" is present in every set — it is the required fallback form.
+nonisolated enum PluralRules {
+  static func categories(for language: String) -> [String] {
+    let base = language.split(separator: "-").first?.split(separator: "_").first.map(String.init)?.lowercased() ?? language.lowercased()
+    switch base {
+    case "ar":
+      return ["zero", "one", "two", "few", "many", "other"]
+    case "cs", "sk":
+      return ["one", "few", "other"]
+    case "ru", "uk", "hr", "sr", "bs", "be", "pl", "lt":
+      return ["one", "few", "many", "other"]
+    case "ro":
+      return ["one", "few", "other"]
+    case "he":
+      return ["one", "two", "many", "other"]
+    case "fr", "pt":
+      return ["one", "many", "other"]
+    case "sl":
+      return ["one", "two", "few", "other"]
+    case "lv":
+      return ["zero", "one", "other"]
+    case "ga", "cy":
+      return ["zero", "one", "two", "few", "many", "other"]
+    case "mt":
+      return ["one", "few", "many", "other"]
+    case "ja", "zh", "ko", "th", "vi", "id", "ms", "lo", "my", "km", "tr", "az", "ka":
+      // NOTE: ka (Georgian) CLDR is one/other; grouped here as other-only to
+      // match Xcode's varia­tion template — the AI reconciles real forms on Translate.
+      return ["other"]
+    default:
+      return ["one", "other"]
+    }
+  }
+
+  /// Display names for the editor ("one" -> "One").
+  static func displayName(for category: String) -> String {
+    category.prefix(1).uppercased() + category.dropFirst()
+  }
+}
+
+// MARK: - private helpers
+
+extension Array where Element: Hashable {
+  func uniqued() -> [Element] {
+    var seen = Set<Element>()
+    return filter { seen.insert($0).inserted }
+  }
 }

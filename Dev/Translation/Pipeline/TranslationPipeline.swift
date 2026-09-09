@@ -110,6 +110,16 @@ struct TranslationPipeline {
       return summary
     }
 
+    // Plural reconcile — create missing CLDR form records + file skeletons
+    // BEFORE the stages, so Translate creates what the human never varied
+    // by hand and every stage then fills/reviews forms like flat slots.
+    if progress?.isCancelled != true {
+      let forms = env.reconcilePluralForms()
+      if forms > 0 {
+        progress?.note("Plurals: \(forms) form slot(s) created")
+      }
+    }
+
     // Stage 0 — learn from pending user-confirmed edits first, so the rest
     // of the run sees freshly bumped context versions.
     if progress?.isCancelled != true {
@@ -189,6 +199,14 @@ struct TranslationPipeline {
 
   // MARK: - record selection
 
+  /// Log/progress key for a record: "lang.key" flat, "lang.key#form" plural.
+  private static func displayKey(_ record: TranslationRecord) -> String {
+    if let category = record.category {
+      return "\(record.language).\(record.key)#\(category)"
+    }
+    return "\(record.language).\(record.key)"
+  }
+
   /// True when a machine stage may re-examine a record: it is not
   /// human-owned (no .manual provider, not .reviewed) and it is either NEW
   /// (empty, needs any value) or STALE (context moved on since its value was
@@ -267,15 +285,15 @@ struct TranslationPipeline {
       )
       switch resolved {
       case .none:
-        progress?.tick(key: "\(record.language).\(record.key)")
+        progress?.tick(key: displayKey(record))
       case .resolvedGold:
         outcome.gold += 1
         outcome.excluded.insert(record.persistentModelID)
-        progress?.tick(key: "\(record.language).\(record.key)")
+        progress?.tick(key: displayKey(record))
       case .resolvedHint:
         outcome.hints += 1
         outcome.excluded.insert(record.persistentModelID)
-        progress?.tick(key: "\(record.language).\(record.key)")
+        progress?.tick(key: displayKey(record))
       }
     }
     try? env.context.save()
@@ -493,11 +511,11 @@ struct TranslationPipeline {
           reason: "Stage 1 (Apple Translation): initial fill"
         )
         outcome.filled += 1
-        progress?.tick(key: "\(item.record.language).\(item.record.key)")
+        progress?.tick(key: displayKey(item.record))
       case .failure(let backendError):
         let message = backendError.localizedDescription
-        outcome.failures.append("apple \(item.record.language).\(item.record.key): \(message)")
-        progress?.fail(key: "\(item.record.language).\(item.record.key)", message: message)
+        outcome.failures.append("apple \(displayKey(item.record)): \(message)")
+        progress?.fail(key: displayKey(item.record), message: message)
       }
     }
     try? env.context.save()
@@ -560,11 +578,11 @@ struct TranslationPipeline {
         ) {
           outcome.corrected += 1
         }
-        progress?.tick(key: "\(record.language).\(record.key)")
+        progress?.tick(key: displayKey(record))
       case .failure(let backendError):
         let message = backendError.localizedDescription
-        outcome.failures.append("ollama \(record.language).\(record.key): \(message)")
-        progress?.fail(key: "\(record.language).\(record.key)", message: message)
+        outcome.failures.append("ollama \(displayKey(record)): \(message)")
+        progress?.fail(key: displayKey(record), message: message)
       }
     }
     try? env.context.save()
@@ -645,11 +663,11 @@ struct TranslationPipeline {
         ) {
           outcome.corrected += 1
         }
-        progress?.tick(key: "\(record.language).\(record.key)")
+        progress?.tick(key: displayKey(record))
       case .failure(let backendError):
         let message = backendError.localizedDescription
-        outcome.failures.append("deepseek \(record.language).\(record.key): \(message)")
-        progress?.fail(key: "\(record.language).\(record.key)", message: message)
+        outcome.failures.append("deepseek \(displayKey(record)): \(message)")
+        progress?.fail(key: displayKey(record), message: message)
       }
     }
     try? env.context.save()

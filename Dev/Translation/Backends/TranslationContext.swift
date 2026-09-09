@@ -34,4 +34,12 @@ nonisolated struct TranslationContext: Sendable {
   var projectContext: String? = nil
   /// ContextDoc(scope: .language) content for the TARGET language, if any.
   var languageContext: String? = nil
+  /// Plural form being translated ("one", "other", …); nil for a flat slot.
+  /// Backends fold it into the prompt ("translate the ONE form") so the
+  /// model produces the right agreement/number for this category.
+  var pluralCategory: String? = nil
+  /// All source-language forms (category -> text) as reference for a plural
+  /// fill: the model sees every source form, not just the one being
+  /// translated.
+  var sourcePluralForms: [String: String] = [:]
 }

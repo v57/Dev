@@ -67,11 +67,14 @@ final class TranslateRunController {
   /// Same as `begin(project:)` but scopes the run (and its per-cell spinner
   /// candidates) to a single key and `languages` (the selected columns), and
   /// — when `force` — lifts the freshness gate so fresh machine values are
-  /// re-targeted (row "Translate").
+  /// re-targeted (row "Translate"). Plural form records that do not exist
+  /// yet are created up front (same rule as the pipeline's own reconcile),
+  /// so the spinner covers forms the run is about to fill.
   func begin(project: Project, key: String?, languages: Set<String>?, force: Bool) -> Bool {
     guard !isRunning else { return false }
     progress = TranslateRunProgress()
     summary = nil
+    ensurePluralForms(project: project, key: key, languages: languages)
     candidates = Self.candidateRecords(of: project, key: key, languages: languages, force: force)
     startedAt = .now
     isRunning = true
@@ -124,6 +127,62 @@ final class TranslateRunController {
   }
 
   // MARK: - candidate snapshot
+
+  /// Creates missing plural form records + file skeletons for the run's
+  /// scope BEFORE the candidate snapshot, so newly created forms are
+  /// spinner candidates. Mirrors the pipeline's reconcile rule: only keys
+  /// whose SOURCE is plural-varied gain forms; single-key runs with no
+  /// columns selected (empty set) create nothing.
+  private func ensurePluralForms(project: Project, key: String?, languages: Set<String>?) {
+    guard var catalog = try? StringCatalog.load(url: project.catalogURL) else { return }
+    let context = TranslationStore.shared.context
+    let keys: [String]
+    if let key {
+      keys = [key]
+    } else {
+      keys = project.records.map(\.key).uniqued()
+    }
+    var touchedFile = false
+    var touchedDB = false
+    for targetKey in keys {
+      guard catalog.hasPlurals(for: targetKey, language: catalog.sourceLanguage) else { continue }
+      let targetLanguages: [String]
+      if let languages {
+        if languages.isEmpty { continue }
+        targetLanguages = Array(languages)
+      } else {
+        targetLanguages = catalog.languages.filter { $0 != catalog.sourceLanguage }
+      }
+      for language in targetLanguages {
+        if !catalog.hasPlurals(for: targetKey, language: language) {
+          catalog.varyByPlural(key: targetKey, languages: [language])
+          touchedFile = true
+        }
+        guard catalog.hasPlurals(for: targetKey, language: language) else { continue }
+        for category in PluralRules.categories(for: language) {
+          if Reconcile.record(key: targetKey, language: language, category: category, in: project) != nil {
+            continue
+          }
+          let record = TranslationRecord(
+            key: targetKey,
+            sourceText: catalog.sourcePluralDisplay(for: targetKey, category: category),
+            language: language,
+            value: nil, provider: nil, state: .empty,
+            contextVersions: Reconcile.persistableVersions(ContextVersions()),
+            category: category)
+          context.insert(record)
+          record.project = project
+          touchedDB = true
+        }
+      }
+    }
+    if touchedDB {
+      try? context.save()
+    }
+    if touchedFile {
+      try? catalog.save(to: project.catalogURL)
+    }
+  }
 
   /// The records this run's stages could touch: not human-owned (.reviewed
   /// states and .manual providers are never rewritten) and either EMPTY or
