@@ -61,7 +61,10 @@ struct CatalogRow: Identifiable {
   let longestLanguage: String
   let longestLength: Int
   let commentText: String
-  /// Display state of every selected non-source language column.
+  /// Display state of every non-source language — always fully filled at
+  /// row materialization, not just the visible columns, so language column
+  /// toggles only re-project `visibleRows`. Views and filters pick the
+  /// languages they care about from this map.
   let cells: [String: LangCell]
   /// True when at least one slot is filled and every filled slot (all
   /// languages, flat + plural forms) is reviewed.
@@ -762,7 +765,9 @@ final class LocalizationStore {
     } else {
       selectedLanguages.append(language)
     }
-    buildRows()
+    // Cells are pre-built for every language — a column toggle only
+    // re-projects the visible set, no row re-derivation.
+    recomputeVisibleRows()
   }
 
   /// Show/hide the Longest column; hiding also drops it from the sort so a
@@ -856,7 +861,6 @@ final class LocalizationStore {
       showLongest = false
       sortOrder = [CatalogSort(.source)]
       selectedLanguages = []
-      buildRows()
       // A different catalog: drop the previous project's run summary.
       run.reset()
     } catch {
@@ -983,52 +987,18 @@ final class LocalizationStore {
   ) -> CatalogRow {
     let translatable = entry.shouldTranslate != false
     let rowHasPlurals = catalog.hasPlurals(for: key)
+    // Cells for EVERY non-source language, selected or not — a language
+    // column toggle only re-projects `visibleRows`, never re-derives rows.
+    // The same per-language pass feeds each LangCell AND the row review
+    // flags (all languages, flat + plural forms).
     var cells: [String: LangCell] = [:]
-    for language in selectedLanguages {
-      let loc = entry.localizations?[language]
-      let plural = catalog.hasPlurals(for: key, language: language)
-      let device = !plural && (loc?.variations?.isEmpty == false)
-      if plural {
-        // Plural cell: the form summary is the display text; per-form live
-        // records drive the spinner, provenance and mid-run values.
-        let forms = pluralRecords(for: key, language: language)
-        let parsed = catalog.pluralUnits(for: key, language: language) != nil
-        cells[language] = LangCell(
-          text: pluralSummary(for: key, language: language),
-          state: pluralAggregateState(for: key, language: language),
-          hasParsed: parsed,
-          hasOverride: false,
-          hasVariations: true,
-          hasPlurals: true,
-          isEditable: translatable,
-          record: nil,
-          pluralRecords: forms)
-        continue
-      }
-      let flatRecord = recordIndex[key]?[language]?[""]
-      cells[language] = LangCell(
-        text: valueOverrides[key]?[language] ?? loc?.stringUnit?.value ?? "",
-        state: loc?.stringUnit?.state,
-        hasParsed: loc?.stringUnit != nil,
-        hasOverride: valueOverrides[key]?[language] != nil,
-        hasVariations: device,
-        hasPlurals: false,
-        isEditable: translatable && !device,
-        record: flatRecord,
-        pluralRecords: [:])
-    }
-    let sourceText = catalog.sourceDisplay(for: key)
-    let (longestText, longestLanguage) = Self.longestValue(
-      catalog: catalog, key: key, sourceText: sourceText,
-      overrides: valueOverrides[key])
-    // Row review flags across ALL languages (not just visible columns), flat
-    // + plural forms. A filled slot counts reviewed when its live record is
-    // .reviewed (or the file says "translated"); needs_review when live
-    // .needs_review (or the file says so). Draft overrides don't count.
     var filled = 0
     var reviewed = 0
     var needsReview = 0
     func tally(record: TranslationRecord?, fileValue: String?, fileState: String?) {
+      // A filled slot counts reviewed when its live record is .reviewed (or
+      // the file says "translated"); needs_review when live .needs_review
+      // (or the file says so). Draft overrides don't count.
       if let record,
          let value = record.value,
          !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -1043,7 +1013,12 @@ final class LocalizationStore {
       }
     }
     for language in catalog.languages where language != catalog.sourceLanguage {
-      if catalog.hasPlurals(for: key, language: language) {
+      let loc = entry.localizations?[language]
+      let plural = catalog.hasPlurals(for: key, language: language)
+      let device = !plural && (loc?.variations?.isEmpty == false)
+      if plural {
+        // Plural slot: tally every form, then one LangCell carrying the form
+        // summary + per-form live records (it opens the plural editor).
         let units = catalog.pluralUnits(for: key, language: language)
         for category in PluralRules.categories(for: language) {
           tally(
@@ -1051,14 +1026,41 @@ final class LocalizationStore {
             fileValue: units?[category]?.value,
             fileState: units?[category]?.state)
         }
+        let forms = pluralRecords(for: key, language: language)
+        cells[language] = LangCell(
+          text: pluralSummary(for: key, language: language),
+          state: pluralAggregateState(for: key, language: language),
+          hasParsed: units != nil,
+          hasOverride: false,
+          hasVariations: true,
+          hasPlurals: true,
+          isEditable: translatable,
+          record: nil,
+          pluralRecords: forms)
         continue
       }
-      let unit = entry.localizations?[language]?.stringUnit
+      // Flat slot: tally + one cell in the same pass.
+      let unit = loc?.stringUnit
+      let flatRecord = recordIndex[key]?[language]?[""]
       tally(
-        record: recordIndex[key]?[language]?[""],
+        record: flatRecord,
         fileValue: unit?.value,
         fileState: unit?.state)
+      cells[language] = LangCell(
+        text: valueOverrides[key]?[language] ?? unit?.value ?? "",
+        state: unit?.state,
+        hasParsed: unit != nil,
+        hasOverride: valueOverrides[key]?[language] != nil,
+        hasVariations: device,
+        hasPlurals: false,
+        isEditable: translatable && !device,
+        record: flatRecord,
+        pluralRecords: [:])
     }
+    let sourceText = catalog.sourceDisplay(for: key)
+    let (longestText, longestLanguage) = Self.longestValue(
+      catalog: catalog, key: key, sourceText: sourceText,
+      overrides: valueOverrides[key])
     return CatalogRow(
       key: key,
       isTranslatable: translatable,
@@ -1134,20 +1136,22 @@ final class LocalizationStore {
     return parts.joined(separator: "\n")
   }
 
-  /// Filter across the visible non-source language columns only: a key
-  /// matches when the chosen state occurs in at least one of them.
+  /// Filter across the VISIBLE non-source language columns only: a key
+  /// matches when the chosen state occurs in at least one SELECTED column.
+  /// `cells` now holds every language, so the match is scoped to
+  /// `selectedLanguages` — a hidden language never drives the filters.
   private func matchesFilter(_ row: CatalogRow) -> Bool {
     switch filter {
     case .all:
       return true
     case .needsReview:
-      return row.cells.values.contains { $0.state == "needs_review" }
+      return selectedLanguages.contains { row.cells[$0]?.state == "needs_review" }
     case .missing:
-      return row.cells.values.contains { $0.isMissing }
+      return selectedLanguages.contains { row.cells[$0]?.isMissing == true }
     case .translated:
-      return row.cells.values.contains { $0.state == "translated" }
+      return selectedLanguages.contains { row.cells[$0]?.state == "translated" }
     case .new:
-      return row.cells.values.contains { $0.state == "new" }
+      return selectedLanguages.contains { row.cells[$0]?.state == "new" }
     }
   }
 
