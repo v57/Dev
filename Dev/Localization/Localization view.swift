@@ -1294,7 +1294,7 @@ private struct ControlsBar: ToolbarContent {
         set: { store.includeNonTranslatable = $0 })) {
           Image(systemName: "eye")
         }
-        .help("Include the \\(store.nonTranslatableCount) keys marked shouldTranslate = false (hidden by default)")
+        .help("Include the \(store.nonTranslatableCount) keys marked shouldTranslate = false (hidden by default)")
         .toggleStyle(ToggleButtonStyle())
 
       Toggle(isOn: Binding(
