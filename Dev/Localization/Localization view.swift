@@ -272,6 +272,23 @@ final class LocalizationStore {
 
   var totalKeyCount: Int { catalog?.strings.count ?? 0 }
 
+  /// Distinct keys with at least one FILLED needs_review record — same
+  /// key-level semantics as the sidebar project badge (a key counts when
+  /// ANY of its language/plural slots needs review). Reads the open
+  /// catalog's reconciled records; 0 when no catalog is open.
+  var needsReviewKeyCount: Int {
+    guard let project else { return 0 }
+    var reviewKeys = Set<String>()
+    for record in project.records {
+      if let value = record.value,
+         !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+         record.state == .needs_review {
+        reviewKeys.insert(record.key)
+      }
+    }
+    return reviewKeys.count
+  }
+
   /// Keys explicitly marked shouldTranslate = false.
   var nonTranslatableCount: Int {
     catalog?.strings.values.filter { $0.shouldTranslate == false }.count ?? 0
@@ -1027,8 +1044,11 @@ extension View {
 
 // MARK: - View
 
+/// Detail tool for the shared projectless LocalizationStore. The store is
+/// owned and injected by ContentView (next to CreateIcon), so the sidebar's
+/// live 'Current (no project)' row and this tool read the SAME open catalog.
 struct LocalizationView: View {
-  @State private var store = LocalizationStore()
+  @Environment(LocalizationStore.self) private var store
 
   var body: some View {
     Group {
@@ -1054,7 +1074,8 @@ struct LocalizationView: View {
   }
 
   private var loadedContent: some View {
-    VStack(spacing: 0) {
+    @Bindable var store = store
+    return VStack(spacing: 0) {
       CatalogTable(store: store)
         .searchable(text: $store.searchText,
                     prompt: "Search keys, comments, translations")
@@ -1748,5 +1769,6 @@ private struct FooterBar: View {
 
 #Preview {
   LocalizationView()
+    .environment(LocalizationStore())
     .frame(width: 1100, height: 600)
 }

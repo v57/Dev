@@ -9,12 +9,15 @@ import SwiftUI
 
 /// Sidebar column of the split view: the 'Projects' section (P20) on top —
 /// one row per imported project, with drag-and-drop directory/catalog
-/// import — plus the projectless tool rows at the bottom.
+/// import — plus the projectless tool mini-status at the bottom.
 ///
-/// The bottom section is the seam card P30 fills with the live 'Current
-/// (no project)' mini-status (app-icon thumbnail + open-catalog summary).
-/// Until P30 lands, the two plain rows below keep the tools reachable and
-/// carry the same `.tool` selection values P30's live rows will use.
+/// The bottom 'Current (no project)' section carries LIVE mini-status rows
+/// (P30): an app-icon thumbnail mirroring the shared CreateIcon
+/// settings/result and the open-catalog key/needs-review summary from the
+/// shared LocalizationStore. Both observables are injected by ContentView at
+/// the split level, so these rows update as the tools edit their state.
+/// Each row is a NavigationLink onto the same `.tool` selection values the
+/// detail pane routes — one source of truth for what is open.
 struct SidebarView: View {
   let model: SidebarViewModel
 
@@ -33,10 +36,11 @@ struct SidebarView: View {
         }
       }
       Section("Current (no project)") {
-        ForEach(SidebarTool.allCases) { tool in
-          NavigationLink(value: SidebarSelection.tool(tool)) {
-            Label(tool.title, systemImage: tool.systemImage)
-          }
+        NavigationLink(value: SidebarSelection.tool(.icon)) {
+          CurrentIconRow()
+        }
+        NavigationLink(value: SidebarSelection.tool(.localization)) {
+          CurrentLocalizationRow()
         }
       }
     }
@@ -133,6 +137,110 @@ private struct ProjectRow: View {
         .foregroundStyle(.secondary)
     } else {
       Text("No catalog")
+        .font(.caption)
+        .foregroundStyle(.tertiary)
+    }
+  }
+}
+
+// MARK: - Current (no project) rows
+
+/// Live mini-status row for the projectless Create Icon tool: a thumbnail
+/// mirroring the CURRENT shared CreateIcon settings/result — the same
+/// observable the tool edits — so it tracks the editor live. Tap opens the
+/// tool via the shared `.tool(.icon)` selection.
+private struct CurrentIconRow: View {
+  @Environment(CreateIcon.self) private var create
+
+  var body: some View {
+    HStack(spacing: 8) {
+      CurrentIconThumbnail()
+        .frame(width: 26, height: 26)
+      VStack(alignment: .leading, spacing: 1) {
+        Text(SidebarTool.icon.title)
+          .lineLimit(1)
+        Text(create.settings.preview ? "Rendered PNG" : "Live preview")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+    }
+    .padding(.vertical, 1)
+  }
+}
+
+/// Mini app-icon thumbnail: mirrors CreateIconView's preview-pane logic —
+/// the quantized result PNG when preview mode is on (and one exists), else
+/// a live settings render. Reads the shared CreateIcon observable; never
+/// re-runs generation.
+private struct CurrentIconThumbnail: View {
+  @Environment(CreateIcon.self) private var create
+
+  var body: some View {
+    Group {
+      if create.settings.preview, let result = create.result {
+        Image(nsImage: result)
+          .resizable()
+          .interpolation(.high)
+          .aspectRatio(contentMode: .fit)
+      } else {
+        liveRender
+      }
+    }
+    .clipShape(RoundedRectangle(cornerRadius: 6.5))
+  }
+
+  /// Tiny live icon: rounded background (flat/gradient) + the SF glyph at
+  /// the same proportional size CreateIconView's preview uses.
+  private var liveRender: some View {
+    GeometryReader { view in
+      ZStack {
+        if create.settings.gradient {
+          LinearGradient(
+            colors: [create.settings.primary, create.settings.secondary],
+            startPoint: .top, endPoint: .bottom)
+        } else {
+          create.settings.primary
+        }
+        Image(systemName: create.settings.symbol)
+          .font(.system(size: view.size.width * 0.5 * create.settings.scale))
+          .foregroundStyle(create.settings.glyph.opacity(0.8))
+      }
+    }
+    .aspectRatio(1, contentMode: .fit)
+  }
+}
+
+/// Live mini-status row for the projectless Localization tool: key /
+/// needs-review summary of the currently-open catalog from the shared
+/// LocalizationStore, or 'No catalog open'. Tap opens the tool via the
+/// shared `.tool(.localization)` selection.
+private struct CurrentLocalizationRow: View {
+  @Environment(LocalizationStore.self) private var localization
+
+  var body: some View {
+    HStack(spacing: 8) {
+      Image(systemName: SidebarTool.localization.systemImage)
+        .font(.system(size: 15))
+        .foregroundStyle(.tertiary)
+        .frame(width: 26, height: 26)
+      VStack(alignment: .leading, spacing: 1) {
+        Text(SidebarTool.localization.title)
+          .lineLimit(1)
+        summary
+      }
+    }
+    .padding(.vertical, 1)
+  }
+
+  @ViewBuilder
+  private var summary: some View {
+    if localization.isLoaded {
+      let needsReview = localization.needsReviewKeyCount
+      Text("\(localization.totalKeyCount) keys, \(needsReview) needs review")
+        .font(.caption)
+        .foregroundStyle(needsReview > 0 ? Color.orange : Color.secondary)
+    } else {
+      Text("No catalog open")
         .font(.caption)
         .foregroundStyle(.tertiary)
     }
