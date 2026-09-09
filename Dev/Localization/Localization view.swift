@@ -63,6 +63,12 @@ struct CatalogRow: Identifiable {
   let commentText: String
   /// Display state of every selected non-source language column.
   let cells: [String: LangCell]
+  /// True when at least one slot is filled and every filled slot (all
+  /// languages, flat + plural forms) is reviewed.
+  let isFullyReviewed: Bool
+  /// True when at least one slot is filled and every filled slot is
+  /// needs_review. Mixed and empty rows report false for both.
+  let isFullyNeedsReview: Bool
   /// Pre-folded haystack for search (empty when search is inactive).
   let searchBlob: String
 
@@ -456,6 +462,38 @@ final class LocalizationStore {
       saveError = error.localizedDescription
       return
     }
+    reconcile(catalog, url: project.catalogURL)
+  }
+
+  /// Row-menu "Don't translate" / "Needs translate": flips the catalog's
+  /// `shouldTranslate` flag for the key, writes the artifact, then syncs
+  /// the DB. Opting OUT deletes the key's records (the pipeline never looks
+  /// at them again — reconcile skips non-translatable keys); opting back IN
+  /// re-seeds records from the file via the normal reconcile, so Translate
+  /// picks the key up on the next run. Non-translatable rows stay visible
+  /// with the nosign glyph (respecting the eye toggle); their AI/plural
+  /// actions stay hidden since they hold no records.
+  func setTranslatable(key: String, _ translatable: Bool) {
+    guard var catalog, let project else { return }
+    guard var entry = catalog.strings[key] else { return }
+    entry.shouldTranslate = translatable ? nil : false
+    catalog.strings[key] = entry
+    if !translatable {
+      let context = TranslationStore.shared.context
+      for record in project.records where record.key == key {
+        context.delete(record)
+      }
+      try? context.save()
+    }
+    do {
+      try catalog.save(to: project.catalogURL)
+      self.catalog = catalog
+      saveError = nil
+    } catch {
+      saveError = error.localizedDescription
+      return
+    }
+    rebuildRecordIndex()
     reconcile(catalog, url: project.catalogURL)
   }
 
@@ -916,6 +954,44 @@ final class LocalizationStore {
     let (longestText, longestLanguage) = Self.longestValue(
       catalog: catalog, key: key, sourceText: sourceText,
       overrides: valueOverrides[key])
+    // Row review flags across ALL languages (not just visible columns), flat
+    // + plural forms. A filled slot counts reviewed when its live record is
+    // .reviewed (or the file says "translated"); needs_review when live
+    // .needs_review (or the file says so). Draft overrides don't count.
+    var filled = 0
+    var reviewed = 0
+    var needsReview = 0
+    func tally(record: TranslationRecord?, fileValue: String?, fileState: String?) {
+      if let record,
+         let value = record.value,
+         !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        filled += 1
+        if record.state == .reviewed { reviewed += 1 }
+        else if record.state == .needs_review { needsReview += 1 }
+      } else if let fileValue,
+                !fileValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        filled += 1
+        if fileState == "translated" { reviewed += 1 }
+        else if fileState == "needs_review" { needsReview += 1 }
+      }
+    }
+    for language in catalog.languages where language != catalog.sourceLanguage {
+      if catalog.hasPlurals(for: key, language: language) {
+        let units = catalog.pluralUnits(for: key, language: language)
+        for category in PluralRules.categories(for: language) {
+          tally(
+            record: recordIndex[key]?[language]?[category],
+            fileValue: units?[category]?.value,
+            fileState: units?[category]?.state)
+        }
+        continue
+      }
+      let unit = entry.localizations?[language]?.stringUnit
+      tally(
+        record: recordIndex[key]?[language]?[""],
+        fileValue: unit?.value,
+        fileState: unit?.state)
+    }
     return CatalogRow(
       key: key,
       isTranslatable: translatable,
@@ -927,6 +1003,8 @@ final class LocalizationStore {
       longestLength: longestText.count,
       commentText: entry.comment ?? "",
       cells: cells,
+      isFullyReviewed: filled > 0 && reviewed == filled,
+      isFullyNeedsReview: filled > 0 && needsReview == filled,
       searchBlob: searching ? folded(searchBlobText(key: key, entry: entry)) : "")
   }
 
@@ -1456,15 +1534,43 @@ private struct CatalogTable: View {
         .disabled(store.run.isRunning)
       }
       Divider()
-      Button {
-        store.setRowState(row.key, .reviewed)
-      } label: {
-        Label("Reviewed", systemImage: "checkmark.circle")
+      // Reviewed shows only when the row is NOT fully reviewed; Needs Review
+      // only when it is NOT fully needs_review. Mixed/half rows offer both,
+      // empty rows offer neither (setRowState skips empty slots anyway).
+      if !row.isFullyReviewed {
+        Button {
+          store.setRowState(row.key, .reviewed)
+        } label: {
+          Label("Reviewed", systemImage: "checkmark.circle")
+        }
       }
+      if !row.isFullyNeedsReview {
+        Button {
+          store.setRowState(row.key, .needs_review)
+        } label: {
+          Label("Needs Review", systemImage: "exclamationmark.circle")
+        }
+      }
+      Divider()
+      if row.isTranslatable {
+        Button {
+          store.setTranslatable(key: row.key, false)
+        } label: {
+          Label("Don't translate", systemImage: "nosign")
+        }
+      } else {
+        Button {
+          store.setTranslatable(key: row.key, true)
+        } label: {
+          Label("Needs translate", systemImage: "translate")
+        }
+      }
+    } else {
+      Divider()
       Button {
-        store.setRowState(row.key, .needs_review)
+        store.setTranslatable(key: row.key, true)
       } label: {
-        Label("Needs Review", systemImage: "exclamationmark.circle")
+        Label("Needs translate", systemImage: "translate")
       }
     }
   }
