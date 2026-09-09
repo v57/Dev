@@ -202,52 +202,38 @@ private struct CatalogTable: View {
     @Bindable var store = store
     Table(store.visibleRows, sortOrder: $store.sortOrder) {
       TableColumn(store.sourceLanguageTitle, sortUsing: CatalogSort(.source)) { row in
-        sourceCell(row)
+        SourceCell(store: store, row: row)
       }
       .width(min: 160, ideal: 300, max: 300)
 
       if store.showLongest {
         TableColumn("Longest", sortUsing: CatalogSort(.longest)) { row in
-          longestCell(row)
+          LongestCell(store: store, row: row)
         }
         .width(min: 140, ideal: 300, max: 300)
       }
 
       TableColumnForEach(store.selectedLanguages, id: \.self) { language in
         TableColumn(language, sortUsing: CatalogSort(.language(language))) { row in
-          languageCell(row, language: language)
+          LanguageCell(store: store, row: row, language: language)
         }
         .width(min: 120, ideal: 240, max: 300)
       }
     }
   }
 
-  // MARK: cells
+}
 
-  private func longestCell(_ row: CatalogRow) -> some View {
-    HStack(spacing: 5) {
-      if !row.isTranslatable {
-        Image(systemName: "nosign")
-          .font(.system(size: 9))
-          .foregroundStyle(.tertiary)
-          .help("Not translatable")
-      }
-      Text(row.longestText)
-        .lineLimit(3)
-        .help(longestTooltip(row))
-    }
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .contextMenu { rowMenu(row) }
-  }
+// MARK: - Row cells
 
-  private func longestTooltip(_ row: CatalogRow) -> String {
-    if row.longestLanguage.isEmpty {
-      return row.longestText
-    }
-    return "\(row.longestLanguage) · \(row.longestLength) chars\n\(row.longestText)"
-  }
+/// Source column cell: the source text with its plural-form summary and,
+/// when opted in, the comment line under it. The row context menu applies
+/// to the whole column area.
+private struct SourceCell: View {
+  let store: LocalizationStore
+  let row: CatalogRow
 
-  private func sourceCell(_ row: CatalogRow) -> some View {
+  var body: some View {
     VStack(alignment: .leading, spacing: 2) {
       Text(row.sourceText)
         .lineLimit(3)
@@ -268,10 +254,49 @@ private struct CatalogTable: View {
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
-    .contextMenu { rowMenu(row) }
+    .contextMenu { RowContextMenu(row: row, store: store) }
+  }
+}
+
+/// Longest column cell: the length-leading text (plus the not-translatable
+/// glyph), with a tooltip naming the language and length.
+private struct LongestCell: View {
+  let store: LocalizationStore
+  let row: CatalogRow
+
+  var body: some View {
+    HStack(spacing: 5) {
+      if !row.isTranslatable {
+        Image(systemName: "nosign")
+          .font(.system(size: 9))
+          .foregroundStyle(.tertiary)
+          .help("Not translatable")
+      }
+      Text(row.longestText)
+        .lineLimit(3)
+        .help(tooltip)
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .contextMenu { RowContextMenu(row: row, store: store) }
   }
 
-  private func languageCell(_ row: CatalogRow, language: String) -> some View {
+  private var tooltip: String {
+    if row.longestLanguage.isEmpty {
+      return row.longestText
+    }
+    return "\(row.longestLanguage) · \(row.longestLength) chars\n\(row.longestText)"
+  }
+}
+
+/// One non-source language column cell: status accessory + editor, or the
+/// read-only device-variations placeholder. Missing rows fall back to an
+/// empty editable cell.
+private struct LanguageCell: View {
+  let store: LocalizationStore
+  let row: CatalogRow
+  let language: String
+
+  var body: some View {
     let cell = row.cells[language] ?? LangCell(
       text: "", state: nil, hasParsed: false, hasOverride: false,
       hasVariations: false, hasPlurals: false,
@@ -306,17 +331,21 @@ private struct CatalogTable: View {
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
-    .contextMenu { rowMenu(row) }
+    .contextMenu { RowContextMenu(row: row, store: store) }
   }
+}
 
-  // MARK: row context menu
+// MARK: - Row context menu
 
-  /// Right-click menu for a row: Translate (single item) / Vary by plural /
-  /// Reviewed / Needs Review. Translate is disabled while a run is active
-  /// and for non-translatable keys; the review/plural actions are hidden for
-  /// them (they hold no records).
-  @ViewBuilder
-  private func rowMenu(_ row: CatalogRow) -> some View {
+/// Right-click menu for a row: Translate (single item) / Vary by plural /
+/// Reviewed / Needs Review. Translate is disabled while a run is active
+/// and for non-translatable keys; the review/plural actions are hidden for
+/// them (they hold no records).
+private struct RowContextMenu: View {
+  let row: CatalogRow
+  let store: LocalizationStore
+
+  var body: some View {
     Button {
       store.translateKey(row.key)
     } label: {
@@ -393,20 +422,7 @@ private struct CatalogTable: View {
       }
     }
   }
-
-  private var editedTint: Color {
-    Color.accentColor.opacity(0.08)
-  }
-
-  // MARK: bindings (store-backed, survive sort/filter)
-
-  private func valueBinding(for key: String, language: String) -> Binding<String> {
-    Binding(
-      get: { store.value(for: key, language: language) },
-      set: { store.setValue($0, for: key, language: language) })
-  }
 }
-
 /// Editable language cell: read-only Text until clicked, then a focused
 /// TextEditor for multiline editing. Keystrokes mutate @State draft only, so
 /// the field is never rebuilt while typing; the store override commits on
