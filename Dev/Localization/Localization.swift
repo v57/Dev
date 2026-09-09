@@ -69,7 +69,7 @@ struct CatalogRow: Identifiable {
   /// True when at least one slot is filled and every filled slot is
   /// needs_review. Mixed and empty rows report false for both.
   let isFullyNeedsReview: Bool
-  /// Pre-folded haystack for search (empty when search is inactive).
+  /// Folded haystack for search, built once at row materialization.
   let searchBlob: String
 
   var id: String { key }
@@ -249,16 +249,37 @@ final class LocalizationStore {
 
   // MARK: view state
 
-  var searchText = ""
-  var filter: RowFilter = .all
-  var includeNonTranslatable = false
+  // Filter/search/sort inputs are computed so every change re-projects
+  // `rows` into `visibleRows`; the backing stores keep @Observable tracking.
+  private var _searchText = ""
+  var searchText: String {
+    get { _searchText }
+    set { _searchText = newValue; recomputeVisibleRows() }
+  }
+
+  private var _filter: RowFilter = .all
+  var filter: RowFilter {
+    get { _filter }
+    set { _filter = newValue; recomputeVisibleRows() }
+  }
+
+  private var _includeNonTranslatable = false
+  var includeNonTranslatable: Bool {
+    get { _includeNonTranslatable }
+    set { _includeNonTranslatable = newValue; recomputeVisibleRows() }
+  }
+
   /// Comments hidden unless the user opts in (off by default).
   var showComments = false
   /// Longest column hidden unless the user opts in (off by default).
   var showLongest = false
   /// Non-source languages with a visible column (source column is permanent).
   private(set) var selectedLanguages: [String] = []
-  var sortOrder: [CatalogSort] = [CatalogSort(.source)]
+  private var _sortOrder: [CatalogSort] = [CatalogSort(.source)]
+  var sortOrder: [CatalogSort] {
+    get { _sortOrder }
+    set { _sortOrder = newValue; recomputeVisibleRows() }
+  }
 
   /// Default language columns on open: none selected (user picks via buttons).
   /// Kept for reference; `open` resets to an empty selection.
@@ -350,6 +371,7 @@ final class LocalizationStore {
       self.catalog = try Reconcile.commit(catalog, project: project)
       rebuildRecordIndex()
       saveError = nil
+      buildRows()
     } catch {
       saveError = error.localizedDescription
     }
@@ -408,7 +430,10 @@ final class LocalizationStore {
             }
           }
           try mutated.save(to: project.catalogURL)
-          await MainActor.run { self.catalog = mutated }
+          await MainActor.run {
+            self.catalog = mutated
+            buildRows()
+          }
         } catch {
           let message = error.localizedDescription
           await MainActor.run {
@@ -507,6 +532,7 @@ final class LocalizationStore {
     do {
       self.catalog = try Reconcile.commit(catalog, project: project)
       saveError = nil
+      buildRows()
     } catch {
       saveError = error.localizedDescription
     }
@@ -628,6 +654,7 @@ final class LocalizationStore {
         try catalog.save(to: project.catalogURL)
         self.catalog = catalog
         saveError = nil
+        buildRows()
       } catch {
         saveError = error.localizedDescription
       }
@@ -652,6 +679,7 @@ final class LocalizationStore {
         try catalog.save(to: project.catalogURL)
         self.catalog = catalog
         saveError = nil
+        buildRows()
       } catch {
         saveError = error.localizedDescription
       }
@@ -666,6 +694,7 @@ final class LocalizationStore {
       let updated = try Reconcile.commit(catalog, project: project)
       self.catalog = updated
       saveError = nil
+      buildRows()
     } catch {
       saveError = error.localizedDescription
     }
@@ -676,6 +705,7 @@ final class LocalizationStore {
     let parsed = catalog?.rawValue(for: key, language: language) ?? ""
     if text == parsed {
       removeOverride(key: key, language: language)
+      buildRows()
       return
     }
     valueOverrides[key, default: [:]][language] = text
@@ -706,6 +736,7 @@ final class LocalizationStore {
       let updated = try Reconcile.commit(catalog, project: project)
       self.catalog = updated
       saveError = nil
+      buildRows()
     } catch {
       saveError = error.localizedDescription
     }
@@ -731,6 +762,7 @@ final class LocalizationStore {
     } else {
       selectedLanguages.append(language)
     }
+    buildRows()
   }
 
   /// Show/hide the Longest column; hiding also drops it from the sort so a
@@ -824,12 +856,15 @@ final class LocalizationStore {
       showLongest = false
       sortOrder = [CatalogSort(.source)]
       selectedLanguages = []
+      buildRows()
       // A different catalog: drop the previous project's run summary.
       run.reset()
     } catch {
       catalog = nil
       catalogURL = nil
       recordIndex = [:]
+      rows = []
+      visibleRows = []
       loadError = error.localizedDescription
     }
   }
@@ -866,6 +901,7 @@ final class LocalizationStore {
     let stats = Reconcile.upsertFromCatalog(catalog, project: project, context: context)
     self.project = project
     rebuildRecordIndex()
+    buildRows()
     NSLog(
       "[Localization] reconciled %@: %d created, %d refreshed, %d kept",
       url.lastPathComponent, stats.created, stats.refreshed, stats.kept)
@@ -888,31 +924,62 @@ final class LocalizationStore {
 
   // MARK: - rows
 
-  /// Rows after include-toggle, filter, search and sort — rebuilt from store
-  /// state, so edits survive any sort/filter toggling.
-  var visibleRows: [CatalogRow] {
-    guard let catalog else { return [] }
+  /// Materialized rows — one CatalogRow per catalog key. Converted from
+  /// `catalog.strings` on load (reconcile) and re-converted after every
+  /// commit/save, so the table never derives rows on render. Cells hold
+  /// live TranslationRecord refs, so mid-run values and spinners still
+  /// update without a rebuild.
+  private(set) var rows: [CatalogRow] = []
+
+  /// What the table shows: `rows` after the include toggle, filter, search
+  /// and sort. Recomputed whenever those inputs change and whenever `rows`
+  /// is rebuilt — never derived per render.
+  private(set) var visibleRows: [CatalogRow] = []
+
+  /// Re-projects `rows` through the current include toggle, filter, search
+  /// and sort. Pure predicates over what the rows already carry — no
+  /// per-row catalog derivation, so per-keystroke search stays cheap.
+  private func recomputeVisibleRows() {
+    guard !rows.isEmpty else {
+      visibleRows = []
+      return
+    }
     let query = folded(searchText)
-    let searching = !query.isEmpty
-    var rows: [CatalogRow] = []
-    rows.reserveCapacity(catalog.strings.count)
-    for (key, entry) in catalog.strings {
-      if !includeNonTranslatable && entry.shouldTranslate == false { continue }
-      let row = makeRow(catalog: catalog, key: key, entry: entry, query: query, searching: searching)
-      if matchesFilter(row) && (!searching || row.searchBlob.contains(query)) {
-        rows.append(row)
-      }
+    var shown: [CatalogRow] = []
+    shown.reserveCapacity(rows.count)
+    for row in rows {
+      if !includeNonTranslatable && !row.isTranslatable { continue }
+      guard matchesFilter(row) else { continue }
+      if !query.isEmpty && !row.searchBlob.contains(query) { continue }
+      shown.append(row)
     }
     let sort = sortOrder.isEmpty ? [CatalogSort(.source)] : sortOrder
-    return rows.sorted(using: sort)
+    visibleRows = shown.sorted(using: sort)
+  }
+
+  /// (Re)builds `rows` from the open catalog — the strings -> rows
+  /// conversion — then re-applies the current filters. Called from
+  /// reconcile (every load) and after every commit/save, so `rows` always
+  /// mirrors the artifact that was just written.
+  private func buildRows() {
+    guard let catalog else {
+      rows = []
+      visibleRows = []
+      return
+    }
+    var built: [CatalogRow] = []
+    built.reserveCapacity(catalog.strings.count)
+    for (key, entry) in catalog.strings {
+      built.append(makeRow(catalog: catalog, key: key, entry: entry))
+    }
+    rows = built
+    recomputeVisibleRows()
   }
 
   private func makeRow(
     catalog: StringCatalog,
     key: String,
-    entry: StringCatalog.Entry,
-    query: String,
-    searching: Bool
+    entry: StringCatalog.Entry
   ) -> CatalogRow {
     let translatable = entry.shouldTranslate != false
     let rowHasPlurals = catalog.hasPlurals(for: key)
@@ -1005,7 +1072,7 @@ final class LocalizationStore {
       cells: cells,
       isFullyReviewed: filled > 0 && reviewed == filled,
       isFullyNeedsReview: filled > 0 && needsReview == filled,
-      searchBlob: searching ? folded(searchBlobText(key: key, entry: entry)) : "")
+      searchBlob: folded(searchBlobText(key: key, entry: entry)))
   }
 
   /// Longest value across the source display text and every language
