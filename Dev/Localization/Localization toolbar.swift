@@ -23,7 +23,7 @@ struct ControlsBar: ToolbarContent {
           .disabled(store.run.isRunning)
       }
       Button {
-        store.reload()
+        Task { await store.reload() }
       } label: {
         Label("Reload", systemImage: "arrow.clockwise")
       }

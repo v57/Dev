@@ -77,7 +77,9 @@ final class PipelineRunContext {
     self.targetLanguages = targetLanguages
     self.force = force
     // Catalog wins over the caller's guess: the file IS the source of truth
-    // for the source language and comments.
+    // for the source language and comments. Drain the UI's coalescing worker
+    // first so this snapshot sees every save that predates the run.
+    CatalogFileIO.flush()
     let catalog = (try? StringCatalog.load(url: project.catalogURL))
     self.catalog = catalog
     self.sourceLanguage = catalog?.sourceLanguage ?? sourceLanguage ?? "en"

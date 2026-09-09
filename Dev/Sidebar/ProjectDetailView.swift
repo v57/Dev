@@ -63,7 +63,7 @@ struct ProjectDetailView: View {
     // re-runs). Already-open catalogs are left untouched so per-catalog
     // view state survives a revisit; a missing file stays closed and the
     // Localization pane shows its 'no catalog' state.
-    .task(id: row.id) { bindProjectCatalog() }
+    .task(id: row.id) { await bindProjectCatalog() }
   }
 
   /// Project identity banner: current icon thumbnail + name + the root the
@@ -125,10 +125,10 @@ struct ProjectDetailView: View {
     }
   }
 
-  private func bindProjectCatalog() {
+  private func bindProjectCatalog() async {
     guard row.catalogExists else { return }
     guard localization.catalogURL != row.catalogURL else { return }
-    localization.open(row.catalogURL)
+    await localization.open(row.catalogURL)
     // The open reconciled new records into the project — rebuild the rows
     // so sidebar badges track what the binding just changed.
     model.refresh()

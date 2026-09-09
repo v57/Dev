@@ -65,7 +65,7 @@ struct LocalizationView: View {
     // projectless flip re-evaluate the guard.
     .task(id: projectCatalogURL) {
       guard projectCatalogURL == nil else { return }
-      store.openDefaultIfPresent()
+      await store.openDefaultIfPresent()
     }
     .alert(store.errorTitle, isPresented: errorBinding) {
       Button("OK") { store.dismissError() }

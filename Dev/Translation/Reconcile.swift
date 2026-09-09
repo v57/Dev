@@ -475,15 +475,15 @@ enum Reconcile {
     return touched
   }
 
-  // MARK: - commit (DB -> file)
+  // MARK: - merge (DB -> in-memory catalog)
 
-  /// Writes the working store back to the artifact: for every DB-OWNED
-  /// record of the project that carries a value, set its (key, language)
-  /// stringUnit — or (plural key, language, category) form — value + state
-  /// on a copy of the parsed catalog, then
-  /// atomically rewrite the file at `project.catalogURL` — but ONLY when at
-  /// least one unit actually changed, so a no-op commit never churns the
-  /// artifact. DB-owned = the record carries provenance (provider or edit
+  /// Merges the working store into a copy of the parsed catalog — the pure,
+  /// in-memory half of the former `commit`. The artifact write itself is
+  /// scheduled by the caller through CatalogFileIO (background, coalesced),
+  /// so no encode/file I/O ever runs on this thread. For every DB-OWNED
+  /// record in scope that carries a value, the (key, language) stringUnit —
+  /// or (plural key, language, category) form — value + state is set on the
+  /// copy. DB-owned = the record carries provenance (provider or edit
   /// history): human edits, machine fills, TM copies. Pure file-origin seed
   /// rows (provider nil, no edits) are passive — their value already
   /// matches the file by construction, and their raw file state (Xcode may
@@ -491,20 +491,21 @@ enum Reconcile {
   /// variation holders and the source language are never touched. Plural
   /// form records write into the variation skeleton (creating CLDR forms as
   /// needed); a flat record never touches a plural slot and vice versa.
-  /// Returns the updated
-  /// catalog (the caller adopts it so the UI stays in sync without a
-  /// reload). Throws on encode/write failure.
   ///
-  /// Pass `keys` to scope the write to specific catalog keys — the
-  /// row-driven saves the UI issues (one edited row = its key) walk only
+  /// Pass `keys` to scope the walk to specific catalog keys — the
+  /// row-driven saves the UI issues (one edited row = its key) merge only
   /// that row's records instead of the whole project. `nil` walks the full
   /// record set (end-of-run flush). Per-record semantics are identical.
+  ///
+  /// Returns the merged catalog (the caller adopts it so the UI stays in
+  /// sync) plus whether any unit actually changed — a no-op merge never
+  /// churns the artifact.
   @discardableResult
-  static func commit(
+  static func merge(
     _ catalog: StringCatalog,
     project: Project,
     keys: Set<String>? = nil
-  ) throws -> StringCatalog {
+  ) -> (catalog: StringCatalog, changed: Bool) {
     var updated = catalog
     var changed = false
     let sourceLanguage = catalog.sourceLanguage
@@ -570,9 +571,6 @@ enum Reconcile {
       changed = true
     }
 
-    guard changed else { return updated }
-
-    try updated.save(to: project.catalogURL)
-    return updated
+    return (updated, changed)
   }
 }

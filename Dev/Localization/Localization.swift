@@ -364,19 +364,21 @@ final class LocalizationStore {
     let summary = await run.execute(project: project, key: key, languages: languages, force: force)
     defer { run.finish(summary) }
     // The pipeline's plural reconcile may have written new variation
-    // skeletons straight to the file: re-read it (not the stale in-memory
-    // copy) so commit sees the skeletons, then adopt + re-index.
+    // skeletons straight to the file (its own threads, already landed):
+    // drain any still-queued UI writes, then re-read the artifact so the
+    // merge below sees the file side, then adopt + re-index.
+    CatalogFileIO.flush()
     if let reloaded = try? StringCatalog.load(url: project.catalogURL) {
       catalog = reloaded
     }
     guard let catalog else { return }
-    do {
-      self.catalog = try Reconcile.commit(catalog, project: project, keys: key.map { [$0] })
-      rebuildRecordIndex()
-      saveError = nil
-      buildRows()
-    } catch {
-      saveError = error.localizedDescription
+    let merged = Reconcile.merge(catalog, project: project, keys: key.map { [$0] })
+    self.catalog = merged.catalog
+    rebuildRecordIndex()
+    saveError = nil
+    buildRows()
+    if merged.changed {
+      scheduleFileWrite(catalog: merged.catalog, url: project.catalogURL)
     }
   }
 
@@ -432,7 +434,7 @@ final class LocalizationStore {
               mutated.setSourcePluralValue(text, key: key, category: category)
             }
           }
-          try mutated.save(to: project.catalogURL)
+          scheduleFileWrite(catalog: mutated, url: project.catalogURL)
           await MainActor.run {
             self.catalog = mutated
             buildRows()
@@ -460,14 +462,9 @@ final class LocalizationStore {
     guard var catalog, let project else { return }
     let languages = ([catalog.sourceLanguage] + selectedLanguages).uniqued()
     catalog.varyByPlural(key: key, languages: languages)
-    do {
-      try catalog.save(to: project.catalogURL)
-      self.catalog = catalog
-      saveError = nil
-    } catch {
-      saveError = error.localizedDescription
-      return
-    }
+    self.catalog = catalog
+    saveError = nil
+    scheduleFileWrite(catalog: catalog, url: project.catalogURL)
     reconcile(catalog, url: project.catalogURL)
   }
 
@@ -482,14 +479,9 @@ final class LocalizationStore {
       context.delete(record)
     }
     try? context.save()
-    do {
-      try catalog.save(to: project.catalogURL)
-      self.catalog = catalog
-      saveError = nil
-    } catch {
-      saveError = error.localizedDescription
-      return
-    }
+    self.catalog = catalog
+    saveError = nil
+    scheduleFileWrite(catalog: catalog, url: project.catalogURL)
     reconcile(catalog, url: project.catalogURL)
   }
 
@@ -513,14 +505,9 @@ final class LocalizationStore {
       }
       try? context.save()
     }
-    do {
-      try catalog.save(to: project.catalogURL)
-      self.catalog = catalog
-      saveError = nil
-    } catch {
-      saveError = error.localizedDescription
-      return
-    }
+    self.catalog = catalog
+    saveError = nil
+    scheduleFileWrite(catalog: catalog, url: project.catalogURL)
     rebuildRecordIndex()
     reconcile(catalog, url: project.catalogURL)
   }
@@ -539,16 +526,18 @@ final class LocalizationStore {
   /// live records, flat + plural forms across every language — back into
   /// the artifact, scoped to that key instead of walking the whole project,
   /// then adopts the updated catalog. Per-slot semantics match
-  /// `Reconcile.commit` (owned records write value+state; empty slots stay
+  /// `Reconcile.merge` (owned records write value+state; empty slots stay
   /// absent; plural and flat slots never cross).
   private func saveRow(_ key: String) {
     guard let catalog, let project else { return }
-    do {
-      self.catalog = try Reconcile.commit(catalog, project: project, keys: [key])
-      saveError = nil
-      buildRows()
-    } catch {
-      saveError = error.localizedDescription
+    // Pure key-scoped merge on this thread (no file I/O), then the write
+    // is handed to the coalescing background worker.
+    let merged = Reconcile.merge(catalog, project: project, keys: [key])
+    self.catalog = merged.catalog
+    saveError = nil
+    buildRows()
+    if merged.changed {
+      scheduleFileWrite(catalog: merged.catalog, url: project.catalogURL)
     }
   }
 
@@ -664,14 +653,10 @@ final class LocalizationStore {
     if language == catalog.sourceLanguage {
       // Source forms are authored text: straight to the file, no records.
       catalog.setSourcePluralValue(text, key: key, category: category)
-      do {
-        try catalog.save(to: project.catalogURL)
-        self.catalog = catalog
-        saveError = nil
-        buildRows()
-      } catch {
-        saveError = error.localizedDescription
-      }
+      self.catalog = catalog
+      saveError = nil
+      buildRows()
+      scheduleFileWrite(catalog: catalog, url: project.catalogURL)
       return
     }
     let context = TranslationStore.shared.context
@@ -689,14 +674,10 @@ final class LocalizationStore {
         record.updatedAt = .now
         try? context.save()
       }
-      do {
-        try catalog.save(to: project.catalogURL)
-        self.catalog = catalog
-        saveError = nil
-        buildRows()
-      } catch {
-        saveError = error.localizedDescription
-      }
+      self.catalog = catalog
+      saveError = nil
+      buildRows()
+      scheduleFileWrite(catalog: catalog, url: project.catalogURL)
       return
     }
     let sourceText = catalog.sourcePluralDisplay(for: key, category: category)
@@ -823,11 +804,11 @@ final class LocalizationStore {
   }
 
   /// Auto-open the repo-root fixture on first appearance, if it exists.
-  func openDefaultIfPresent() {
+  func openDefaultIfPresent() async {
     guard catalog == nil else { return }
     let url = Self.defaultFixtureURL
     guard FileManager.default.fileExists(atPath: url.path) else { return }
-    open(url)
+    await open(url)
   }
 
   func openPanelAndLoad() {
@@ -840,14 +821,39 @@ final class LocalizationStore {
       panel.allowedContentTypes = [type]
     }
     guard panel.runModal() == .OK, let url = panel.url else { return }
-    open(url)
+    // Parse + adopt happen off the main thread inside async `open`; the
+    // panel itself stays on main.
+    Task { await self.open(url) }
   }
 
   /// Full (re)load: parse + reset everything. Used by Open….
   /// No language is selected by default; the user picks via the buttons.
-  func open(_ url: URL) {
+  /// The .xcstrings decode runs off the main thread; the catalog adoption
+  /// (reconcile, rows) happens on the main actor afterwards.
+  func open(_ url: URL) async {
+    let generation = await MainActor.run { () -> Int in
+      self.loadGeneration += 1
+      return self.loadGeneration
+    }
+    CatalogFileIO.flush()
+    let result: Result<StringCatalog, Error>
     do {
-      let catalog = try StringCatalog.load(url: url)
+      result = .success(try StringCatalog.load(url: url))
+    } catch {
+      result = .failure(error)
+    }
+    await MainActor.run {
+      // A newer open/reload supersedes this one — never adopt a stale parse.
+      guard generation == self.loadGeneration else { return }
+      self.finishOpen(result, url: url)
+    }
+  }
+
+  /// Applies a still-current finished parse: success resets view state and
+  /// reconciles; failure clears the open catalog. Main-actor side of `open`.
+  private func finishOpen(_ result: Result<StringCatalog, Error>, url: URL) {
+    switch result {
+    case .success(let catalog):
       apply(catalog, url: url)
       loadError = nil
       // Fresh file: reset view state to defaults.
@@ -860,7 +866,7 @@ final class LocalizationStore {
       selectedLanguages = []
       // A different catalog: drop the previous project's run summary.
       run.reset()
-    } catch {
+    case .failure(let error):
       catalog = nil
       catalogURL = nil
       recordIndex = [:]
@@ -871,14 +877,29 @@ final class LocalizationStore {
   }
 
   /// Re-read the current file and drop overrides; view state is untouched.
-  func reload() {
+  /// Decodes off the main thread like `open`.
+  func reload() async {
     guard let catalogURL else { return }
+    let generation = await MainActor.run { () -> Int in
+      self.loadGeneration += 1
+      return self.loadGeneration
+    }
+    CatalogFileIO.flush()
+    let result: Result<StringCatalog, Error>
     do {
-      let catalog = try StringCatalog.load(url: catalogURL)
-      apply(catalog, url: catalogURL)
-      loadError = nil
+      result = .success(try StringCatalog.load(url: catalogURL))
     } catch {
-      loadError = error.localizedDescription
+      result = .failure(error)
+    }
+    await MainActor.run {
+      guard generation == self.loadGeneration else { return }
+      switch result {
+      case .success(let catalog):
+        apply(catalog, url: catalogURL)
+        loadError = nil
+      case .failure(let error):
+        loadError = error.localizedDescription
+      }
     }
   }
 
@@ -921,6 +942,22 @@ final class LocalizationStore {
       index[record.key, default: [:]][record.language, default: [:]][record.category ?? ""] = record
     }
     recordIndex = index
+  }
+
+  // MARK: - background file I/O
+
+  /// Bumped by every open/reload; a finished parse whose generation no
+  /// longer matches the latest request is discarded, so rapid open/reload
+  /// never stacks or applies stale state over newer work.
+  private var loadGeneration = 0
+
+  /// Hands a catalog to the coalescing file-I/O worker (CatalogFileIO); a
+  /// failed write surfaces as `saveError` on the main thread, where the
+  /// alert lives.
+  private func scheduleFileWrite(catalog: StringCatalog, url: URL) {
+    CatalogFileIO.schedule(catalog, to: url) { [weak self] message in
+      self?.saveError = message
+    }
   }
 
   // MARK: - rows
@@ -1173,4 +1210,52 @@ final class LocalizationStore {
 /// Case- and diacritic-insensitive folding used by search.
 func folded(_ string: String) -> String {
   string.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+}
+
+// MARK: - Background catalog file I/O
+
+/// Serial worker for all .xcstrings file I/O behind the UI. Saves are
+/// coalesced latest-wins: a request arriving while another write is queued
+/// or in flight REPLACES the queued payload, so a burst of edits yields at
+/// most one extra write — always of the newest state — and saves never
+/// accumulate. `flush()` lets a reader block until previously requested
+/// writes have landed (open/reload and the pipeline's file re-reads).
+enum CatalogFileIO {
+  private static let queue = DispatchQueue(
+    label: "dev.v57.dev.catalog-fileio", qos: .userInitiated)
+  /// Newest payload awaiting its write; touched only on `queue`.
+  private static var queued: (url: URL, catalog: StringCatalog)?
+  private static var loopActive = false
+
+  /// Persist `catalog` to `url` on the worker queue (latest-wins). A
+  /// failure is reported through `onFailure` on the main thread.
+  static func schedule(
+    _ catalog: StringCatalog,
+    to url: URL,
+    onFailure: ((String) -> Void)? = nil
+  ) {
+    queue.async {
+      queued = (url, catalog)
+      guard !loopActive else { return }
+      loopActive = true
+      while let next = queued {
+        queued = nil
+        do {
+          try next.catalog.save(to: next.url)
+        } catch {
+          let message = error.localizedDescription
+          if let onFailure {
+            DispatchQueue.main.async { onFailure(message) }
+          }
+        }
+      }
+      loopActive = false
+    }
+  }
+
+  /// Blocks the caller until every previously-scheduled write has landed.
+  /// Never call from `queue` itself.
+  static func flush() {
+    queue.sync {}
+  }
 }

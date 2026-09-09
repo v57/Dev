@@ -134,6 +134,9 @@ final class TranslateRunController {
   /// whose SOURCE is plural-varied gain forms; single-key runs with no
   /// columns selected (empty set) create nothing.
   private func ensurePluralForms(project: Project, key: String?, languages: Set<String>?) {
+    // The UI's coalescing worker may still hold the latest save — drain it
+    // so this file read observes every prior write.
+    CatalogFileIO.flush()
     guard var catalog = try? StringCatalog.load(url: project.catalogURL) else { return }
     let context = TranslationStore.shared.context
     let keys: [String]
@@ -180,7 +183,7 @@ final class TranslateRunController {
       try? context.save()
     }
     if touchedFile {
-      try? catalog.save(to: project.catalogURL)
+      CatalogFileIO.schedule(catalog, to: project.catalogURL)
     }
   }
 
