@@ -117,6 +117,12 @@ struct TranslateRunStatus: View {
         Text("· \(progress.failed) failed")
           .foregroundStyle(.orange)
       }
+      // Which model is answering right now (free tier or paid fallback).
+      Text("· \(TranslationRouter.shared.currentModel)")
+        .foregroundStyle(TranslationRouter.shared.isUsingPaidModel ? Color.secondary : Color.green)
+        .lineLimit(1)
+        .help("Routing: \(TranslationRouter.shared.currentProvider)"
+          + (TranslationRouter.shared.isUsingPaidModel ? " (paid fallback)" : " (free tier)"))
       Button("Cancel") {
         controller.cancel()
       }
@@ -137,6 +143,10 @@ struct TranslateRunStatus: View {
       Text("Last run — \(summaryLine(summary))")
         .foregroundStyle(.secondary)
         .lineLimit(1)
+      Text("· \(TranslationRouter.shared.currentModel)")
+        .foregroundStyle(TranslationRouter.shared.isUsingPaidModel ? Color.secondary : Color.green)
+        .lineLimit(1)
+        .help("Last model used: \(TranslationRouter.shared.currentProvider)")
     }
     .help(failureHelp(summary))
   }

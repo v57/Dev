@@ -2,30 +2,39 @@
 //  CommandCodeTranslator.swift
 //  Dev
 //
-//  Created by Dmitry on 08.09.26.
-//
 
 import Foundation
 
 // MARK: - CommandCodeTranslator
 
-/// Command Code's hosted LLM API (api.commandcode.ai, `api_mode =
-/// chat_completions` — a standard OpenAI-style POST /chat/completions,
-/// live-verified: the answer arrives in `choices[0].message.content`).
-/// Model: deepseek/deepseek-v4-flash.
+/// The Command Code client for the PAID destination model (Muse), used for
+/// everything that must always run on the strongest model:
+///
+///  - the router's paid fallback when every free tier is exhausted,
+///  - the Stage-0 learn fold (`Stage0ModelClient`),
+///  - plural source-form authoring (`PluralGenerator`).
+///
+/// The translation path itself goes through `TranslationRouter`, which picks
+/// a free tier first and lands here last. Wire format is shared with every
+/// other provider via `OpenAIChatClient` (OpenAI-compatible
+/// `POST /provider/v1/chat/completions`).
 ///
 /// The API key comes from `CommandCodeKeychain` (login keychain →
-/// COMMANDCODE_API_KEY environment variable → ~/.hermes/.env). Without a
-/// key the backend is not eligible, and `translate` throws
+/// COMMANDCODE_API_KEY environment variable → ~/.hermes/.env). Without a key
+/// the backend is not eligible, and `translate` throws
 /// `BackendError.notConfigured` — it never crashes.
 nonisolated struct CommandCodeTranslator: TranslatorBackend {
-  static let endpoint = URL(string: "https://api.commandcode.ai/provider/v1/chat/completions")!
-  static let model = "deepseek/deepseek-v4-flash"
-  /// Per-request budget; hosted deepseek can take a while on long strings.
+  /// Root for the OpenAI-compatible Command Code provider API.
+  static let baseURL = URL(string: "https://api.commandcode.ai/provider/v1")!
+  static let endpoint = baseURL.appendingPathComponent("chat/completions")
+  /// The paid destination model. `RoutedModel.muse` names the same model for
+  /// the router; keep the two in step.
+  static let model = RoutedModel.muse.model
+  /// Per-request budget; hosted frontier models can take a while on long strings.
   static let requestTimeout: TimeInterval = 180
 
   var id: BackendID { .commandcode }
-  var displayName: String { id.displayName }
+  var displayName: String { "Command Code" }
 
   func isEligible(from: String, to: String) async -> Bool {
     CommandCodeKeychain.apiKey() != nil
@@ -46,96 +55,16 @@ nonisolated struct CommandCodeTranslator: TranslatorBackend {
           + "the environment, or ~/.hermes/.env."
       )
     }
-
     let prompt = ContextPromptBuilder.assemble(
       sourceText: text,
       sourceLanguage: from,
       targetLanguage: to,
-      context: context
-    )
-    let body: Data
-    do {
-      body = try JSONEncoder().encode(
-        CompletionsRequest(
-          model: Self.model,
-          messages: [
-            CompletionsRequest.Message(role: "system", content: prompt.system),
-            CompletionsRequest.Message(role: "user", content: prompt.user),
-          ]
-        )
-      )
-    } catch {
-      throw BackendError.network("could not encode request: \(error.localizedDescription)")
-    }
-
-    var request = URLRequest(url: Self.endpoint)
-    request.httpMethod = "POST"
-    request.timeoutInterval = Self.requestTimeout
-    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-    request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-    request.httpBody = body
-
-    let data: Data
-    let response: URLResponse
-    do {
-      (data, response) = try await URLSession.shared.data(for: request)
-    } catch {
-      throw BackendError.network(error.localizedDescription)
-    }
-    guard let http = response as? HTTPURLResponse else {
-      throw BackendError.network("no HTTP response from Command Code")
-    }
-    guard (200..<300).contains(http.statusCode) else {
-      throw BackendError.badStatus(http.statusCode, BackendError.bodyExcerpt(data))
-    }
-
-    let decoded: CompletionsResponse
-    do {
-      decoded = try JSONDecoder().decode(CompletionsResponse.self, from: data)
-    } catch {
-      throw BackendError.decoding(BackendError.bodyExcerpt(data) ?? "invalid JSON")
-    }
-    if let apiError = decoded.error?.message, !apiError.isEmpty {
-      throw BackendError.badStatus(http.statusCode, apiError)
-    }
-    guard
-      let content = decoded.choices?.first?.message?.content,
-      !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    else {
-      throw BackendError.emptyResult("Command Code (\(Self.model))")
-    }
-    return content.trimmingCharacters(in: .whitespacesAndNewlines)
-  }
-
-  // MARK: - wire shapes
-
-  private struct CompletionsRequest: Encodable {
-    var model: String
-    var messages: [Message]
-    /// Low but non-zero: Stage 3 reviews survivors, so a little variety is
-    /// useful while still staying close to a single best translation.
-    var temperature: Double = 0.2
-
-    struct Message: Encodable {
-      var role: String
-      var content: String
-    }
-  }
-
-  private struct CompletionsResponse: Decodable {
-    struct Choice: Decodable {
-      struct Message: Decodable {
-        var content: String?
-      }
-
-      var message: Message?
-    }
-
-    struct APIError: Decodable {
-      var message: String?
-    }
-
-    var choices: [Choice]?
-    var error: APIError?
+      context: context)
+    let client = OpenAIChatClient(
+      endpoint: Self.endpoint,
+      apiKey: apiKey,
+      model: Self.model,
+      timeout: Self.requestTimeout)
+    return try await client.complete(system: prompt.system, user: prompt.user)
   }
 }

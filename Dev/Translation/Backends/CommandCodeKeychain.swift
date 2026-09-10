@@ -32,34 +32,10 @@ nonisolated enum CommandCodeKeychain {
 
   /// Returns the key, or nil when it is not configured anywhere.
   static func apiKey() -> String? {
-    if let fromKeychain = readFromKeychain() {
-      return fromKeychain
-    }
-    if let fromEnvironment = ProcessInfo.processInfo.environment[envName],
-       !fromEnvironment.isEmpty {
-      return fromEnvironment
-    }
-    return readFromDotEnv()
+    ProviderSecrets.value(named: envName, service: service)
   }
 
   // MARK: - keychain
-
-  private static func readFromKeychain() -> String? {
-    let query: [String: Any] = [
-      kSecClass as String: kSecClassGenericPassword,
-      kSecAttrService as String: service,
-      kSecAttrAccount as String: account,
-      kSecReturnData as String: true,
-      kSecMatchLimit as String: kSecMatchLimitOne,
-    ]
-    var item: CFTypeRef?
-    let status = SecItemCopyMatching(query as CFDictionary, &item)
-    guard status == errSecSuccess, let data = item as? Data else {
-      return nil
-    }
-    let value = String(data: data, encoding: .utf8)
-    return value?.isEmpty == false ? value : nil
-  }
 
   /// Upserts the key into the login keychain (used by the settings UI once
   /// it lands; keeping the write convention next to the read).
@@ -98,35 +74,5 @@ nonisolated enum CommandCodeKeychain {
     ]
     let status = SecItemDelete(query as CFDictionary)
     return status == errSecSuccess || status == errSecItemNotFound
-  }
-
-  // MARK: - .env fallback
-
-  /// Parses `KEY=value` lines from ~/.hermes/.env. Tolerates blank lines,
-  /// `#` comments, an optional `export ` prefix, and surrounding quotes.
-  private static func readFromDotEnv() -> String? {
-    guard let contents = try? String(contentsOf: dotEnvURL, encoding: .utf8) else {
-      return nil
-    }
-    for rawLine in contents.split(separator: "\n", omittingEmptySubsequences: true) {
-      var line = rawLine.trimmingCharacters(in: .whitespaces)
-      guard !line.isEmpty, !line.hasPrefix("#") else { continue }
-      if line.hasPrefix("export ") {
-        line = String(line.dropFirst("export ".count))
-      }
-      guard let equals = line.firstIndex(of: "=") else { continue }
-      let name = line[..<equals].trimmingCharacters(in: .whitespaces)
-      guard name == envName else { continue }
-      var value = String(line[line.index(after: equals)...])
-        .trimmingCharacters(in: .whitespaces)
-      let isQuoted =
-        (value.hasPrefix("\"") && value.hasSuffix("\""))
-        || (value.hasPrefix("'") && value.hasSuffix("'"))
-      if isQuoted, value.count >= 2 {
-        value = String(value.dropFirst().dropLast())
-      }
-      return value.isEmpty ? nil : value
-    }
-    return nil
   }
 }

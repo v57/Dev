@@ -576,7 +576,9 @@ struct TranslationPipeline {
     progress: TranslateRunProgress?
   ) async -> StageOutcome {
     var outcome = StageOutcome()
-    let backend = CommandCodeTranslator()
+    // The router owns provider choice: free tiers first, Muse as the paid
+    // fallback. Prompt assembly and the write path are unchanged.
+    let backend = TranslationRouter.shared
     let work = env.allRecords
       .filter {
         env.isTarget($0)
@@ -587,10 +589,10 @@ struct TranslationPipeline {
       .map { (record: $0, context: env.translationContext(for: $0)) }
     guard let probe = work.first else { return outcome }
 
-    // Command Code eligibility is key presence, not a language pair, so a
-    // single probe covers the whole worklist — no per-language loop needed.
+    // Eligibility is "at least one provider key exists" — not a language
+    // pair — so a single probe covers the whole worklist.
     guard await backend.isEligible(from: env.sourceLanguage, to: probe.record.language) else {
-      outcome.failures.append("Translate (Command Code): not configured — nothing translated")
+      outcome.failures.append("Translate: no model available — configure a provider key")
       return outcome
     }
 

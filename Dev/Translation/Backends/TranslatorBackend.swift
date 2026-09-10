@@ -45,6 +45,10 @@ nonisolated enum BackendError: LocalizedError {
   case network(String)
   /// Non-2xx HTTP response, with a short body excerpt when available.
   case badStatus(Int, String?)
+  /// Quota/rate refusal (HTTP 429/402), with an optional `Retry-After`.
+  /// Distinct from `badStatus` so the router can cool the candidate down
+  /// instead of treating it as a transient failure.
+  case rateLimited(Int, String?, TimeInterval?)
   /// Response body did not match the documented shape.
   case decoding(String)
   /// 2xx, but the model produced no usable text.
@@ -61,11 +65,48 @@ nonisolated enum BackendError: LocalizedError {
         return "HTTP \(code): \(excerpt)"
       }
       return "HTTP \(code)"
+    case .rateLimited(let code, let excerpt, let retryAfter):
+      var text = "HTTP \(code)"
+      if let excerpt {
+        text += ": \(excerpt)"
+      }
+      if let retryAfter {
+        text += " (retry in \(Int(retryAfter))s)"
+      }
+      return text
     case .decoding(let detail):
       return "Unexpected response: \(detail)"
     case .emptyResult(let backend):
       return "\(backend) returned an empty translation"
     }
+  }
+
+  /// True when the account or model is out of quota/rate budget, so retrying
+  /// this candidate immediately is pointless.
+  nonisolated var isQuotaExhausted: Bool {
+    switch self {
+    case .notConfigured:
+      return true
+    case .rateLimited:
+      return true
+    case .badStatus(let code, let body):
+      if code == 429 || code == 402 {
+        return true
+      }
+      let text = (body ?? "").lowercased()
+      return text.contains("quota") || text.contains("rate limit")
+        || text.contains("free usage") || text.contains("insufficient")
+    case .network, .decoding, .emptyResult:
+      return false
+    }
+  }
+
+  /// Provider-supplied cooldown, when it sent one.
+  nonisolated var suggestedCooldown: TimeInterval? {
+    if case .rateLimited(_, _, let retryAfter) = self {
+      return retryAfter
+    }
+    return nil
   }
 
   /// First ~300 characters of a response body for error messages.
