@@ -43,9 +43,13 @@ struct SidebarView: View {
       ProjectlessBar(model: model)
     }
     .dropDestination(for: URL.self) { urls, _ in
-      let firstID = model.importDroppedURLs(urls)
-      if let firstID {
-        model.selection = .project(firstID)
+      // Import searches a dropped directory for its catalog, so it is async.
+      // Return true immediately — the drop is accepted — and let the row and
+      // its selection land when the walk finishes.
+      Task {
+        if let firstID = await model.importDroppedURLs(urls) {
+          model.selection = .project(firstID)
+        }
       }
       return true
     } isTargeted: {

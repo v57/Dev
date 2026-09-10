@@ -188,33 +188,64 @@ final class SidebarViewModel {
   ///    Localization tool) is adopted in place and upgraded to a
   ///    directory-root project — its catalogURL keeps pointing at the real
   ///    file, so records/context survive and re-drops never duplicate.
-  /// Runs on the main actor but does NO tree scanning — the resolver is
-  /// metadata-only (standardized URLs + existence checks), so dropping a
-  /// huge directory cannot freeze the UI. Any future step that parses the
-  /// dropped catalog must move off the main actor.
+  ///
+  /// `async` because a dropped directory is now SEARCHED for its catalog
+  /// rather than assumed to hold one at its root (`CatalogDiscovery`). That
+  /// walk is unbounded in the size of the tree, so it runs OFF the main
+  /// actor; only the metadata work — dedupe, creation, save, refresh —
+  /// happens here. Dropping a huge directory therefore still cannot freeze
+  /// the UI. A directory that names its catalog at the root short-circuits to
+  /// a single existence check inside the walk, so the common case stays as
+  /// cheap as it was.
   @discardableResult
-  func importDroppedURLs(_ urls: [URL]) -> PersistentIdentifier? {
+  func importDroppedURLs(_ urls: [URL]) async -> PersistentIdentifier? {
     guard !urls.isEmpty else { return nil }
-    let context = TranslationStore.shared.context
     let fm = FileManager.default
-    var firstID: PersistentIdentifier?
-    var handledAny = false
+
+    // Classify first: cheap, metadata-only, and it preserves the input ORDER
+    // so "the first dropped item wins the selection" is unchanged.
+    enum DroppedItem {
+      case directory(URL)
+      case catalog(URL)
+    }
+    var dropped: [DroppedItem] = []
     for url in urls {
       let fileURL = url.standardizedFileURL
       var isDirectory: ObjCBool = false
       guard fm.fileExists(atPath: fileURL.path, isDirectory: &isDirectory) else { continue }
-      let project: Project
       if isDirectory.boolValue {
-        project = Reconcile.resolveDirectoryProject(rootDir: fileURL, in: context)
+        dropped.append(.directory(fileURL))
       } else if fileURL.pathExtension.lowercased() == "xcstrings" {
+        dropped.append(.catalog(fileURL))
+      }
+      // Anything else is neither a folder nor a catalog: ignore the drop.
+    }
+    guard !dropped.isEmpty else { return nil }
+
+    // The tree walk — off the main actor, because a drop can point at an
+    // arbitrarily large tree.
+    let roots = dropped.compactMap { item -> URL? in
+      if case .directory(let root) = item { return root }
+      return nil
+    }
+    let discovered = await Task.detached(priority: .userInitiated) {
+      roots.map { ($0, CatalogDiscovery.catalog(inRoot: $0)) }
+    }.value
+    let catalogByRoot = Dictionary(discovered, uniquingKeysWith: { first, _ in first })
+
+    let context = TranslationStore.shared.context
+    var firstID: PersistentIdentifier?
+    for item in dropped {
+      let project: Project
+      switch item {
+      case .directory(let root):
+        project = Reconcile.resolveDirectoryProject(
+          rootDir: root, catalogURL: catalogByRoot[root] ?? nil, in: context)
+      case .catalog(let fileURL):
         project = resolveCatalogFileDrop(fileURL, in: context)
-      } else {
-        continue  // not a folder or catalog: ignore the drop
       }
       if firstID == nil { firstID = project.persistentModelID }
-      handledAny = true
     }
-    guard handledAny else { return nil }
     do {
       try context.save()
     } catch {
