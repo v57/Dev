@@ -101,10 +101,11 @@ enum Reconcile {
 
   /// Resolves the project a DROPPED DIRECTORY imports as: name = the
   /// folder's last path component, rootURL = the standardized folder URL,
-  /// catalogURL = <root>/Localizable.xcstrings and iconURL = <root>/
-  /// Assets.xcassets/AppIcon.appiconset — resolved whether or not those
-  /// files exist yet (a folder with neither still becomes a project; 'no
-  /// catalog' / placeholder icon are display-time derivations).
+  /// catalogURL = `catalogURL` when the caller discovered one deeper in the
+  /// tree (see `CatalogDiscovery`), else <root>/Localizable.xcstrings — and
+  /// iconURL = <root>/Assets.xcassets/AppIcon.appiconset. Resolved whether or
+  /// not those files exist yet (a folder with neither still becomes a
+  /// project; 'no catalog' / placeholder icon are display-time derivations).
   ///
   /// Finds-or-creates so re-dropping the same folder never duplicates:
   /// matched by rootURL first (an earlier directory drop), then by the
@@ -115,10 +116,12 @@ enum Reconcile {
   /// URL alone.
   static func resolveDirectoryProject(
     rootDir: URL,
+    catalogURL discoveredCatalog: URL? = nil,
     in context: ModelContext
   ) -> Project {
     let root = rootDir.standardizedFileURL
-    let catalogURL = root.appendingPathComponent("Localizable.xcstrings")
+    let catalogURL = discoveredCatalog?.standardizedFileURL
+      ?? root.appendingPathComponent(CatalogDiscovery.canonicalName)
     let iconURL = root
       .appendingPathComponent("Assets.xcassets", isDirectory: true)
       .appendingPathComponent("AppIcon.appiconset", isDirectory: true)
