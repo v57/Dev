@@ -72,6 +72,13 @@ struct LocalizationView: View {
     } message: {
       Text(store.errorMessage ?? "")
     }
+    // Single-row diagnostic overlay (row menu "Inspect Row…").
+    .sheet(isPresented: Binding(
+      get: { store.inspectedKey != nil },
+      set: { if !$0 { store.closeInspector() } }
+    )) {
+      RowInspectorView(store: store)
+    }
   }
 
   private var errorBinding: Binding<Bool> {
@@ -351,6 +358,16 @@ private struct RowContextMenu: View {
   let store: LocalizationStore
 
   var body: some View {
+    Button {
+      store.inspect(row.key)
+    } label: {
+      Label("Inspect Row…", systemImage: "magnifyingglass.circle")
+    }
+    .disabled(store.run.isRunning || store.isInspecting)
+    .help("Run one row end to end and show which model was used and what was learned")
+
+    Divider()
+
     Button {
       store.translateKey(row.key)
     } label: {

@@ -42,4 +42,24 @@ nonisolated struct TranslationContext: Sendable {
   /// fill: the model sees every source form, not just the one being
   /// translated.
   var sourcePluralForms: [String: String] = [:]
+
+  /// One-line description of what context this request carries — used by the
+  /// row inspector to show what the model actually saw.
+  var traceSummary: String {
+    var parts: [String] = []
+    if let global = globalContext, !global.isEmpty {
+      parts.append("global \(global.count) chars")
+    }
+    if let project = projectContext, !project.isEmpty {
+      parts.append("project \(project.count) chars")
+    }
+    if let language = languageContext, !language.isEmpty {
+      parts.append("language \(language.count) chars")
+    }
+    if let key, !key.isEmpty { parts.append("key") }
+    if let comment, !comment.isEmpty { parts.append("comment \(comment.count) chars") }
+    if let category = pluralCategory, !category.isEmpty { parts.append("plural \(category)") }
+    if !neighbors.isEmpty { parts.append("\(neighbors.count) neighbor(s)") }
+    return parts.isEmpty ? "source text only" : parts.joined(separator: ", ")
+  }
 }

@@ -61,7 +61,8 @@ struct TranslationPipeline {
     key: String? = nil,
     languages: Set<String>? = nil,
     force: Bool = false,
-    progress: TranslateRunProgress? = nil
+    progress: TranslateRunProgress? = nil,
+    trace: TranslationTrace? = nil
   ) async -> PipelineRunSummary {
     await run(
       project: project,
@@ -70,7 +71,8 @@ struct TranslationPipeline {
       key: key,
       languages: languages,
       force: force,
-      progress: progress
+      progress: progress,
+      trace: trace
     )
   }
 
@@ -85,7 +87,8 @@ struct TranslationPipeline {
     key: String? = nil,
     languages: Set<String>? = nil,
     force: Bool = false,
-    progress: TranslateRunProgress? = nil
+    progress: TranslateRunProgress? = nil,
+    trace: TranslationTrace? = nil
   ) async -> PipelineRunSummary {
     var summary = PipelineRunSummary()
     let env = PipelineRunContext(
@@ -133,7 +136,8 @@ struct TranslationPipeline {
       let tm = tmResolve(
         env: env,
         sourceLanguage: env.sourceLanguage,
-        progress: progress
+        progress: progress,
+        trace: trace
       )
       summary.tmResolvedGold += tm.gold
       summary.tmResolvedHints += tm.hints
@@ -151,7 +155,8 @@ struct TranslationPipeline {
       db = await importedDBResolve(
         env: env,
         excluded: excludedByTM,
-        progress: progress
+        progress: progress,
+        trace: trace
       )
       summary.dbFilled += db.filled
       summary.dbUpgraded += db.upgraded
@@ -167,7 +172,8 @@ struct TranslationPipeline {
       translated = await runTranslateStage(
         env: env,
         excluded: excludedByTM,
-        progress: progress
+        progress: progress,
+        trace: trace
       )
       summary.translatedFilled += translated.filled
       summary.translatedRewritten += translated.corrected
@@ -235,7 +241,8 @@ struct TranslationPipeline {
   private static func tmResolve(
     env: PipelineRunContext,
     sourceLanguage: String,
-    progress: TranslateRunProgress?
+    progress: TranslateRunProgress?,
+    trace: TranslationTrace? = nil
   ) -> TMResolveOutcome {
     var outcome = TMResolveOutcome()
     let candidates = env.allRecords.filter { env.isTarget($0) && needsTarget($0, env: env) }
@@ -260,10 +267,20 @@ struct TranslationPipeline {
       case .resolvedGold:
         outcome.gold += 1
         outcome.excluded.insert(record.persistentModelID)
+        trace?.add(TranslationTrace.Step(
+          kind: .memory,
+          title: "TM gold hit — \(displayKey(record))",
+          input: "reviewed (sourceText, \(record.language)) entry",
+          output: "copied as reviewed; excluded from the AI stage"))
         progress?.tick(key: displayKey(record))
       case .resolvedHint:
         outcome.hints += 1
         outcome.excluded.insert(record.persistentModelID)
+        trace?.add(TranslationTrace.Step(
+          kind: .memory,
+          title: "TM machine hint — \(displayKey(record))",
+          input: "machine-only (sourceText, \(record.language)) entry",
+          output: "copied as needs_review; excluded from the AI stage"))
         progress?.tick(key: displayKey(record))
       }
     }
@@ -295,7 +312,8 @@ struct TranslationPipeline {
   private static func importedDBResolve(
     env: PipelineRunContext,
     excluded: Set<PersistentIdentifier>,
-    progress: TranslateRunProgress?
+    progress: TranslateRunProgress?,
+    trace: TranslationTrace? = nil
   ) async -> DBResolveOutcome {
     var outcome = DBResolveOutcome()
     let db = ImportedTranslationDB.shared
@@ -341,6 +359,11 @@ struct TranslationPipeline {
         case .filled: outcome.filled += 1
         case .upgraded: outcome.upgraded += 1
         }
+        trace?.add(TranslationTrace.Step(
+          kind: .memory,
+          title: "Imported DB hit — \(displayKey(record))",
+          input: "shipped human translation from \(hit.app.isEmpty ? "the DB" : hit.app)",
+          output: "written as reviewed + auto-reviewed"))
         progress?.tick(key: displayKey(record))
       } catch {
         let message = error.localizedDescription
@@ -528,10 +551,14 @@ struct TranslationPipeline {
   private static func runTranslateStage(
     env: PipelineRunContext,
     excluded: Set<PersistentIdentifier>,
-    progress: TranslateRunProgress?
+    progress: TranslateRunProgress?,
+    trace: TranslationTrace? = nil
   ) async -> StageOutcome {
     var outcome = StageOutcome()
     let router = TranslationRouter.shared
+    // Attach the diagnostic sink for the duration of this stage only.
+    router.trace = trace
+    defer { router.trace = nil }
     // `allRecords` is sorted (language, key, category), so this worklist is
     // already language-major and a batch never straddles two languages.
     let work = env.allRecords
@@ -566,7 +593,7 @@ struct TranslationPipeline {
       }
       await translateLanguageBatch(
         slice, language: language, env: env, router: router,
-        progress: progress, outcome: &outcome)
+        progress: progress, outcome: &outcome, trace: trace)
       // Checkpoint per batch: a crash mid-run loses at most one batch.
       try? env.context.save()
     }
@@ -580,7 +607,8 @@ struct TranslationPipeline {
     env: PipelineRunContext,
     router: TranslationRouter,
     progress: TranslateRunProgress?,
-    outcome: inout StageOutcome
+    outcome: inout StageOutcome,
+    trace: TranslationTrace? = nil
   ) async {
     guard !slice.isEmpty else { return }
     let items = slice.enumerated().map { offset, item in
@@ -652,6 +680,11 @@ struct TranslationPipeline {
         reason: "Translate (\(entry.editor)): differs from previous machine value") {
         outcome.corrected += 1
       }
+      trace?.add(TranslationTrace.Step(
+        kind: .write,
+        title: "Wrote \(displayKey(item.record))",
+        model: entry.editor,
+        output: entry.value))
       progress?.tick(key: displayKey(item.record))
     }
 

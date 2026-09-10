@@ -78,6 +78,12 @@ final class TranslationRouter: TranslatorBackend {
   /// Requests refused for quota reasons.
   private(set) var quotaRefusals = 0
 
+  // MARK: diagnostics
+
+  /// When set, every routing decision and model call is recorded here for the
+  /// row inspector. Nil during normal runs, so they pay nothing for it.
+  var trace: TranslationTrace?
+
   // MARK: pacing
 
   /// Provider → instants of recent requests, for the per-minute budget.
@@ -147,12 +153,30 @@ final class TranslationRouter: TranslatorBackend {
           candidate, apiKey: key, system: prompt.system, user: prompt.user,
           maxTokens: nil, jsonObject: false)
         record(reply, candidate: candidate)
-        return validate(reply.content, items: items, candidate: candidate)
+        let outcome = validate(reply.content, items: items, candidate: candidate)
+        trace?.add(TranslationTrace.Step(
+          kind: .translate,
+          title: "Batch of \(items.count) into \(to)",
+          model: candidate.name,
+          provider: candidate.provider.displayName,
+          isPaid: !candidate.isFree,
+          input: items.first?.context?.traceSummary ?? "source text only",
+          output: "\(outcome.values.count) accepted, \(outcome.failedIDs.count) rejected",
+          isFailure: outcome.values.isEmpty))
+        return outcome
       } catch {
         // Any escape from the error taxonomy still must not abort the run.
         let backendError = (error as? BackendError) ?? .network(error.localizedDescription)
         lastFailure = backendError
         cool(candidate, error: backendError)
+        trace?.add(TranslationTrace.Step(
+          kind: .skip,
+          title: "\(candidate.name) unavailable",
+          model: candidate.name,
+          provider: candidate.provider.displayName,
+          isPaid: !candidate.isFree,
+          output: backendError.localizedDescription,
+          isFailure: true))
         continue
       }
     }
@@ -237,9 +261,29 @@ final class TranslationRouter: TranslatorBackend {
         muse, apiKey: key, system: system,
         user: "ITEMS (JSON)\n" + payload, maxTokens: nil, jsonObject: false)
       record(reply, candidate: muse)
-      return Self.parseGate(reply.content)
+      let fixes = Self.parseGate(reply.content)
+      trace?.add(TranslationTrace.Step(
+        kind: .gate,
+        title: "Verified \(items.count) candidate(s)",
+        model: muse.name,
+        provider: muse.provider.displayName,
+        isPaid: true,
+        input: "candidate translations + source + comments",
+        output: fixes.isEmpty
+          ? "all accepted unchanged"
+          : "\(fixes.count) correction(s)",
+        isFailure: false))
+      return fixes
     } catch let error as BackendError {
       cool(muse, error: error)
+      trace?.add(TranslationTrace.Step(
+        kind: .gate,
+        title: "Gate unavailable — candidates kept as-is",
+        model: muse.name,
+        provider: muse.provider.displayName,
+        isPaid: true,
+        output: error.localizedDescription,
+        isFailure: true))
       return [:]
     } catch {
       return [:]
@@ -301,6 +345,14 @@ final class TranslationRouter: TranslatorBackend {
           candidate, apiKey: key, system: prompt.system, user: prompt.user,
           maxTokens: nil, jsonObject: false)
         record(reply, candidate: candidate)
+        trace?.add(TranslationTrace.Step(
+          kind: .translate,
+          title: "Translated one string into \(to)",
+          model: candidate.name,
+          provider: candidate.provider.displayName,
+          isPaid: !candidate.isFree,
+          input: context?.traceSummary ?? "source text only",
+          output: reply.content))
         return reply.content
       } catch let error as BackendError {
         lastFailure = error

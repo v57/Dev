@@ -360,6 +360,117 @@ final class LocalizationStore {
     Task { await performTranslate(project: project, key: key, languages: languages, force: true) }
   }
 
+  // MARK: - row inspection (diagnostics)
+
+  /// The key whose inspector overlay is open, or nil.
+  var inspectedKey: String?
+  /// Trace of the current (or last) inspection.
+  let trace = TranslationTrace()
+  /// True while an inspection is running.
+  private(set) var isInspecting = false
+
+  /// Opens the inspector for `key` and runs the appropriate test: a full
+  /// pipeline run for a row with no reviewed slot, or just the learning fold
+  /// for a reviewed one.
+  func inspect(_ key: String) {
+    guard !run.isRunning, !isInspecting else { return }
+    inspectedKey = key
+    Task { await runInspection(key) }
+  }
+
+  func closeInspector() {
+    inspectedKey = nil
+  }
+
+  private func runInspection(_ key: String) async {
+    guard let project else { return }
+    let records = project.records.filter { $0.key == key }
+    // Reviewed slots are tested for what the pipeline LEARNS from them;
+    // everything still open is tested by translating it. A row can be both.
+    let reviewed = records
+      .filter { $0.state == .reviewed }
+      .sorted { ($0.language, $0.category ?? "") < ($1.language, $1.category ?? "") }
+    let runnable = records
+      .filter { $0.state != .reviewed && $0.provider != .manual }
+      .sorted { ($0.language, $0.category ?? "") < ($1.language, $1.category ?? "") }
+
+    let mode: TranslationTrace.Mode
+    switch (reviewed.isEmpty, runnable.isEmpty) {
+    case (false, false): mode = .mixed
+    case (false, true): mode = .learning
+    case (true, _): mode = .fullRun
+    }
+
+    trace.begin(key: key, mode: mode)
+    isInspecting = true
+    defer {
+      isInspecting = false
+      trace.finish()
+    }
+
+    switch mode {
+    case .fullRun:
+      trace.note("No reviewed slot on this row — running the full pipeline for the key.")
+      await inspectFullRun(key: key, project: project, languages: languages(of: runnable))
+    case .learning:
+      trace.note("\(reviewed.count) reviewed slot(s) — folding the human edits into the context docs instead of translating.")
+      await inspectLearning(project: project, records: reviewed)
+    case .mixed:
+      trace.note("\(reviewed.count) reviewed slot(s) to learn, \(runnable.count) slot(s) to translate — doing both.")
+      await inspectLearning(project: project, records: reviewed)
+      await inspectFullRun(key: key, project: project, languages: languages(of: runnable))
+    }
+  }
+
+  /// Languages of the slots a full run should touch, or nil when unknown.
+  private func languages(of records: [TranslationRecord]) -> Set<String>? {
+    let languages = Set(records.map(\.language))
+    return languages.isEmpty ? nil : languages
+  }
+
+  /// Untranslated / needs-review row: run the whole pipeline for this one key.
+  private func inspectFullRun(key: String, project: Project, languages: Set<String>?) async {
+    // `languages` nil means "every target language of the key".
+    let summary = await TranslationPipeline.run(
+      project: project,
+      key: key,
+      languages: languages,
+      force: true,
+      trace: trace)
+    trace.note("Run finished: \(summary.recordsTouched) record(s) touched, \(summary.failures.count) failure(s)")
+
+    // Fold the writes back into the catalog/table exactly like a normal run.
+    CatalogFileIO.flush()
+    if let reloaded = try? StringCatalog.load(url: project.catalogURL) {
+      catalog = reloaded
+    }
+    if let catalog {
+      let merged = Reconcile.merge(catalog, project: project, keys: [key])
+      self.catalog = merged.catalog
+      rebuildRecordIndex()
+      buildRows()
+      if merged.changed {
+        scheduleFileWrite(catalog: merged.catalog, url: project.catalogURL)
+      }
+    }
+  }
+
+  /// Reviewed row: fold each reviewed slot's confirmed edit and show the
+  /// ContextDoc before/after. Writes context docs only — never catalog values.
+  private func inspectLearning(project: Project, records: [TranslationRecord]) async {
+    let env = PipelineRunContext(
+      context: TranslationStore.shared.context,
+      project: project,
+      targetKey: nil,
+      targetLanguages: nil,
+      force: false)
+    for record in records {
+      _ = await Stage0Learner.learnOne(env: env, record: record, trace: trace)
+    }
+    rebuildRecordIndex()
+    buildRows()
+  }
+
   private func performTranslate(project: Project, key: String? = nil, languages: Set<String>? = nil, force: Bool = false) async {
     let summary = await run.execute(project: project, key: key, languages: languages, force: force)
     defer { run.finish(summary) }

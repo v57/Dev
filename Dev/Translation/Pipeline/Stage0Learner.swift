@@ -301,6 +301,95 @@ struct Stage0Learner {
 
   // MARK: - one fold
 
+  /// Folds ONE record's pending confirmed edit — the row inspector's learning
+  /// mode. Unlike `learn`, it never touches other keys, so a diagnostic run
+  /// cannot rewrite the rest of the project's context docs.
+  ///
+  /// Records a single trace step carrying the ContextDoc BEFORE and AFTER, so
+  /// the inspector can show exactly what the model learned and where.
+  static func learnOne(
+    env: PipelineRunContext,
+    record: TranslationRecord,
+    trace: TranslationTrace?
+  ) async -> Outcome {
+    var outcome = Outcome()
+    let lessonKey = record.category.map { "\(record.key)#\($0)" } ?? record.key
+    let language = record.language
+
+    // Same "pending" rule as `learn`: the newest user-confirmed edit whose
+    // value is still the record's current value.
+    let edit = record.edits
+      .filter(\.isUserConfirmed)
+      .sorted { $0.createdAt < $1.createdAt }
+      .last { record.value == $0.toValue }
+
+    guard let edit else {
+      trace?.add(TranslationTrace.Step(
+        kind: .learn,
+        title: "Nothing to learn for \(language).\(lessonKey)",
+        model: nil,
+        output: record.state == .reviewed
+          ? "The row is reviewed but carries no still-current confirmed edit, so there is no lesson to fold."
+          : "The row is not reviewed, so there is no confirmed edit to fold.",
+        isFailure: false))
+      return outcome
+    }
+
+    let before = env.languageDoc(for: language)?.content
+    let memoryBefore = TranslationMemory.entry(
+      in: env.context,
+      sourceText: record.sourceText,
+      sourceLanguage: env.sourceLanguage,
+      targetLanguage: language)
+
+    await fold((edit, record), env: env, outcome: &outcome)
+
+    let after = env.languageDoc(for: language)?.content
+    let docChanged = (before ?? "") != (after ?? "")
+    let result = outcome.failures.last
+      ?? (docChanged
+          ? "ContextDoc rewritten — version bumped, audit written"
+          : "No change — the doc already covered this lesson (TM gold refreshed)")
+
+    trace?.add(TranslationTrace.Step(
+      kind: .learn,
+      title: "Fold \(language).\(lessonKey)",
+      model: RoutedModel.muse.name,
+      provider: RoutedModel.muse.provider.displayName,
+      isPaid: true,
+      input: lessonInput(edit: edit, record: record, memory: memoryBefore, lessonKey: lessonKey),
+      output: result,
+      before: before,
+      after: after,
+      isFailure: !outcome.failures.isEmpty))
+    try? env.context.save()
+    return outcome
+  }
+
+  /// The lesson handed to the model, in the inspector's words.
+  private static func lessonInput(
+    edit: TranslationEdit,
+    record: TranslationRecord,
+    memory: TranslationMemoryEntry?,
+    lessonKey: String
+  ) -> String {
+    var lines = [
+      "document: language/\(record.language)",
+      "key: \(lessonKey)",
+      "source: \(record.sourceText)",
+      "approved value: \(edit.toValue)",
+    ]
+    if let previous = edit.fromValue, !previous.isEmpty {
+      lines.append("previous value: \(previous)")
+    }
+    if let memory {
+      lines.append("TM before: \(memory.state.rawValue) — \(memory.value)")
+    } else {
+      lines.append("TM before: no entry")
+    }
+    return lines.joined(separator: "\n")
+  }
+
   private static func fold(
     _ item: (edit: TranslationEdit, record: TranslationRecord),
     env: PipelineRunContext,
