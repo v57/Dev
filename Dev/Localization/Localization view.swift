@@ -79,6 +79,13 @@ struct LocalizationView: View {
     )) {
       RowInspectorView(store: store)
     }
+    // Scan Strings report (toolbar "Scan Strings").
+    .sheet(isPresented: Binding(
+      get: { store.scan.isPresented },
+      set: { if !$0 { store.scan.dismiss() } }
+    )) {
+      ScanStringsView(store: store)
+    }
   }
 
   private var errorBinding: Binding<Bool> {

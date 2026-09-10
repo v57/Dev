@@ -336,8 +336,59 @@ final class LocalizationStore {
   /// in-flight state and the last-run summary. One instance per store.
   let run = TranslateRunController()
 
+  /// Drives Scan Strings — live progress, cancel, the finished report and
+  /// the merge it proposes. One instance per store, so the toolbar button
+  /// and the report sheet share it.
+  let scan = ScanController()
+
+  /// True when the Scan Strings button may start a scan: a project-bound
+  /// catalog is open, its project has a root to scan and no other run is in
+  /// flight.
+  var canScan: Bool {
+    isLoaded && project != nil && scanRoot != nil && !run.isRunning && !scan.isRunning
+  }
+
+  /// The folder Scan Strings scans: the project's own root when the project
+  /// was imported as a directory; otherwise the catalog's parent, climbing
+  /// toward the repo root while no folder looks like a repo (a catalog can
+  /// live deep inside the tree, e.g. Resources/Localization).
+  var scanRoot: URL? {
+    let start = project?.rootURL ?? catalogURL?.deletingLastPathComponent()
+    guard let start else { return nil }
+    if ScanEngine.looksLikeRepoRoot(start) { return start }
+    var candidate: URL? = start
+    for _ in 0..<4 {
+      guard let current = candidate, current.pathComponents.count > 1 else { break }
+      if ScanEngine.looksLikeRepoRoot(current) { return current }
+      candidate = current.deletingLastPathComponent()
+    }
+    return start
+  }
+
+  /// Toolbar "Scan Strings": scans the project's Swift packages AND its
+  /// Xcode targets, then previews the merge into this catalog.
+  func startScan() {
+    scan.begin(store: self, root: scanRoot)
+  }
+
+  /// Report sheet "Merge": applies the preview to the catalog (additive
+  /// only), writes the file and re-reconciles so the new keys become rows.
+  func applyScan() {
+    scan.apply()
+  }
+
+  /// Adopts a scan merge as a durable catalog change: the merged document
+  /// replaces the open one, is written to the same file and reconciled — the
+  /// scan adds keys only, so no existing translation can be touched.
+  func adoptScanMerge(_ catalog: StringCatalog, url: URL) {
+    self.catalog = catalog
+    saveError = nil
+    scheduleFileWrite(catalog: catalog, url: url)
+    reconcile(catalog, url: url)
+  }
+
   /// True when the Translate button may start a run.
-  var canTranslate: Bool { isLoaded && project != nil && !run.isRunning }
+  var canTranslate: Bool { isLoaded && project != nil && !run.isRunning && !scan.isRunning }
 
   /// Kicks the pipeline off from the Translate button (async Task; re-entry
   /// is guarded by `begin`). When the run returns, the DB is flushed back
@@ -1089,6 +1140,11 @@ final class LocalizationStore {
     self.project = project
     rebuildRecordIndex()
     buildRows()
+    // The scan's merge preview is a diff against the catalog — keep it
+    // current while its sheet is open.
+    if scan.isPresented {
+      scan.refreshPlan()
+    }
     NSLog(
       "[Localization] reconciled %@: %d created, %d refreshed, %d kept",
       url.lastPathComponent, stats.created, stats.refreshed, stats.kept)

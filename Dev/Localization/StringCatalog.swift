@@ -27,7 +27,9 @@ enum StringCatalogError: LocalizedError {
 
 /// Lossless Codable mirror of an .xcstrings file. One type for the whole
 /// format, so a future schema change is a single-file fix.
-struct StringCatalog: Codable {
+/// `nonisolated`: pure value type with no shared state — the scan engine
+/// merges into it off the main actor.
+nonisolated struct StringCatalog: Codable {
   /// BCP-47 language code the keys are authored in ("en" for this fixture).
   var sourceLanguage: String
   /// Format version ("1.1"). Optional: version 1.0 catalogs omit it.
@@ -52,6 +54,18 @@ struct StringCatalog: Codable {
     /// Plural/device variations, keyed by variation type ("plural", "device")
     /// and then by rule/trait ("one", "other", "iphone", …). Tolerated
     /// losslessly; Phase A never edits them.
+    var variations: [String: [String: VariationUnit]]?
+    /// Multi-argument format-string substitutions (`"%#@a@"` + a per-argument
+    /// spec), keyed by argument name. Tolerated losslessly — an edit through
+    /// a flat cell leaves them in place, and dropping them would silently
+    /// destroy a real catalog's argument plurals.
+    var substitutions: [String: Substitution]?
+  }
+
+  /// One `substitutions` argument: the format specifier plus its own
+  /// variation tree (e.g. `plural` per CLDR category).
+  struct Substitution: Codable {
+    var formatSpecifier: String?
     var variations: [String: [String: VariationUnit]]?
   }
 

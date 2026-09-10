@@ -1,5 +1,12 @@
 # xcstrings-merge
 
+> Superseded in the app: the Dev app now ships this engine in-process
+> (`Dev/Localization/Scan/` — ScanEngine/ScanExtractor/ScanPackageFinder/…),
+> runs it from the Localization toolbar's "Scan Strings" button, previews the
+> merge and writes the catalog through the app's own writer. This standalone
+> executable stays as the command-line verifier (its playgra numbers are the
+> baseline the in-app engine is checked against).
+
 Standalone SwiftPM executable that scans a repo tree for Swift packages,
 extracts every localizable key from their sources using the Swift toolchain,
 and merges the keys into one `.xcstrings` String Catalog — **without ever

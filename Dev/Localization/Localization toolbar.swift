@@ -26,6 +26,13 @@ struct ControlsBar: ToolbarContent {
           .disabled(store.run.isRunning)
       }
       Button {
+        store.startScan()
+      } label: {
+        Label("Scan Strings", systemImage: "text.magnifyingglass")
+      }
+      .disabled(!store.canScan)
+      .help("Scan the project's Swift packages and Xcode targets for localizable strings, then merge the new keys into this catalog (existing translations are never touched)")
+      Button {
         Task { await store.reload() }
       } label: {
         Label("Reload", systemImage: "arrow.clockwise")
