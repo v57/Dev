@@ -139,10 +139,16 @@ final class ImportedTranslationDB {
       throw SQLiteError.notADatabase(
         "Not a translation database — missing the 'translations' table")
     }
+    // Read the `name` column BY KEY. SQLiteRowData keeps cells in an
+    // UNORDERED dictionary, so scanning `.values` for the first string could
+    // return the column's TYPE ("TEXT") instead of its name depending on the
+    // process's hash seed — the check then rejected a valid file on roughly
+    // half of all launches (and on restore after relaunch), so the remembered
+    // import looked lost. Key lookup is deterministic.
     let columns = try await connection.select(sql: "PRAGMA table_info(translations)")
-    let names = Set(columns.compactMap { row in
-      for value in row.values.values { if case .string(let s) = value { return s } }
-      return nil
+    let names = Set(columns.compactMap { row -> String? in
+      guard case .string(let name)? = row["name"] else { return nil }
+      return name
     })
     guard names.isSuperset(of: ["language", "source", "target", "app"]) else {
       throw SQLiteError.notADatabase(
