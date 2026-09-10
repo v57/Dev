@@ -27,8 +27,8 @@ extension View {
 // MARK: - View
 
 /// Detail tool over the shared LocalizationStore (owned + injected by
-/// ContentView, so the sidebar's live 'Current (no project)' row and this
-/// tool read the SAME open catalog).
+/// ContentView, so the sidebar's projectless bottom-bar row and this tool
+/// read the SAME open catalog).
 ///
 /// Two modes:
 ///  - PROJECTLESS (projectCatalogURL == nil): arbitrary open — the app's

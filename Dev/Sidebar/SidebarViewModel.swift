@@ -11,10 +11,11 @@ import SwiftData
 
 // MARK: - Sidebar destinations
 
-/// The two standalone tools. A `.tool` destination is PROJECTLESS mode —
-/// the app's original behavior (arbitrary export target / arbitrary open
-/// catalog). The bottom 'Current (no project)' section surfaces these.
-enum SidebarTool: String, Hashable, CaseIterable, Identifiable {
+/// The app's two tools. They are the SAME tool whether opened projectless
+/// (bottom sidebar bar) or bound to a selected project (toolbar picker);
+/// only the target differs. The single toolbar picker and the projectless
+/// bottom bar both speak this enum.
+enum DevTool: String, Hashable, CaseIterable, Identifiable {
   case icon
   case localization
 
@@ -22,7 +23,7 @@ enum SidebarTool: String, Hashable, CaseIterable, Identifiable {
 
   var title: String {
     switch self {
-    case .icon: return "Create Icon"
+    case .icon: return "App Icon"
     case .localization: return "Localization"
     }
   }
@@ -36,11 +37,11 @@ enum SidebarTool: String, Hashable, CaseIterable, Identifiable {
 }
 
 /// What the sidebar selection points at. THE single source of truth for
-/// 'which project is selected' — the bottom 'Current (no project)' section
-/// (P30) and the project-bound tools (P40) read and write exactly this.
+/// 'which project is selected' — the projectless bottom bar and the
+/// project-bound tools read and write exactly this.
 enum SidebarSelection: Hashable {
-  /// A projectless ad-hoc tool (bottom section).
-  case tool(SidebarTool)
+  /// A projectless ad-hoc tool (bottom sidebar bar).
+  case tool(DevTool)
   /// A directory/catalog project from the Projects section.
   case project(PersistentIdentifier)
 }
@@ -76,11 +77,29 @@ final class SidebarViewModel {
 
   /// The one sidebar selection. nil = neither project nor tool selected
   /// (the launch state — the toolbar tool picker is deselected by default).
-  var selection: SidebarSelection? = nil
+  var selection: SidebarSelection? = nil {
+    didSet {
+      guard selection != oldValue else { return }
+      // Opening a project always starts with NO tool chosen: the toolbar
+      // picker is deselected by default and the pane prompts for a pick.
+      if case .project = selection { projectTool = nil }
+    }
+  }
+
+  /// The tool shown for the SELECTED project, or nil while none is chosen.
+  /// Drives the single toolbar picker (which only exists for a project).
+  var projectTool: DevTool?
+
+  /// True while a project is the selection — the toolbar picker is visible
+  /// only then (projectless tools live in the sidebar's bottom bar).
+  var hasSelectedProject: Bool {
+    if case .project = selection { return true }
+    return false
+  }
 
   /// The projectless tool currently open, or nil when none is selected
-  /// (or a project is). Drives the toolbar tool picker.
-  var currentTool: SidebarTool? {
+  /// (or a project is). Drives the bottom bar's highlighted row.
+  var currentTool: DevTool? {
     get {
       if case .tool(let tool) = selection { return tool }
       return nil

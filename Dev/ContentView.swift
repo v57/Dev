@@ -1,19 +1,24 @@
 import SwiftUI
 
 /// Thin host for the project-centric split view: owns the ONE sidebar view
-/// model (single source of truth for project/tool selection — the bottom
-/// 'Current (no project)' section and the project-bound tools read it) and
-/// the two shared tool observables (CreateIcon settings + the
-/// LocalizationStore's open catalog), then routes the detail pane from the
-/// sidebar selection. Both are injected at the split level so the sidebar's
-/// live 'Current (no project)' mini-status rows and the tools themselves
-/// read the SAME instances.
+/// model (single source of truth for project/tool selection — the sidebar's
+/// projectless bottom bar and the project-bound tools read it) and the two
+/// shared tool observables (CreateIcon settings + the LocalizationStore's
+/// open catalog), then routes the detail pane from the sidebar selection.
+/// Both are injected at the split level so the sidebar's live projectless
+/// mini-status rows and the tools themselves read the SAME instances.
+///
+/// There is exactly ONE tool picker — the toolbar one — and it is
+/// PROJECT-BOUND: it appears only while a project is the selection, starts
+/// deselected, and picks which tool fills the pane for that project.
+/// Projectless tools are reached from the sidebar's bottom bar instead.
 struct ContentView: View {
   @State private var model = SidebarViewModel()
   @State private var createIcon = CreateIcon()
   @State private var localizationStore = LocalizationStore()
 
   var body: some View {
+    @Bindable var model = model
     NavigationSplitView {
       SidebarView(model: model)
     } detail: {
@@ -22,20 +27,23 @@ struct ContentView: View {
     .environment(createIcon)
     .environment(localizationStore)
     // Restore the remembered imported translation DB (path only — no open,
-    // no scan) so the toolbar control and the pipeline know it is active.
+    // no scan) so the pipeline knows it is active.
     .task {
       ImportedTranslationDB.shared.restoreIfNeeded()
     }
     .toolbar {
-      ToolbarItemGroup(placement: .primaryAction) {
-        Picker("Tool", selection: Binding<SidebarTool?>(
-          get: { model.currentTool },
-          set: { model.currentTool = $0 })) {
-          Text("App Icon").tag(SidebarTool.icon as SidebarTool?)
-          Text("Localization").tag(SidebarTool.localization as SidebarTool?)
+      // The one tool picker: project-bound, so it is absent until a project
+      // is opened, and deselected (nil) by default.
+      if model.hasSelectedProject {
+        ToolbarItemGroup(placement: .primaryAction) {
+          Picker("Tool", selection: $model.projectTool) {
+            ForEach(DevTool.allCases) { tool in
+              Text(tool.title).tag(tool as DevTool?)
+            }
+          }
+          .pickerStyle(.segmented)
+          .help("Open a tool for the selected project")
         }
-        .pickerStyle(.segmented)
-        .help("Open the Create Icon or Localization tool (projectless)")
       }
     }
   }
@@ -54,7 +62,7 @@ struct ContentView: View {
         ContentUnavailableView("Project not found", systemImage: "folder.badge.questionmark")
       }
     case nil:
-      ContentUnavailableView("Select a tool or a project", systemImage: "square.grid.2x2")
+      ContentUnavailableView("Select a project", systemImage: "sidebar.left")
     }
   }
 }
