@@ -435,7 +435,7 @@ final class LocalizationStore {
     self.catalog = catalog
     saveError = nil
     markDirty()
-    reconcile(catalog, url: url)
+    mirrorOpenCatalog(catalog, url: url)
   }
 
   /// True when the Translate button may start a run.
@@ -695,7 +695,7 @@ final class LocalizationStore {
     self.catalog = catalog
     saveError = nil
     markDirty()
-    reconcile(catalog, url: project.catalogURL)
+    mirrorOpenCatalog(catalog, url: project.catalogURL)
   }
 
   /// Row-menu "Remove plural variations": collapses every plural slot of the
@@ -712,7 +712,7 @@ final class LocalizationStore {
     self.catalog = catalog
     saveError = nil
     markDirty()
-    reconcile(catalog, url: project.catalogURL)
+    mirrorOpenCatalog(catalog, url: project.catalogURL)
   }
 
   /// Row-menu "Don't translate" / "Needs translate": flips the catalog's
@@ -739,7 +739,7 @@ final class LocalizationStore {
     saveError = nil
     markDirty()
     rebuildRecordIndex()
-    reconcile(catalog, url: project.catalogURL)
+    mirrorOpenCatalog(catalog, url: project.catalogURL)
   }
 
   /// Marks a whole row (key) `reviewed` / `needs_review` across every filled
@@ -1232,31 +1232,34 @@ final class LocalizationStore {
 
   /// Full (re)load: parse + reset everything. Used by Open….
   /// No language is selected by default; the user picks via the buttons.
-  /// The .xcstrings decode runs off the main thread; the catalog adoption
-  /// (reconcile, rows) happens on the main actor afterwards.
+  /// Both halves run off the main actor — the decode, then the catalog's
+  /// mirror into SwiftData — and the store is opened in ONE main-actor step
+  /// afterwards, so the pane never shows a half-opened catalog (see
+  /// `mirrorCatalog`).
   private func performOpen(_ url: URL) async {
-    let generation = await MainActor.run { () -> Int in
-      self.loadGeneration += 1
-      return self.loadGeneration
-    }
+    loadGeneration += 1
+    let generation = loadGeneration
     CatalogFileIO.flush()
     // Off the main actor: a real detached decode, not the no-op
     // `MainActor.run` hop this used to be (see `loadOffMainActor`).
     let result = await StringCatalog.loadOffMainActor(url)
-    await MainActor.run {
-      // A newer open/reload supersedes this one — never adopt a stale parse.
-      guard generation == self.loadGeneration else { return }
-      self.finishOpen(result, url: url)
-    }
+    // A newer open/reload supersedes this one — never adopt a stale parse.
+    guard generation == loadGeneration else { return }
+    await finishOpen(result, url: url, generation: generation)
   }
 
   /// Applies a still-current finished parse: success resets view state and
   /// reconciles; failure clears the open catalog. Main-actor side of `open`.
-  private func finishOpen(_ result: Result<StringCatalog, Error>, url: URL) {
+  private func finishOpen(
+    _ result: Result<StringCatalog, Error>, url: URL, generation: Int
+  ) async {
     switch result {
     case .success(let catalog):
-      apply(catalog, url: url)
-      loadError = nil
+      let project = await mirrorCatalog(catalog, url: url)
+      // The mirror is seconds long on a large catalog: a newer open/reload may
+      // have started and finished in the meantime, so re-check before this one
+      // takes over the store.
+      guard generation == loadGeneration else { return }
       // Fresh file: reset view state to defaults.
       searchText = ""
       filter = .all
@@ -1267,6 +1270,7 @@ final class LocalizationStore {
       selectedLanguages = []
       // A different catalog: drop the previous project's run summary.
       run.reset()
+      adopt(catalog, project: project, url: url)
     case .failure(let error):
       catalog = nil
       catalogURL = nil
@@ -1323,26 +1327,28 @@ final class LocalizationStore {
 
   /// Unguarded half of `reload`: re-reads the file and drops the overrides.
   private func performReload() async {
-    guard let catalogURL else { return }
-    let generation = await MainActor.run { () -> Int in
-      self.loadGeneration += 1
-      return self.loadGeneration
-    }
+    guard let url = catalogURL else { return }
+    loadGeneration += 1
+    let generation = loadGeneration
     CatalogFileIO.flush()
-    let result = await StringCatalog.loadOffMainActor(catalogURL)
-    await MainActor.run {
-      guard generation == self.loadGeneration else { return }
-      switch result {
-      case .success(let catalog):
-        apply(catalog, url: catalogURL)
-        loadError = nil
-      case .failure(let error):
-        loadError = error.localizedDescription
-      }
+    let result = await StringCatalog.loadOffMainActor(url)
+    guard generation == loadGeneration else { return }
+    switch result {
+    case .success(let catalog):
+      let project = await mirrorCatalog(catalog, url: url)
+      guard generation == loadGeneration else { return }
+      // View state is deliberately untouched by a reload.
+      adopt(catalog, project: project, url: url)
+    case .failure(let error):
+      loadError = error.localizedDescription
     }
   }
 
-  private func apply(_ catalog: StringCatalog, url: URL) {
+  /// Opens a catalog that has already been mirrored into the DB: the document,
+  /// the project row the mirror wrote and the rows derived from both. The ONE
+  /// place the store's open state changes, so `catalog`, `catalogURL` and
+  /// `project` are never published half-set.
+  private func adopt(_ catalog: StringCatalog, project: Project?, url: URL) {
     self.catalog = catalog
     catalogURL = url
     valueOverrides = [:]
@@ -1351,19 +1357,50 @@ final class LocalizationStore {
     isDirty = false
     pendingLeave = nil
     isUnsavedPromptPresented = false
-    reconcile(catalog, url: url)
+    loadError = nil
+    self.project = project
+    if let project {
+      // ONE query for the records the mirror just wrote: this context is cold,
+      // so the relationship would fault per row (4.2 s for 48k) and this fetch
+      // is what makes the table's cells live (0.6 s).
+      rebuildRecordIndex(from: Reconcile.records(of: project, in: TranslationStore.shared.context))
+    } else {
+      rebuildRecordIndex(from: [])
+    }
+    buildRows()
+    // The scan's merge preview is a diff against the catalog — keep it
+    // current while its sheet is open.
+    if scan.isPresented {
+      scan.refreshPlan()
+    }
   }
 
-  /// Upsert the parsed catalog into SwiftData: find-or-create the project
-  /// for this file and mirror every (key, language) slot into
-  /// TranslationRecords. DB-owned provenance survives the reload; only
-  /// unowned empty slots adopt what the file now says. Browsing never
-  /// depends on the DB — if reconcile fails the file stays open and the
-  /// next edit surfaces saveError.
-  private func reconcile(_ catalog: StringCatalog, url: URL) {
+  /// True while a parsed catalog is being mirrored into the DB — the open /
+  /// reload window, which for a large catalog is seconds long. Drives the
+  /// panes' "Opening catalog…" state.
+  private(set) var isReconciling = false
+
+  /// Tail of the mirror chain. An open/reload that lands while an earlier
+  /// mirror is still writing must not race it for the same records (the mirror
+  /// used to be synchronous on the main actor, which made this ordering
+  /// implicit) — each mirror awaits the previous one first.
+  private var mirrorChain: Task<Void, Never> = Task {}
+
+  /// Re-mirrors the OPEN catalog into the DB on the main actor and refreshes
+  /// the derived rows — the per-key mutations' path (scan merge, plural
+  /// vary/remove, don't-translate): one key's slots, cheap enough to run
+  /// inline, unlike the whole-catalog `mirrorCatalog`.
+  private func mirrorOpenCatalog(_ catalog: StringCatalog, url: URL) {
     let context = TranslationStore.shared.context
-    let project = Reconcile.ensureProject(catalogURL: url, in: context)
-    let stats = Reconcile.upsertFromCatalog(catalog, project: project, context: context)
+    // The open project owns this catalog; a URL that does not match it (a
+    // stale caller) falls back to the find-or-create the mirror path uses.
+    let project = (self.project?.catalogURL == url ? self.project : nil)
+      ?? Reconcile.ensureProject(catalogURL: url, in: context)
+    // The relationship is already materialized here (the open path faulted it
+    // in), so passing it beats a fresh 0.6 s fetch — see upsertFromCatalog.
+    _ = Reconcile.upsertFromCatalog(
+      catalog, project: project, existing: project.records, context: context)
+    try? context.save()
     self.project = project
     rebuildRecordIndex()
     buildRows()
@@ -1372,9 +1409,43 @@ final class LocalizationStore {
     if scan.isPresented {
       scan.refreshPlan()
     }
-    NSLog(
-      "[Localization] reconciled %@: %d created, %d refreshed, %d kept",
-      url.lastPathComponent, stats.created, stats.refreshed, stats.kept)
+  }
+
+  /// Mirrors `catalog` into the project's records OFF the main actor and
+  /// returns the project to hold in the MAIN context, or nil when the write
+  /// failed.
+  ///
+  /// The upsert is the expensive half of opening a catalog (48,420 slots
+  /// measured at ~6 s in Debug — see `Reconcile.mirrorOffMainActor`), so it
+  /// runs in its own background `ModelContext`. Browsing never depends on the
+  /// DB: a failed mirror still returns the project row so the pane opens with
+  /// file-derived cells, and reports through `saveError`.
+  private func mirrorCatalog(_ catalog: StringCatalog, url: URL) async -> Project? {
+    isReconciling = true
+    defer { isReconciling = false }
+    let previous = mirrorChain
+    let work = Task { () -> Result<Reconcile.MirrorResult, Error> in
+      await previous.value
+      return await Reconcile.mirrorOffMainActor(
+        catalog, catalogURL: url, in: TranslationStore.container)
+    }
+    mirrorChain = Task { _ = await work.value }
+    switch await work.value {
+    case .success(let mirror):
+      // The BACKGROUND context did the writing, so this context's copies of
+      // those rows are stale — a fetch by identity refreshes them and hands
+      // back the instance this store should hold.
+      let context = TranslationStore.shared.context
+      let project = Reconcile.project(id: mirror.projectID, in: context)
+        ?? Reconcile.ensureProject(catalogURL: url, in: context)
+      NSLog(
+        "[Localization] reconciled %@: %d created, %d refreshed, %d kept",
+        url.lastPathComponent, mirror.stats.created, mirror.stats.refreshed, mirror.stats.kept)
+      return project
+    case .failure(let error):
+      saveError = "Couldn't save the catalog's records: \(error.localizedDescription)"
+      return Reconcile.ensureProject(catalogURL: url, in: TranslationStore.shared.context)
+    }
   }
 
   /// Re-indexes the project's live records by (key, language, form) for O(1)
@@ -1385,8 +1456,19 @@ final class LocalizationStore {
       recordIndex = [:]
       return
     }
+    rebuildRecordIndex(from: project.records)
+  }
+
+  /// Same, from records the caller already holds. The OPEN path passes ONE
+  /// scoped fetch (`Reconcile.records(of:in:)`) because its context is cold —
+  /// iterating `project.records` there faults every row one at a time, which
+  /// cost 4.2 s ON THE MAIN ACTOR for a 48,420-record catalog. Everything else
+  /// (row-level mutations, a mirror that just wrote) passes the relationship,
+  /// which is materialized by then and ~200x cheaper than a fresh fetch.
+  private func rebuildRecordIndex(from records: [TranslationRecord]) {
     var index: [String: [String: [String: TranslationRecord]]] = [:]
-    for record in project.records {
+    index.reserveCapacity(records.count)
+    for record in records {
       index[record.key, default: [:]][record.language, default: [:]][record.category ?? ""] = record
     }
     recordIndex = index

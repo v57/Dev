@@ -399,7 +399,10 @@ nonisolated enum PluralRules {
 // MARK: - private helpers
 
 extension Array where Element: Hashable {
-  func uniqued() -> [Element] {
+  /// `nonisolated`: a pure array helper. Without it the module's MainActor
+  /// default isolation makes this MainActor-only, and the nonisolated
+  /// `StringCatalog` cannot call it (a warning today, an error in Swift 6).
+  nonisolated func uniqued() -> [Element] {
     var seen = Set<Element>()
     return filter { seen.insert($0).inserted }
   }

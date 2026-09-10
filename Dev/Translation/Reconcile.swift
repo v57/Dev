@@ -31,7 +31,13 @@ import SwiftData
 ///    empty records write nothing (absence IS the empty state).
 ///
 /// Keep the file the artifact; the DB is the working/provenance store.
-enum Reconcile {
+///
+/// `nonisolated`: the mirror is pure store work on models the caller hands in,
+/// and the OPEN/RELOAD path runs it on a background `ModelContext` — a large
+/// catalog's upsert is seconds of inserts (see `mirrorOffMainActor`). Marking
+/// the enum instead of each member keeps that path and the main-actor callers
+/// (edits, runs, the sidebar's import) on the same functions.
+nonisolated enum Reconcile {
   // MARK: - state mapping
 
   /// SwiftData on this SDK decomposes ContextVersions into nullable columns
@@ -72,6 +78,23 @@ enum Reconcile {
 
   // MARK: - project
 
+  /// The project's records, materialized in ONE query.
+  ///
+  /// Never bulk-iterate `project.records`: SwiftData faults a to-many one
+  /// object at a time (measured 4.2 s to iterate 48,420 records, versus 0.7 s
+  /// for the same rows through this fetch — same lesson as the sidebar's
+  /// badges). Scoped by the project's identity, so a multi-project store pays
+  /// only for this project. Falls back to the relationship if the predicate is
+  /// ever unsupported, and returns nothing for a project that is not in the
+  /// store yet (nothing to mirror against).
+  static func records(of project: Project, in context: ModelContext) -> [TranslationRecord] {
+    let id = project.persistentModelID
+    let descriptor = FetchDescriptor<TranslationRecord>(
+      predicate: #Predicate { $0.project?.persistentModelID == id })
+    if let fetched = try? context.fetch(descriptor) { return fetched }
+    return project.records
+  }
+
   /// The project whose catalog lives at `catalogURL`, or nil.
   static func existingProject(
     catalogURL: URL,
@@ -80,6 +103,18 @@ enum Reconcile {
     let descriptor = FetchDescriptor<Project>()
     guard let projects = try? context.fetch(descriptor) else { return nil }
     return projects.first { $0.catalogURL == catalogURL }
+  }
+
+  /// The project with this identity, or nil.
+  ///
+  /// A FETCH, not `context.model(for:)`: a fetch returns the store's current
+  /// values for the registered instance, which is what a caller needs after
+  /// another context wrote to the same rows (the mirror runs in its own
+  /// background context — verified: a registered instance keeps serving its
+  /// stale relationship snapshot until a fetch refreshes it).
+  static func project(id: PersistentIdentifier, in context: ModelContext) -> Project? {
+    let descriptor = FetchDescriptor<Project>()
+    return (try? context.fetch(descriptor))?.first { $0.persistentModelID == id }
   }
 
   /// Finds the project for a catalog URL, creating it on first sight. The
@@ -146,10 +181,50 @@ enum Reconcile {
   // MARK: - load (file -> DB)
 
   /// Outcome counts of one upsert, for logging.
-  struct UpsertStats {
+  struct UpsertStats: Sendable {
     var created = 0
     var refreshed = 0  // unowned slot adopted the file's value/state
     var kept = 0       // DB-owned record untouched by the reload
+  }
+
+  /// What a background mirror wrote, in Sendable form: the model object itself
+  /// never crosses an actor boundary, only this identity plus the counts.
+  struct MirrorResult: Sendable {
+    let projectID: PersistentIdentifier
+    let stats: UpsertStats
+  }
+
+  /// Mirrors `catalog` into the store on a BACKGROUND `ModelContext` — the
+  /// open/reload path for a catalog whose upsert is seconds of work (48,420
+  /// slots measured at ~6 s in Debug, and the inserts cannot be moved off the
+  /// main actor without moving the context that owns them).
+  ///
+  /// The caller is responsible for what happens after: re-fetch the project in
+  /// the main context (`project(id:in:)`) before reading its records, because
+  /// the main context's copies are stale until then. Nothing here touches the
+  /// open catalog's in-memory state, so a failed write leaves the document
+  /// openable — the caller decides how to report it.
+  static func mirrorOffMainActor(
+    _ catalog: StringCatalog,
+    catalogURL: URL,
+    in container: ModelContainer
+  ) async -> Result<MirrorResult, Error> {
+    await Task.detached(priority: .userInitiated) {
+      let context = ModelContext(container)
+      let project = ensureProject(catalogURL: catalogURL, in: context)
+      // This context is COLD, so the records come from one scoped fetch —
+      // iterating the relationship here would fault every row one at a time
+      // (measured 4.2 s for 48,420 records, versus ~0.6 s for the fetch).
+      let existing = records(of: project, in: context)
+      let stats = upsertFromCatalog(
+        catalog, project: project, existing: existing, context: context)
+      do {
+        try context.save()
+      } catch {
+        return .failure(error)
+      }
+      return .success(MirrorResult(projectID: project.persistentModelID, stats: stats))
+    }.value
   }
 
   /// Mirrors the parsed catalog into the project's TranslationRecords:
@@ -157,13 +232,21 @@ enum Reconcile {
   /// Pairs the file carries no unit for become `.empty` records (Stage 1
   /// fills those). Plural forms get one record per (key, language, category)
   /// — each form is a full translation slot the pipeline fills like a flat
-  /// row. A variation holder with NO plural (device-only) gets no record —
-  /// a device-varied key cannot carry a flat stringUnit, and the UI marks
-  /// such cells read-only.
+  /// row. A variation holder with NO plural (device-only) gets no record — a
+  /// device-varied key cannot carry a flat stringUnit, and the UI marks such
+  /// cells read-only.
+  ///
+  /// `existing` is the project's current records, supplied by the caller
+  /// because they are not free to obtain: fetching them is one query (~0.6 s
+  /// for 48k rows) where the relationship is already materialized, and
+  /// iterating `project.records` costs seconds where it is not (see
+  /// `records(of:in:)`). So the background mirror passes a fetch, the warm
+  /// main-actor paths pass the relationship.
   @discardableResult
   static func upsertFromCatalog(
     _ catalog: StringCatalog,
     project: Project,
+    existing: [TranslationRecord],
     context: ModelContext
   ) -> UpsertStats {
     var stats = UpsertStats()
@@ -171,7 +254,7 @@ enum Reconcile {
     // Existing records of this project, indexed for O(1) lookups.
     // Keyed (key, language, category-or-flat).
     var bySlot: [String: [String: [String: TranslationRecord]]] = [:]
-    for record in project.records {
+    for record in existing {
       bySlot[record.key, default: [:]][record.language, default: [:]][record.category ?? ""] = record
     }
 
@@ -236,8 +319,8 @@ enum Reconcile {
     if !created.isEmpty {
       project.records.append(contentsOf: created)
     }
-
-    try? context.save()
+    // The CALLER saves: the background mirror reports a failed write to the
+    // user, so the save cannot be a swallowed `try?` in here.
     return stats
   }
 

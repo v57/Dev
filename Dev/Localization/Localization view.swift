@@ -50,7 +50,12 @@ struct LocalizationView: View {
 
   var body: some View {
     Group {
-      if let url = projectCatalogURL {
+      if store.isReconciling {
+        // A catalog is being parsed/mirrored into the DB. For a large one that
+        // is seconds of work, so it gets a state of its own rather than
+        // flashing the empty state or a half-opened table.
+        ProgressView("Opening catalog…")
+      } else if let url = projectCatalogURL {
         boundContent(url: url)
       } else if store.isLoaded {
         loadedContent(allowsOpenCatalog: true)

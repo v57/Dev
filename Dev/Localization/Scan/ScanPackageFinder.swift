@@ -9,7 +9,9 @@ import Foundation
 
 /// Directory names that are SwiftPM/Xcode artifacts or VCS internals —
 /// never treated as package roots, never descended into.
-private let scanSkippedDirectoryNames: Set<String> = [
+/// `nonisolated`: read by the (nonisolated) tree walk; without it the module's
+/// MainActor default isolation makes this constant MainActor-only.
+nonisolated private let scanSkippedDirectoryNames: Set<String> = [
   ".build", ".git", ".svn", ".hg", ".swiftpm",
   "Packages", "DerivedData", "build", "checkouts", "xcuserdata",
 ]

@@ -18,9 +18,12 @@ import SwiftData
 ///    .xcstrings file opens; `catalogURL` is that file and `rootURL`/`iconURL`
 ///    stay nil.
 ///  - DIRECTORY-ROOT projects (sidebar drag-import): the dropped folder IS
-///    the project. `catalogURL` is <root>/Localizable.xcstrings whether or
-///    not the file exists yet ('no catalog' is derived at display time) and
-///    `iconURL` is <root>/Assets.xcassets/AppIcon.appiconset when present.
+///    the project. `catalogURL` is the catalog found by searching the tree
+///    (see `CatalogDiscovery`) — `<root>/Localizable.xcstrings` when present,
+///    else the shallowest `.xcstrings` found, else that same root path as a
+///    placeholder whether or not the file exists yet ('no catalog' is derived
+///    at display time). `iconURL` is <root>/Assets.xcassets/AppIcon.appiconset
+///    when present.
 @Model final class Project {
   /// Display name of the project (e.g. the repo name).
   var name: String
