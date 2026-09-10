@@ -107,17 +107,24 @@ nonisolated extension RoutedModel {
   ///
   /// This is the single place the paid model is named — swap it here and the
   /// fallback, the status-bar label and the Stage-0 learn client all follow.
+  ///
+  /// Runs the **contributor** tier: Meta's cost-efficient variant of the same
+  /// model, roughly an order of magnitude cheaper per token than the full
+  /// tier. The price is the data policy — contributor prompts and outputs may
+  /// be used to improve Meta's products — so this is a deliberate trade for a
+  /// batch translation workload, and it is the one thing to revisit if user
+  /// catalog content must never leave for training.
   static let muse = RoutedModel(
     provider: .commandCode,
-    model: "meta/muse-spark-1.3",
-    name: "Muse Spark 1.3",
+    model: "meta/muse-spark-1.3-contributor",
+    name: "Muse Spark 1.3 Contributor",
     isFree: false)
 
   /// Routing order, set by measurement rather than model family.
   ///
   /// A bake-off on this project's own catalog strings (6 UI strings × de/ja/ru,
   /// judged MQM-lite) ranked: `deepseek-v4-flash` 9.76, `meituan/LongCat-2.0`
-  /// 9.56, `muse-spark-1.3` 8.63, `inclusionai/ling-3.0-flash` 6.44. Two
+  /// 9.56, `muse-spark-1.3` 8.63, `inclusionai/ling-3.0-flash` 6.44. Three
   /// conclusions shaped this order:
   ///
   ///  - **Muse is an availability fallback, not a quality tier.** It did not
@@ -125,6 +132,11 @@ nonisolated extension RoutedModel {
   ///  - **Provider reliability dominates model choice.** Every OpenRouter
   ///    `:free` id returned HTTP 429 on 18/18 calls at concurrency 16, so
   ///    they sit at the tail as a last resort rather than mid-chain.
+  ///  - **The 8.63 belongs to the full tier, not the one we now ship.** The
+  ///    bake-off ran `muse-spark-1.3`; the paid slot now names the contributor
+  ///    variant, which was never scored. Re-run the bake-off before treating
+  ///    the paid slot's quality as measured — the cost saving is verified, the
+  ///    translation quality of the contributor tier is not.
   ///
   /// `[ok]` answered correctly, `[~]` transient failure, `[x]` hard-unavailable
   /// (2026-09-10 smoke test). A failing candidate is cooled down by the
@@ -140,19 +152,22 @@ nonisolated extension RoutedModel {
                 name: "Laguna S 2.1 (free)", isFree: true),                // [~] 503
     // OpenCode Zen free tier: Muse's own model family, currently dead until
     // the workspace enables the free ids or opts into the contributor data
-    // policy. Correct the moment that happens.
+    // policy. The paid slot now runs the contributor tier, so that policy is
+    // effectively accepted — re-probe these two, they may be live again, and a
+    // live free contributor id is strictly better than paying for it.
     RoutedModel(provider: .openCode, model: "deepseek-v4-flash-free",
                 name: "DeepSeek V4 Flash (free)", isFree: true),           // [x]
     RoutedModel(provider: .openCode, model: "muse-spark-1.3-contributor-free",
-                name: "Muse Spark 1.3 (free)", isFree: true),              // [x]
+                name: "Muse Spark 1.3 Contributor (free)", isFree: true),  // [x]
     // OpenRouter free ids — LAST free resort: single calls work, bulk runs
     // get 429 on every request.
     RoutedModel(provider: .openRouter, model: "nvidia/nemotron-3-super-120b-a12b:free",
                 name: "Nemotron 3 Super (free)", isFree: true),            // [~] always 429 under load
     RoutedModel(provider: .openRouter, model: "nex-agi/nex-n2.5-pro:free",
                 name: "Nex N2.5 Pro (free)", isFree: true),                // [~] always 429 under load
-    // Paid destination — availability, not superiority.
-    muse,                                                                  // [ok] 8.63
+    // Paid destination — availability, not superiority. Contributor tier: the
+    // score was earned by the full tier, so this slot's quality is unmeasured.
+    muse,                                                                  // [ok] 8.63 (full tier)
   ]
 
   /// Just the free tiers, in order (the router's preferred path).

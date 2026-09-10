@@ -7,8 +7,9 @@ import Foundation
 
 // MARK: - CommandCodeTranslator
 
-/// The Command Code client for the PAID destination model (Muse), used for
-/// everything that must always run on the strongest model:
+/// The Command Code client for the PAID destination model (Muse — the
+/// contributor tier; see `RoutedModel.muse`), used for everything that must
+/// always run on the strongest model:
 ///
 ///  - the router's paid fallback when every free tier is exhausted,
 ///  - the Stage-0 learn fold (`Stage0ModelClient`),
