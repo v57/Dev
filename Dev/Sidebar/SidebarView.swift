@@ -21,6 +21,11 @@ import SwiftUI
 struct SidebarView: View {
   let model: SidebarViewModel
 
+  /// The shared open-catalog store: the context menu asks it before removing
+  /// a project whose catalog it is showing (unsaved edits / a run in flight
+  /// refuse the removal, and an idle open catalog is closed with the row).
+  @Environment(LocalizationStore.self) private var localization
+
   var body: some View {
     @Bindable var model = model
     List(selection: $model.selection) {
@@ -31,6 +36,11 @@ struct SidebarView: View {
           ForEach(model.projects) { row in
             NavigationLink(value: SidebarSelection.project(row.id)) {
               ProjectRow(row: row)
+            }
+            .contextMenu {
+              Button("Remove Project", role: .destructive) {
+                model.removeProject(id: row.id, localization: localization)
+              }
             }
           }
         }
@@ -63,13 +73,13 @@ struct SidebarView: View {
           .allowsHitTesting(false)
       }
     }
-    .alert("Import failed", isPresented: Binding(
-      get: { model.importError != nil },
-      set: { if !$0 { model.importError = nil } }
+    .alert(model.alert?.title ?? "", isPresented: Binding(
+      get: { model.alert != nil },
+      set: { if !$0 { model.alert = nil } }
     )) {
-      Button("OK") { model.importError = nil }
+      Button("OK") { model.alert = nil }
     } message: {
-      Text(model.importError ?? "")
+      Text(model.alert?.message ?? "")
     }
     .task { model.refresh() }
     .onChange(of: model.selection) {

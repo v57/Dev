@@ -1283,6 +1283,36 @@ final class LocalizationStore {
     }
   }
 
+  /// Closes the open catalog without opening another: the parsed document,
+  /// the edits that never reached the file and every derived list are
+  /// dropped, and the reconciled records are left to their owner — the
+  /// project row (nothing is deleted here).
+  ///
+  /// Used when the project BEHIND the open catalog is removed from the
+  /// sidebar: a store still pointing at that project would keep rendering its
+  /// (now deleted) records and its next reconcile would silently re-create
+  /// the project it just removed. Callers ask about unsaved edits and
+  /// in-flight runs first — this is the unguarded half.
+  func closeCatalog() {
+    catalog = nil
+    catalogURL = nil
+    project = nil
+    loadError = nil
+    saveError = nil
+    recordIndex = [:]
+    rows = []
+    visibleRows = []
+    valueOverrides = [:]
+    isDirty = false
+    pendingLeave = nil
+    isUnsavedPromptPresented = false
+    // Supersede any parse still in flight, so it cannot adopt state over a
+    // closed store.
+    loadGeneration += 1
+    revision += 1
+    run.reset()
+  }
+
   /// Re-read the current file and drop overrides; view state is untouched.
   /// Decodes off the main thread like `open`. Held on the unsaved-changes
   /// prompt when there are edits the file does not have yet.

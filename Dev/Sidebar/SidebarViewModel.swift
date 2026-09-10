@@ -46,6 +46,14 @@ enum SidebarSelection: Hashable {
   case project(PersistentIdentifier)
 }
 
+/// What the sidebar's one alert is about. A single value rather than one
+/// optional per case, because a view presents one alert at a time.
+struct SidebarAlert: Identifiable {
+  let id = UUID()
+  let title: String
+  let message: String
+}
+
 // MARK: - Row value
 
 /// Immutable per-project row data, computed once per `refresh()` so row
@@ -112,8 +120,8 @@ final class SidebarViewModel {
   /// Fresh per-project rows, rebuilt by `refresh()`.
   private(set) var projects: [SidebarProjectRow] = []
 
-  /// Non-nil surfaces the drop-import alert.
-  var importError: String?
+  /// The alert the sidebar shows (import failure, refused removal), or nil.
+  var alert: SidebarAlert?
 
   /// True while a Finder drag hovers the sidebar (drop feedback).
   var isDropTargeted = false
@@ -174,6 +182,59 @@ final class SidebarViewModel {
           catalogExists: fm.fileExists(atPath: project.catalogURL.path),
           hasRecords: !records.isEmpty)
       }
+  }
+
+  // MARK: - removal
+
+  /// Removes a project from the sidebar: the SwiftData row and — by cascade —
+  /// its reconciled records and its project-scope context doc. The catalog
+  /// FILE on disk is never touched: removing un-imports the project, it does
+  /// not delete the artifact (re-dropping the folder imports it afresh).
+  ///
+  /// When the project's catalog is the one open in Localization, the store is
+  /// closed with it: keeping it open would render records of a deleted
+  /// project and its next reconcile would silently re-create the row just
+  /// removed. Two states refuse the removal instead, because they would drop
+  /// work that has nowhere else to live — unsaved catalog edits (Save is the
+  /// only writer of the .xcstrings) and an in-flight Translate/Scan run. Both
+  /// report through `alert`.
+  ///
+  /// No-op when the project is already gone (a stale row's menu action).
+  func removeProject(id: PersistentIdentifier, localization: LocalizationStore) {
+    let context = TranslationStore.shared.context
+    guard let project = project(id: id) else { return }
+
+    if localization.catalogURL == project.catalogURL {
+      if localization.hasUnsavedChanges {
+        alert = SidebarAlert(
+          title: "Unsaved changes",
+          message: "The open catalog has edits the file does not have yet. Save or discard them in Localization, then remove the project.")
+        return
+      }
+      if localization.run.isRunning || localization.scan.isRunning {
+        alert = SidebarAlert(
+          title: "Work in progress",
+          message: "A run on this project's catalog is still going. Let it finish or cancel it, then remove the project.")
+        return
+      }
+      localization.closeCatalog()
+    }
+
+    context.delete(project)
+    do {
+      try context.save()
+    } catch {
+      alert = SidebarAlert(
+        title: "Remove failed",
+        message: "Couldn't remove the project: \(error.localizedDescription)")
+      return
+    }
+    // A removed row cannot stay selected: this drops the detail pane back to
+    // its prompt and takes the project-bound toolbar picker with it.
+    if selection == .project(id) {
+      selection = nil
+    }
+    refresh()
   }
 
   // MARK: - drag-and-drop import
@@ -249,7 +310,9 @@ final class SidebarViewModel {
     do {
       try context.save()
     } catch {
-      importError = "Couldn't save the imported project: \(error.localizedDescription)"
+      alert = SidebarAlert(
+        title: "Import failed",
+        message: "Couldn't save the imported project: \(error.localizedDescription)")
       return nil
     }
     refresh()
