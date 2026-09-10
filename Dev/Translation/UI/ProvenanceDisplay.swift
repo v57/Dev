@@ -27,8 +27,9 @@ enum ProvenanceMarkers {
 
 extension Provider {
   /// Human-readable producer name. Machine rows normally carry the real
-  /// backend name in `lastEditor` (Apple Translation / Ollama / Command
-  /// Code); this is the fallback for records without an editor stamp.
+  /// backend name in `lastEditor` (Command Code); this is the fallback for
+  /// records without an editor stamp. Apple/Ollama are retired producers
+  /// kept only so historical records still render.
   var displayName: String {
     switch self {
     case .manual: return "Human"

@@ -20,8 +20,8 @@ nonisolated protocol TranslatorBackend: Sendable {
   var id: BackendID { get }
   /// Human-readable name for UI lists and logs.
   var displayName: String { get }
-  /// Cheap capability probe for the (from, to) pair — Apple's installed
-  /// language status, Ollama's reachability, Command Code's key presence.
+  /// Cheap capability probe: today, whether the Command Code API key is
+  /// present. The (from, to) pair is accepted for backends that need it.
   func isEligible(from: String, to: String) async -> Bool
   /// Translates one string. Throws `BackendError` on failure; never crashes,
   /// even when the backend is not configured.
@@ -49,8 +49,6 @@ nonisolated enum BackendError: LocalizedError {
   case decoding(String)
   /// 2xx, but the model produced no usable text.
   case emptyResult(String)
-  /// Apple Translation framework failure.
-  case apple(String)
 
   var errorDescription: String? {
     switch self {
@@ -67,8 +65,6 @@ nonisolated enum BackendError: LocalizedError {
       return "Unexpected response: \(detail)"
     case .emptyResult(let backend):
       return "\(backend) returned an empty translation"
-    case .apple(let detail):
-      return "Apple Translation failed: \(detail)"
     }
   }
 

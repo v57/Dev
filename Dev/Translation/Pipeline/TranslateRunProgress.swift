@@ -16,9 +16,8 @@ enum TranslateStage: String, CaseIterable, Sendable {
   case stage0Learn
   case tmResolve
   case dbResolve
-  case stage1Apple
-  case stage2Ollama
-  case stage3Deepseek
+  /// The one AI stage: Command Code translates every remaining record.
+  case translate
   case done
 
   /// Human-readable label for logs and the progress footer.
@@ -30,12 +29,8 @@ enum TranslateStage: String, CaseIterable, Sendable {
       return "Translation memory"
     case .dbResolve:
       return "Imported DB"
-    case .stage1Apple:
-      return "Apple (Stage 1)"
-    case .stage2Ollama:
-      return "Ollama (Stage 2)"
-    case .stage3Deepseek:
-      return "DeepSeek (Stage 3)"
+    case .translate:
+      return "Translate"
     case .done:
       return "Done"
     }
@@ -126,21 +121,16 @@ nonisolated struct PipelineRunSummary: Sendable {
   // Imported-DB resolve (Phase D)
   var dbFilled = 0            // empty slot filled from the imported DB
   var dbUpgraded = 0          // machine value replaced/promoted by a DB hit
-  // Stage 1 Apple
-  var stage1Filled = 0
-  // Stage 2 Ollama
-  var stage2Filled = 0
-  var stage2Corrected = 0     // Apple value changed by Ollama (apple -> ollama edit)
-  // Stage 3 DeepSeek
-  var stage3Filled = 0
-  var stage3Reviewed = 0      // machine value changed by DeepSeek final review
+  // Translate — the only AI stage (Command Code / Muse)
+  var translatedFilled = 0    // empty slot got a model translation
+  var translatedRewritten = 0 // existing machine value replaced by the model
   // Common
   var failures: [String] = []
   var cancelled = false
 
   /// Every record whose value/provider/state the run wrote.
   var recordsTouched: Int {
-    tmResolvedGold + tmResolvedHints + dbFilled + dbUpgraded + stage1Filled
-      + stage2Filled + stage2Corrected + stage3Filled + stage3Reviewed
+    tmResolvedGold + tmResolvedHints + dbFilled + dbUpgraded
+      + translatedFilled + translatedRewritten
   }
 }

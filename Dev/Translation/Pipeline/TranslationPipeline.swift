@@ -8,45 +8,35 @@
 import Foundation
 import SwiftData
 
-// MARK: - Provider mapping
-
-extension Provider {
-  /// Backends persist under their own raw names; records persist under the
-  /// model's Provider enum. Command Code (BackendID.commandcode) is the
-  /// deepseek machine (KANBAN decision, see C-1 notes).
-  init(backendID: BackendID) {
-    switch backendID {
-    case .apple:
-      self = .apple
-    case .ollama:
-      self = .ollama
-    case .commandcode:
-      self = .deepseek
-    }
-  }
-}
-
 // MARK: - TranslationPipeline
 
 /// The "Translate" run orchestrator. One run, in order:
 ///
 ///   0. LEARN   — fold pending user-confirmed TranslationEdits into the
-///                language ContextDoc (deepseek, OVERRIDE authority, audit +
-///                version bump) and upsert the reviewed TM entry.
+///                language ContextDoc (Command Code, OVERRIDE authority,
+///                audit + version bump) and upsert the reviewed TM entry.
 ///   1. TM      — resolve records that need a target value against exact
 ///                (sourceText, targetLanguage) TranslationMemory hits:
 ///                reviewed -> copied as .reviewed (gold), machine-only ->
 ///                copied as .needs_review hint; both skip the pipeline.
 ///   2. IMPORTED DB — when a translation DB is imported (Phase D), resolve
-///                the still-untouched candidates against it BEFORE any AI
+///                the still-untouched candidates against it BEFORE the AI
 ///                backend: exact source-text hits copy shipped human
 ///                translations as .reviewed + autoReviewed (the UI shows the
 ///                auto badge until a human confirms); misses fall through.
-///   3. APPLE   — fill the still-empty records Apple can serve.
-///   4. OLLAMA  — fill empty records Apple could not cover, and re-translate
-///                Apple output with context (diff -> apple->ollama edit).
-///   5. DEEPSEEK — review the survivors: still-empty, Ollama-corrected, or
-///                stale/high-stakes machine values. Final suggestions.
+///   3. TRANSLATE — every remaining record is translated by Command Code
+///                (the hosted Muse/deepseek model), the ONLY AI backend.
+///
+/// There is deliberately NO local draft stage. Apple Translation and Ollama
+/// (translategemma) used to pre-fill records, but a draft could only ever
+/// *pre-empt* Command Code — never improve on it — because no stage was ever
+/// shown the previous stage's value (see `translatePool`: only the source
+/// text and context reach a backend). Each pass therefore cost a full
+/// on-device sweep of the catalog (Apple and translategemma both run at
+/// single-digit strings/sec) while its output was simply overwritten by the
+/// next stage, or worse, survived unreviewed via the old 'providers agreed'
+/// skip. Apple additionally ignores the ContextDocs by construction, which
+/// disqualifies it for glossary-driven localization.
 ///
 /// Incremental: a record is only touched when it is NEW (empty) or STALE
 /// (any recorded context-version is older than the current ContextDoc
@@ -99,7 +89,6 @@ struct TranslationPipeline {
     progress: TranslateRunProgress? = nil
   ) async -> PipelineRunSummary {
     var summary = PipelineRunSummary()
-    let runStart = Date.now
     let env = PipelineRunContext(
       context: context,
       project: project,
@@ -173,45 +162,19 @@ struct TranslationPipeline {
       progress?.note("Imported DB: \(db.filled) filled, \(db.upgraded) upgraded")
     }
 
-    // Stage 1 — Apple fills empty records.
-    var apple = StageOutcome()
+    // TRANSLATE — the one AI stage. Every record that still needs a target
+    // value goes to Command Code (Muse/deepseek). No local draft stages:
+    // they could only pre-empt this model, never improve on it.
+    var translated = StageOutcome()
     if progress?.isCancelled != true {
-      apple = await runAppleStage(
+      translated = await runTranslateStage(
         env: env,
         excluded: excludedByTM,
-        runStart: runStart,
         progress: progress
       )
-      summary.stage1Filled += apple.filled
-      summary.failures += apple.failures
-    }
-
-    // Stage 2 — Ollama: remaining empties + Apple output, with context.
-    var ollama = StageOutcome()
-    if progress?.isCancelled != true {
-      ollama = await runOllamaStage(
-        env: env,
-        excluded: excludedByTM,
-        runStart: runStart,
-        progress: progress
-      )
-      summary.stage2Filled += ollama.filled
-      summary.stage2Corrected += ollama.corrected
-      summary.failures += ollama.failures
-    }
-
-    // Stage 3 — deepseek (Command Code) reviews the survivors.
-    var deepseek = StageOutcome()
-    if progress?.isCancelled != true {
-      deepseek = await runDeepseekStage(
-        env: env,
-        excluded: excludedByTM,
-        runStart: runStart,
-        progress: progress
-      )
-      summary.stage3Filled += deepseek.filled
-      summary.stage3Reviewed += deepseek.corrected
-      summary.failures += deepseek.failures
+      summary.translatedFilled += translated.filled
+      summary.translatedRewritten += translated.corrected
+      summary.failures += translated.failures
     }
 
     summary.cancelled = progress?.isCancelled == true
@@ -253,25 +216,8 @@ struct TranslationPipeline {
     return env.force || env.isStale(record)
   }
 
-  /// True when the run itself wrote this record (updatedAt after run start).
-  private static func justWritten(_ record: TranslationRecord, runStart: Date) -> Bool {
-    record.updatedAt >= runStart
-  }
-
-  /// High-stakes strings get a final deepseek pass even when a cheaper stage
-  /// already produced a value: format placeholders (%@, %lld, {name}) or
-  /// very long text. Confidence-based selection is the extension point here —
-  /// backends do not report confidence today, so the stakes heuristic stands
-  /// in for "low confidence".
-  private static func isHighStakes(_ text: String) -> Bool {
-    if text.count >= 120 {
-      return true
-    }
-    return text.range(of: "%[a-zA-Z@]|\\{[^}]*\\}", options: .regularExpression) != nil
-  }
-
   /// Source text that is only whitespace cannot be translated — drop it from
-  /// every stage's worklist instead of failing per record.
+  /// the worklist instead of failing per record.
   private static func hasUsableSource(_ record: TranslationRecord) -> Bool {
     !record.sourceText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
   }
@@ -615,187 +561,40 @@ struct TranslationPipeline {
     env.context.insert(edit)
   }
 
-  // MARK: - stage 1: Apple
+  // MARK: - translate (the only AI stage)
 
-  private static func runAppleStage(
+  /// The one AI stage. Every record that still needs a target value — empty,
+  /// stale against the current ContextDocs, or explicitly forced — is
+  /// translated by Command Code (the hosted Muse/deepseek model) with the
+  /// full context prompt. There is deliberately no draft stage in front of
+  /// it: no stage is ever shown the previous stage's value, so a draft could
+  /// only *pre-empt* this model, never improve on it, while costing a full
+  /// on-device sweep of the catalog.
+  private static func runTranslateStage(
     env: PipelineRunContext,
     excluded: Set<PersistentIdentifier>,
-    runStart: Date,
-    progress: TranslateRunProgress?
-  ) async -> StageOutcome {
-    var outcome = StageOutcome()
-    let backend = AppleTranslator()
-    let candidates = env.allRecords.filter {
-      env.isTarget($0)
-        && !excluded.contains($0.persistentModelID)
-        && $0.state == .empty
-        && hasUsableSource($0)
-    }
-    guard !candidates.isEmpty else { return outcome }
-
-    // Eligibility is per language pair and cheap-ish (Apple's availability
-    // status); probe each pair once, serially, before the pool runs.
-    var eligible = Set<String>()
-    for language in Set(candidates.map { $0.language }) {
-      if await backend.isEligible(from: env.sourceLanguage, to: language) {
-        eligible.insert(language)
-      }
-    }
-    let work = candidates
-      .filter { eligible.contains($0.language) }
-      .map { (record: $0, context: env.translationContext(for: $0)) }
-    guard !work.isEmpty else {
-      if candidates.contains(where: { !eligible.contains($0.language) }) {
-        outcome.failures.append("Stage 1 (Apple): no eligible language pair on this Mac")
-      }
-      return outcome
-    }
-
-    progress?.begin(.stage1Apple, total: work.count)
-    let results = await translatePool(work: work, backend: backend, sourceLanguage: env.sourceLanguage, progress: progress)
-    for (index, result) in results.sorted(by: { $0.index < $1.index }) {
-      let item = work[index]
-      switch result {
-      case .success(let value):
-        writeFill(
-          env: env, record: item.record, value: value,
-          provider: .apple, lastEditor: backend.displayName,
-          reason: "Stage 1 (Apple Translation): initial fill"
-        )
-        outcome.filled += 1
-        progress?.tick(key: displayKey(item.record))
-      case .failure(let backendError):
-        let message = backendError.localizedDescription
-        outcome.failures.append("apple \(displayKey(item.record)): \(message)")
-        progress?.fail(key: displayKey(item.record), message: message)
-      }
-    }
-    try? env.context.save()
-    return outcome
-  }
-
-  // MARK: - stage 2: Ollama
-
-  private static func runOllamaStage(
-    env: PipelineRunContext,
-    excluded: Set<PersistentIdentifier>,
-    runStart: Date,
-    progress: TranslateRunProgress?
-  ) async -> StageOutcome {
-    var outcome = StageOutcome()
-    let backend = OllamaTranslator()
-    let candidateRecords = env.allRecords.filter {
-      env.isTarget($0)
-        && !excluded.contains($0.persistentModelID)
-        && hasUsableSource($0)
-        && (($0.state == .empty)  // (a) Apple could not cover these
-            || ($0.state == .needs_review
-                && (env.force  // forced single-item: re-translate machine output
-                    || ($0.provider == .apple  // (b) Apple output, fresh or stale
-                        && (justWritten($0, runStart: runStart) || env.isStale($0))))))
-    }
-    guard !candidateRecords.isEmpty else { return outcome }
-
-    var eligible = Set<String>()
-    for language in Set(candidateRecords.map { $0.language }) {
-      if await backend.isEligible(from: env.sourceLanguage, to: language) {
-        eligible.insert(language)
-      }
-    }
-    let work = candidateRecords
-      .filter { eligible.contains($0.language) }
-      .map { (record: $0, context: env.translationContext(for: $0)) }
-    guard !work.isEmpty else {
-      outcome.failures.append("Stage 2 (Ollama): server not reachable — skipping")
-      return outcome
-    }
-
-    progress?.begin(.stage2Ollama, total: work.count)
-    let results = await translatePool(work: work, backend: backend, sourceLanguage: env.sourceLanguage, progress: progress)
-    for (index, result) in results.sorted(by: { $0.index < $1.index }) {
-      let record = work[index].record
-      switch result {
-      case .success(let value):
-        if record.state == .empty {
-          writeFill(
-            env: env, record: record, value: value,
-            provider: .ollama, lastEditor: backend.displayName,
-            reason: "Stage 2 (Ollama): filled empty slot with context"
-          )
-          outcome.filled += 1
-        } else if rewriteValue(
-          env: env, record: record, value: value,
-          provider: .ollama, lastEditor: backend.displayName,
-          reason: "Stage 2 (Ollama): context re-translation differs from Apple output"
-        ) {
-          outcome.corrected += 1
-        }
-        progress?.tick(key: displayKey(record))
-      case .failure(let backendError):
-        let message = backendError.localizedDescription
-        outcome.failures.append("ollama \(displayKey(record)): \(message)")
-        progress?.fail(key: displayKey(record), message: message)
-      }
-    }
-    try? env.context.save()
-    return outcome
-  }
-
-  // MARK: - stage 3: deepseek review
-
-  private static func runDeepseekStage(
-    env: PipelineRunContext,
-    excluded: Set<PersistentIdentifier>,
-    runStart: Date,
     progress: TranslateRunProgress?
   ) async -> StageOutcome {
     var outcome = StageOutcome()
     let backend = CommandCodeTranslator()
-    let candidateRecords = env.allRecords.filter {
-      guard env.isTarget($0),
-            !excluded.contains($0.persistentModelID),
-            hasUsableSource($0),
-            $0.state != .reviewed,
-            $0.provider != .manual else {
-        return false
+    let work = env.allRecords
+      .filter {
+        env.isTarget($0)
+          && !excluded.contains($0.persistentModelID)
+          && hasUsableSource($0)
+          && needsTarget($0, env: env)
       }
-      if $0.state == .empty {
-        return true  // survivors nobody filled
-      }
-      // Forced single-item: the target row's machine output always gets a
-      // final review pass, even when fresh.
-      if env.force, $0.state == .needs_review {
-        return true
-      }
-      // Survivors with a value: Ollama output that is fresh or stale, and
-      // Apple output that is fresh or stale AND high-stakes (placeholders /
-      // long text get a final deepseek check even when Ollama agreed).
-      if $0.provider == .ollama, $0.state == .needs_review {
-        return justWritten($0, runStart: runStart) || env.isStale($0)
-      }
-      if $0.provider == .apple, $0.state == .needs_review,
-         justWritten($0, runStart: runStart) || env.isStale($0) {
-        return isHighStakes($0.sourceText)
-      }
-      return false
-    }
-    guard !candidateRecords.isEmpty else { return outcome }
-
-    var eligible = Set<String>()
-    for language in Set(candidateRecords.map { $0.language }) {
-      if await backend.isEligible(from: env.sourceLanguage, to: language) {
-        eligible.insert(language)
-      }
-    }
-    let work = candidateRecords
-      .filter { eligible.contains($0.language) }
       .map { (record: $0, context: env.translationContext(for: $0)) }
-    guard !work.isEmpty else {
-      outcome.failures.append("Stage 3 (Command Code): not configured — final review skipped")
+    guard let probe = work.first else { return outcome }
+
+    // Command Code eligibility is key presence, not a language pair, so a
+    // single probe covers the whole worklist — no per-language loop needed.
+    guard await backend.isEligible(from: env.sourceLanguage, to: probe.record.language) else {
+      outcome.failures.append("Translate (Command Code): not configured — nothing translated")
       return outcome
     }
 
-    progress?.begin(.stage3Deepseek, total: work.count)
+    progress?.begin(.translate, total: work.count)
     let results = await translatePool(work: work, backend: backend, sourceLanguage: env.sourceLanguage, progress: progress)
     for (index, result) in results.sorted(by: { $0.index < $1.index }) {
       let record = work[index].record
@@ -805,20 +604,20 @@ struct TranslationPipeline {
           writeFill(
             env: env, record: record, value: value,
             provider: .deepseek, lastEditor: backend.displayName,
-            reason: "Stage 3 (Command Code): final suggestion for unfilled slot"
+            reason: "Translate (Command Code): filled empty slot"
           )
           outcome.filled += 1
         } else if rewriteValue(
           env: env, record: record, value: value,
           provider: .deepseek, lastEditor: backend.displayName,
-          reason: "Stage 3 (Command Code): reviewed suggestion differs from current value"
+          reason: "Translate (Command Code): differs from previous machine value"
         ) {
           outcome.corrected += 1
         }
         progress?.tick(key: displayKey(record))
       case .failure(let backendError):
         let message = backendError.localizedDescription
-        outcome.failures.append("deepseek \(displayKey(record)): \(message)")
+        outcome.failures.append("translate \(displayKey(record)): \(message)")
         progress?.fail(key: displayKey(record), message: message)
       }
     }

@@ -9,7 +9,7 @@ import Foundation
 
 // MARK: - ContextPromptBuilder
 
-/// Pure prompt assembler shared by the LLM backends (Ollama, Command Code).
+/// Pure prompt assembler for the Command Code backend.
 ///
 /// Foundation-only on purpose: this file (with TranslationContext.swift)
 /// compiles standalone under `swiftc`, so prompt assembly stays verifiable
@@ -30,7 +30,7 @@ nonisolated struct ContextPromptBuilder {
 
   // MARK: - output
 
-  /// Two chat messages every OpenAI/Ollama-style client can send verbatim.
+  /// Two chat messages any OpenAI-style client can send verbatim.
   struct AssembledPrompt: Equatable, Sendable {
     var system: String
     var user: String

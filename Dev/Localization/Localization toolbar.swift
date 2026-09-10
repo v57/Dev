@@ -77,7 +77,7 @@ struct ControlsBar: ToolbarContent {
       .disabled(!store.canTranslate)
       .help(store.run.isRunning
         ? "A translation run is in progress — cancel it from the footer"
-        : "Run the translation pipeline: learn from confirmed edits, resolve translation memory, then Apple, Ollama and review")
+        : "Run the translation pipeline: learn from confirmed edits, resolve translation memory and the imported DB, then translate every remaining string with Command Code")
     }
   }
   struct ToggleButtonStyle: ToggleStyle {

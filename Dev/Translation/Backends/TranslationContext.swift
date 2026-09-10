@@ -10,8 +10,8 @@ import Foundation
 // MARK: - TranslationContext
 
 /// Everything the pipeline knows about one string besides its text and the
-/// language pair. Apple ignores the struct entirely; Ollama and Command Code
-/// fold it into the prompt via `ContextPromptBuilder`.
+/// language pair. Command Code folds it into the prompt via
+/// `ContextPromptBuilder`.
 ///
 /// The three context texts are the bodies of the versioned ContextDocs
 /// (scope .global / .project / .language) — they are carried here because
