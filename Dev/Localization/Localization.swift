@@ -222,13 +222,35 @@ private extension ComparisonResult {
 
 // MARK: - Store
 
+/// What a leave-the-catalog request is standing in front of while the
+/// unsaved-changes prompt is up.
+enum LeaveIntent: Equatable {
+  /// Toolbar Reload.
+  case reload
+  /// Opening a known file (sidebar project switch, Open… choice).
+  case open(URL)
+  /// Toolbar Open… — the file panel has not run yet.
+  case openPanel
+}
+
+/// The user's answer to the unsaved-changes prompt.
+enum LeaveChoice {
+  case save
+  case discard
+  case cancel
+}
+
 /// Owns the parsed catalog, load state, view state and the in-memory edit
 /// overrides. Since Phase C the catalog is reconciled into SwiftData
 /// (Reconcile): every (re)load upserts TranslationRecords from the file —
 /// DB-owned provenance (provider, context-versions, state) survives the
 /// reload — and every committed cell edit is written through to the DB
-/// record AND back into the .xcstrings stringUnit, so edits survive Reload.
-/// The file stays the artifact; the DB is the working/provenance store.
+/// record.
+///
+/// The FILE is the artifact and `save()` is its ONLY writer: no edit, no
+/// Translate run and no plural skeleton writes the .xcstrings on its own, so
+/// the UI keeps a dirty flag and asks before leaving a catalog with unsaved
+/// edits. The DB is the working/provenance store and stays immediate.
 @Observable
 final class LocalizationStore {
   // MARK: load state
@@ -243,6 +265,35 @@ final class LocalizationStore {
   private(set) var project: Project?
   /// Non-nil when the last durable save of an edit failed.
   private(set) var saveError: String?
+
+  // MARK: unsaved changes
+
+  /// True when the in-memory catalog carries edits the file does not have
+  /// yet. Save is the ONLY writer of the .xcstrings artifact: no cell edit,
+  /// no Translate run and no plural skeleton writes on its own, so an edit is
+  /// durable in the DB (records) and pending on disk until the user saves.
+  private(set) var isDirty = false
+
+  /// The leave-the-catalog request waiting on the unsaved-changes prompt.
+  /// Reload…/Open… hold the open catalog in place until it is answered.
+  private(set) var pendingLeave: LeaveIntent?
+
+  /// True while the alert is on screen. Kept SEPARATE from `pendingLeave` so
+  /// the dismissal SwiftUI reports when a button is tapped cannot drop the
+  /// request before that button's action runs.
+  private(set) var isUnsavedPromptPresented = false
+
+  /// The store app-level code (the quit prompt) asks; STRONG, so a closed
+  /// window's unsaved edits still reach their prompt instead of vanishing
+  /// with the scene. Latest store created wins (one window in practice).
+  private static var retained: LocalizationStore?
+
+  /// The store a window-independent prompt (quit) should ask, or nil.
+  static var active: LocalizationStore? { retained }
+
+  init() {
+    Self.retained = self
+  }
 
   // MARK: in-memory edits
 
@@ -383,20 +434,40 @@ final class LocalizationStore {
   func adoptScanMerge(_ catalog: StringCatalog, url: URL) {
     self.catalog = catalog
     saveError = nil
-    scheduleFileWrite(catalog: catalog, url: url)
+    markDirty()
     reconcile(catalog, url: url)
   }
 
   /// True when the Translate button may start a run.
   var canTranslate: Bool { isLoaded && project != nil && !run.isRunning && !scan.isRunning }
 
+  /// True when the Save button may write the artifact.
+  var canSave: Bool { isDirty && isLoaded && project != nil }
+
+  /// True when the open catalog carries edits the file does not have yet.
+  var hasUnsavedChanges: Bool { isDirty && isLoaded }
+
   /// Kicks the pipeline off from the Translate button (async Task; re-entry
-  /// is guarded by `begin`). When the run returns, the DB is flushed back
-  /// into the .xcstrings artifact and the updated catalog is adopted so the
-  /// table shows the machine output without a reload.
+  /// is guarded by `begin`). When the run returns, its DB output is merged
+  /// into the OPEN in-memory catalog — never written: the artifact changes
+  /// only on Save, so a run cannot touch a file behind the user's back.
   func startTranslate() {
-    guard let project, run.begin(project: project) else { return }
+    guard let project, beginRun(project: project, key: nil, languages: nil, force: false) else { return }
     Task { await performTranslate(project: project, key: nil) }
+  }
+
+  /// Prepares a run's scope, then starts its lifecycle. Plural forms the
+  /// catalog does not have yet are varied FIRST (in memory — the artifact is
+  /// written only by Save), so the controller's spinner candidates include
+  /// them. False when a run is already active.
+  private func beginRun(project: Project, key: String?, languages: Set<String>?, force: Bool) -> Bool {
+    guard !run.isRunning else { return false }
+    if let varied = run.ensurePluralForms(
+      project: project, catalog: catalog, key: key, languages: languages) {
+      catalog = varied
+      markDirty()
+    }
+    return run.begin(project: project, key: key, languages: languages, force: force)
   }
 
   /// Row-menu "Translate": runs the pipeline scoped to a single key AND only
@@ -407,7 +478,7 @@ final class LocalizationStore {
   /// targets (nothing is translated).
   func translateKey(_ key: String) {
     let languages = Set(selectedLanguages)
-    guard let project, run.begin(project: project, key: key, languages: languages, force: true) else { return }
+    guard let project, beginRun(project: project, key: key, languages: languages, force: true) else { return }
     Task { await performTranslate(project: project, key: key, languages: languages, force: true) }
   }
 
@@ -481,27 +552,27 @@ final class LocalizationStore {
 
   /// Untranslated / needs-review row: run the whole pipeline for this one key.
   private func inspectFullRun(key: String, project: Project, languages: Set<String>?) async {
-    // `languages` nil means "every target language of the key".
+    // `languages` nil means "every target language of the key". The run gets
+    // the OPEN catalog (never the file): unsaved edits are its prompt context,
+    // and a run writes nothing to the artifact.
     let summary = await TranslationPipeline.run(
       project: project,
       key: key,
       languages: languages,
       force: true,
+      catalog: catalog,
       trace: trace)
     trace.note("Run finished: \(summary.recordsTouched) record(s) touched, \(summary.failures.count) failure(s)")
 
-    // Fold the writes back into the catalog/table exactly like a normal run.
-    CatalogFileIO.flush()
-    if let reloaded = try? StringCatalog.load(url: project.catalogURL) {
-      catalog = reloaded
-    }
+    // Fold the writes back into the catalog/table — in memory, exactly like a
+    // normal run.
     if let catalog {
       let merged = Reconcile.merge(catalog, project: project, keys: [key])
       self.catalog = merged.catalog
       rebuildRecordIndex()
       buildRows()
       if merged.changed {
-        scheduleFileWrite(catalog: merged.catalog, url: project.catalogURL)
+        markDirty()
       }
     }
   }
@@ -523,16 +594,13 @@ final class LocalizationStore {
   }
 
   private func performTranslate(project: Project, key: String? = nil, languages: Set<String>? = nil, force: Bool = false) async {
-    let summary = await run.execute(project: project, key: key, languages: languages, force: force)
+    let summary = await run.execute(
+      project: project, key: key, languages: languages, force: force, catalog: catalog)
     defer { run.finish(summary) }
-    // The pipeline's plural reconcile may have written new variation
-    // skeletons straight to the file (its own threads, already landed):
-    // drain any still-queued UI writes, then re-read the artifact so the
-    // merge below sees the file side, then adopt + re-index.
-    CatalogFileIO.flush()
-    if let reloaded = try? StringCatalog.load(url: project.catalogURL) {
-      catalog = reloaded
-    }
+    // The run writes the DB only — its output reaches the artifact by merging
+    // into the OPEN in-memory catalog, never by re-reading the file (which
+    // predates every unsaved edit in this window, and is not written by
+    // anything but Save).
     guard let catalog else { return }
     let merged = Reconcile.merge(catalog, project: project, keys: key.map { [$0] })
     self.catalog = merged.catalog
@@ -540,7 +608,7 @@ final class LocalizationStore {
     saveError = nil
     buildRows()
     if merged.changed {
-      scheduleFileWrite(catalog: merged.catalog, url: project.catalogURL)
+      markDirty()
     }
   }
 
@@ -558,7 +626,7 @@ final class LocalizationStore {
     varyByPlural(key: key)
     guard let project else { return }
     let languages = Set(selectedLanguages)
-    guard run.begin(project: project, key: key, languages: languages, force: true) else { return }
+    guard beginRun(project: project, key: key, languages: languages, force: true) else { return }
     Task { await performGeneratePlural(project: project, key: key, languages: languages) }
   }
 
@@ -596,7 +664,7 @@ final class LocalizationStore {
               mutated.setSourcePluralValue(text, key: key, category: category)
             }
           }
-          scheduleFileWrite(catalog: mutated, url: project.catalogURL)
+          markDirty()
           await MainActor.run {
             self.catalog = mutated
             buildRows()
@@ -626,7 +694,7 @@ final class LocalizationStore {
     catalog.varyByPlural(key: key, languages: languages)
     self.catalog = catalog
     saveError = nil
-    scheduleFileWrite(catalog: catalog, url: project.catalogURL)
+    markDirty()
     reconcile(catalog, url: project.catalogURL)
   }
 
@@ -643,7 +711,7 @@ final class LocalizationStore {
     try? context.save()
     self.catalog = catalog
     saveError = nil
-    scheduleFileWrite(catalog: catalog, url: project.catalogURL)
+    markDirty()
     reconcile(catalog, url: project.catalogURL)
   }
 
@@ -669,7 +737,7 @@ final class LocalizationStore {
     }
     self.catalog = catalog
     saveError = nil
-    scheduleFileWrite(catalog: catalog, url: project.catalogURL)
+    markDirty()
     rebuildRecordIndex()
     reconcile(catalog, url: project.catalogURL)
   }
@@ -753,7 +821,7 @@ final class LocalizationStore {
     saveError = nil
     buildRows()
     if merged.changed {
-      scheduleFileWrite(catalog: merged.catalog, url: project.catalogURL)
+      markDirty()
     }
   }
 
@@ -872,7 +940,7 @@ final class LocalizationStore {
       self.catalog = catalog
       saveError = nil
       buildRows()
-      scheduleFileWrite(catalog: catalog, url: project.catalogURL)
+      markDirty()
       return
     }
     let context = TranslationStore.shared.context
@@ -893,7 +961,7 @@ final class LocalizationStore {
       self.catalog = catalog
       saveError = nil
       buildRows()
-      scheduleFileWrite(catalog: catalog, url: project.catalogURL)
+      markDirty()
       return
     }
     let sourceText = catalog.sourcePluralDisplay(for: key, category: category)
@@ -1007,6 +1075,103 @@ final class LocalizationStore {
     saveError ?? loadError
   }
 
+  // MARK: - save (the only writer)
+
+  /// Writes the open catalog back to its .xcstrings artifact. Save is the
+  /// ONLY write path in the app: nothing saves implicitly — not a cell edit,
+  /// not a Translate run, not the plural skeletons a run creates.
+  func save() async {
+    guard let catalog, let url = project?.catalogURL ?? catalogURL else { return }
+    do {
+      try await CatalogFileIO.write(catalog, to: url)
+      saveError = nil
+      isDirty = false
+    } catch {
+      saveError = error.localizedDescription
+    }
+  }
+
+  /// Synchronous save for the quit prompt, where no runloop remains to await
+  /// on. Returns false — with `saveError` set — when the write failed, so the
+  /// caller can refuse to terminate instead of losing the edits.
+  func saveBeforeTerminating() -> Bool {
+    guard let catalog, let url = project?.catalogURL ?? catalogURL else { return true }
+    do {
+      try CatalogFileIO.writeSync(catalog, to: url)
+      saveError = nil
+      isDirty = false
+      return true
+    } catch {
+      saveError = error.localizedDescription
+      return false
+    }
+  }
+
+  // MARK: - unsaved-changes prompt
+
+  /// Alert title while a leave request waits on the prompt.
+  var unsavedChangesTitle: String {
+    "Save changes to \(unsavedCatalogName)?"
+  }
+
+  /// Alert body: what the pending leave would do with the unsaved edits.
+  var unsavedChangesMessage: String {
+    switch pendingLeave {
+    case .reload:
+      return "Reloading discards the edits this window has not written to the catalog yet."
+    case .open, .openPanel:
+      return "Opening another catalog discards the edits this window has not written to the catalog yet."
+    case nil:
+      return ""
+    }
+  }
+
+  /// The file the unsaved edits belong to, for prompt text.
+  var unsavedCatalogName: String {
+    (project?.catalogURL ?? catalogURL)?.lastPathComponent ?? "the catalog"
+  }
+
+  /// Raises the unsaved-changes alert for a leave request.
+  private func presentUnsavedPrompt(_ intent: LeaveIntent) {
+    pendingLeave = intent
+    isUnsavedPromptPresented = true
+  }
+
+  /// Closes the alert UI. The request itself stays pending until a button
+  /// answers it, so an order-of-events difference between dismissal and the
+  /// button action can never lose the user's choice.
+  func dismissUnsavedPrompt() {
+    isUnsavedPromptPresented = false
+  }
+
+  /// Answers the unsaved-changes prompt: write the catalog first, drop the
+  /// in-memory edits, or stay where we are.
+  func resolvePendingLeave(_ choice: LeaveChoice) async {
+    guard let intent = pendingLeave else { return }
+    pendingLeave = nil
+    isUnsavedPromptPresented = false
+    switch choice {
+    case .cancel:
+      return
+    case .discard:
+      await performLeave(intent)
+    case .save:
+      await save()
+      // A failed write keeps us in place: saveError is showing.
+      guard !isDirty else { return }
+      await performLeave(intent)
+    }
+  }
+
+  /// Runs the request the prompt was standing in front of.
+  private func performLeave(_ intent: LeaveIntent) async {
+    switch intent {
+    case .reload: await performReload()
+    case .open(let url): await performOpen(url)
+    case .openPanel: presentOpenPanel()
+    }
+  }
+
   // MARK: - loading
 
   /// <root>/Dev/Localization/<this file> — drop 3 path components to reach
@@ -1027,7 +1192,18 @@ final class LocalizationStore {
     await open(url)
   }
 
+  /// Toolbar Open…: held on the unsaved-changes prompt first, so the file
+  /// panel only appears once leaving has been answered.
   func openPanelAndLoad() {
+    guard !hasUnsavedChanges else {
+      presentUnsavedPrompt(.openPanel)
+      return
+    }
+    presentOpenPanel()
+  }
+
+  /// Unguarded half: shows the .xcstrings file panel and opens the choice.
+  private func presentOpenPanel() {
     let panel = NSOpenPanel()
     panel.canChooseFiles = true
     panel.canChooseDirectories = false
@@ -1037,16 +1213,28 @@ final class LocalizationStore {
       panel.allowedContentTypes = [type]
     }
     guard panel.runModal() == .OK, let url = panel.url else { return }
-    // Parse + adopt happen off the main thread inside async `open`; the
-    // panel itself stays on main.
-    Task { await self.open(url) }
+    // Unguarded: the prompt (if any) was answered before the panel appeared,
+    // so this must not ask again — re-entering the guarded `open` here would
+    // loop the prompt forever on a discarded-edit leave.
+    Task { await self.performOpen(url) }
+  }
+
+  /// Opens `url`. When the open catalog has unsaved edits the request is held
+  /// on the unsaved-changes prompt instead — nothing is written implicitly, so
+  /// leaving has to be answered first.
+  func open(_ url: URL) async {
+    guard !hasUnsavedChanges else {
+      presentUnsavedPrompt(.open(url))
+      return
+    }
+    await performOpen(url)
   }
 
   /// Full (re)load: parse + reset everything. Used by Open….
   /// No language is selected by default; the user picks via the buttons.
   /// The .xcstrings decode runs off the main thread; the catalog adoption
   /// (reconcile, rows) happens on the main actor afterwards.
-  func open(_ url: URL) async {
+  private func performOpen(_ url: URL) async {
     let generation = await MainActor.run { () -> Int in
       self.loadGeneration += 1
       return self.loadGeneration
@@ -1088,13 +1276,26 @@ final class LocalizationStore {
       recordIndex = [:]
       rows = []
       visibleRows = []
+      isDirty = false
+      pendingLeave = nil
+      isUnsavedPromptPresented = false
       loadError = error.localizedDescription
     }
   }
 
   /// Re-read the current file and drop overrides; view state is untouched.
-  /// Decodes off the main thread like `open`.
+  /// Decodes off the main thread like `open`. Held on the unsaved-changes
+  /// prompt when there are edits the file does not have yet.
   func reload() async {
+    guard !hasUnsavedChanges else {
+      presentUnsavedPrompt(.reload)
+      return
+    }
+    await performReload()
+  }
+
+  /// Unguarded half of `reload`: re-reads the file and drops the overrides.
+  private func performReload() async {
     guard let catalogURL else { return }
     let generation = await MainActor.run { () -> Int in
       self.loadGeneration += 1
@@ -1124,6 +1325,10 @@ final class LocalizationStore {
     catalogURL = url
     valueOverrides = [:]
     revision += 1
+    // A freshly parsed catalog carries no edits of ours.
+    isDirty = false
+    pendingLeave = nil
+    isUnsavedPromptPresented = false
     reconcile(catalog, url: url)
   }
 
@@ -1172,13 +1377,12 @@ final class LocalizationStore {
   /// never stacks or applies stale state over newer work.
   private var loadGeneration = 0
 
-  /// Hands a catalog to the coalescing file-I/O worker (CatalogFileIO); a
-  /// failed write surfaces as `saveError` on the main thread, where the
-  /// alert lives.
-  private func scheduleFileWrite(catalog: StringCatalog, url: URL) {
-    CatalogFileIO.schedule(catalog, to: url) { [weak self] message in
-      self?.saveError = message
-    }
+  /// Marks the open catalog as carrying edits the file does not have yet.
+  /// Every catalog mutation funnels here instead of writing: the artifact is
+  /// only written by `save()`, so an edit is durable in the DB (records) and
+  /// pending on disk until the user saves.
+  private func markDirty() {
+    isDirty = true
   }
 
   // MARK: - rows
@@ -1433,48 +1637,40 @@ func folded(_ string: String) -> String {
   string.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
 }
 
-// MARK: - Background catalog file I/O
+// MARK: - Catalog file I/O
 
-/// Serial worker for all .xcstrings file I/O behind the UI. Saves are
-/// coalesced latest-wins: a request arriving while another write is queued
-/// or in flight REPLACES the queued payload, so a burst of edits yields at
-/// most one extra write — always of the newest state — and saves never
-/// accumulate. `flush()` lets a reader block until previously requested
-/// writes have landed (open/reload and the pipeline's file re-reads).
+/// Serial worker for .xcstrings writes. It has exactly ONE caller — the
+/// store's `save()` — because nothing in this app writes the artifact
+/// implicitly: no edit, no run, no skeleton. The queue keeps a save off the
+/// main thread and `flush()` lets a reader block until an in-flight write has
+/// landed (open/reload, and a run that reads the file when no catalog is
+/// open).
 enum CatalogFileIO {
   private static let queue = DispatchQueue(
     label: "dev.v57.dev.catalog-fileio", qos: .userInitiated)
-  /// Newest payload awaiting its write; touched only on `queue`.
-  private static var queued: (url: URL, catalog: StringCatalog)?
-  private static var loopActive = false
 
-  /// Persist `catalog` to `url` on the worker queue (latest-wins). A
-  /// failure is reported through `onFailure` on the main thread.
-  static func schedule(
-    _ catalog: StringCatalog,
-    to url: URL,
-    onFailure: ((String) -> Void)? = nil
-  ) {
-    queue.async {
-      queued = (url, catalog)
-      guard !loopActive else { return }
-      loopActive = true
-      while let next = queued {
-        queued = nil
+  /// Writes `catalog` to `url` off the main thread. Throws the encode/write
+  /// failure to the caller, which turns it into the save alert.
+  static func write(_ catalog: StringCatalog, to url: URL) async throws {
+    try await withCheckedThrowingContinuation { continuation in
+      queue.async {
         do {
-          try next.catalog.save(to: next.url)
+          try catalog.save(to: url)
+          continuation.resume(returning: ())
         } catch {
-          let message = error.localizedDescription
-          if let onFailure {
-            DispatchQueue.main.async { onFailure(message) }
-          }
+          continuation.resume(throwing: error)
         }
       }
-      loopActive = false
     }
   }
 
-  /// Blocks the caller until every previously-scheduled write has landed.
+  /// Synchronous variant for the quit prompt, where no runloop is left to
+  /// await on. Throws so the caller can refuse to terminate.
+  static func writeSync(_ catalog: StringCatalog, to url: URL) throws {
+    try queue.sync { try catalog.save(to: url) }
+  }
+
+  /// Blocks the caller until every previously requested write has landed.
   /// Never call from `queue` itself.
   static func flush() {
     queue.sync {}

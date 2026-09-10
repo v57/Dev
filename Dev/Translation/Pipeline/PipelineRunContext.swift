@@ -15,9 +15,12 @@ import SwiftData
 ///  - the owning `Project` and ALL of its records (sorted, live objects),
 ///  - every ContextDoc that exists (global / project / language), fetched
 ///    once; docs created mid-run by Stage 0 are appended here as they go,
-///  - the merged catalog at `project.catalogURL` (best-effort) so prompts
-///    and Stage-0 lessons can carry the developer COMMENT, which the record
-///    model intentionally does not store,
+///  - the catalog the run prompts against: the caller's OPEN in-memory
+///    catalog when it hands one over (the UI's, which may carry edits the
+///    file has not been given yet — Save is the only writer), else the
+///    parsed file at `project.catalogURL` (best-effort) — either way so
+///    prompts and Stage-0 lessons carry the developer COMMENT, which the
+///    record model intentionally does not store,
 ///  - the source language (catalog wins, else the run parameter, else "en").
 ///
 /// Main-actor isolated by the module default: SwiftData objects are read and
@@ -51,7 +54,8 @@ final class PipelineRunContext {
   private var docs: [ContextDoc]
 
   /// Best-effort catalog mirror (nil when the file is missing/unreadable).
-  /// Refreshed by `reconcilePluralForms()` when it writes new skeletons.
+  /// Refreshed by `reconcilePluralForms()` when it varies new skeletons —
+  /// in memory only: a run never writes the artifact.
   private(set) var catalog: StringCatalog?
 
   /// Per-language neighbor pools, built lazily: target-language values of
@@ -69,7 +73,8 @@ final class PipelineRunContext {
     sourceLanguage: String? = nil,
     targetKey: String? = nil,
     targetLanguages: Set<String>? = nil,
-    force: Bool = false
+    force: Bool = false,
+    catalog callerCatalog: StringCatalog? = nil
   ) {
     self.context = context
     self.project = project
@@ -77,11 +82,13 @@ final class PipelineRunContext {
     self.targetLanguages = targetLanguages
     self.force = force
     // Catalog wins over the caller's guess: the file IS the source of truth
-    // for the source language and comments. Drain the UI's coalescing worker
-    // first so this snapshot sees every save that predates the run.
+    // for the source language and comments — unless the caller hands over the
+    // UI's open catalog, which may carry edits the file has not been given
+    // yet (Save is the only writer), so the file must NOT be read over it.
+    // Drain an in-flight save first so a file read sees every write.
     CatalogFileIO.flush()
-    let catalog = (try? StringCatalog.load(url: project.catalogURL))
-    self.catalog = catalog
+    let loaded = callerCatalog ?? (try? StringCatalog.load(url: project.catalogURL))
+    self.catalog = loaded
     self.sourceLanguage = catalog?.sourceLanguage ?? sourceLanguage ?? "en"
     var allDocs: [ContextDoc] = []
     let descriptor = FetchDescriptor<ContextDoc>()
@@ -189,8 +196,9 @@ final class PipelineRunContext {
 
   /// Ensures every targeted plural key carries a form record per CLDR
   /// category of each targeted language: creates missing form records
-  /// (empty, from the source form) and missing CLDR forms in the file
-  /// skeleton. Runs BEFORE the stages on every Translate run (whole-catalog
+  /// (empty, from the source form) and missing CLDR forms in this run's
+  /// in-memory catalog mirror (never on disk — Save is the only writer).
+  /// Runs BEFORE the stages on every Translate run (whole-catalog
   /// and single-key), so AI fills forms the human never created by hand —
   /// "Translate" creates the missing categories. A key whose source has no
   /// plural variation gains no target forms (nothing to translate from).
@@ -224,7 +232,7 @@ final class PipelineRunContext {
         if !hasPlural && hasFlat {
           var mutable = catalog
           mutable.varyByPlural(key: key, languages: [language])
-          persistCatalog(mutable)
+          adoptCatalog(mutable)
         } else if !hasPlural && !hasFlat && (targetLanguages == nil || isTargetLanguage(language)) {
           // Whole-catalog run, or this language is in scope: create the
           // skeleton for the AI to fill. Single-key runs with no columns
@@ -232,7 +240,7 @@ final class PipelineRunContext {
           if targetLanguages?.isEmpty == true { continue }
           var mutable = catalog
           mutable.varyByPlural(key: key, languages: [language])
-          persistCatalog(mutable)
+          adoptCatalog(mutable)
         }
         guard catalog.hasPlurals(for: key, language: language) else { continue }
         for category in PluralRules.categories(for: language) {
@@ -272,14 +280,11 @@ final class PipelineRunContext {
     allRecords.first { $0.key == key && $0.language == language && $0.category == category }
   }
 
-  /// Persists a mutated catalog copy back to the artifact and refreshes the
-  /// cached mirror so later stages see the skeleton.
-  private func persistCatalog(_ mutated: StringCatalog) {
-    do {
-      try mutated.save(to: project.catalogURL)
-    } catch {
-      return
-    }
+  /// Adopts a mutated catalog copy into the run's mirror so later stages see
+  /// the skeleton. The artifact is NEVER written here: Save is the only
+  /// writer, and the UI merges this run's DB output into its own catalog when
+  /// the run returns.
+  private func adoptCatalog(_ mutated: StringCatalog) {
     catalog = mutated
   }
 

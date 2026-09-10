@@ -26,6 +26,24 @@ struct ContentView: View {
     }
     .environment(createIcon)
     .environment(localizationStore)
+    // Unsaved-changes prompt: Reload…, Open…, a sidebar project switch and
+    // quitting all hold their request here until it is answered, because
+    // Save is the only writer of the .xcstrings. Attached at the root so a
+    // hidden Localize pane cannot swallow the prompt.
+    .alert(localizationStore.unsavedChangesTitle, isPresented: Binding(
+      get: { localizationStore.isUnsavedPromptPresented },
+      set: { if !$0 { localizationStore.dismissUnsavedPrompt() } }
+    )) {
+      Button("Save") { Task { await localizationStore.resolvePendingLeave(.save) } }
+      Button("Discard", role: .destructive) {
+        Task { await localizationStore.resolvePendingLeave(.discard) }
+      }
+      Button("Cancel", role: .cancel) {
+        Task { await localizationStore.resolvePendingLeave(.cancel) }
+      }
+    } message: {
+      Text(localizationStore.unsavedChangesMessage)
+    }
     // Restore the remembered imported translation DB (path only — no open,
     // no scan) so the pipeline knows it is active.
     .task {

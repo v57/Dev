@@ -33,6 +33,16 @@ struct ControlsBar: ToolbarContent {
       .disabled(!store.canScan)
       .help("Scan the project's Swift packages and Xcode targets for localizable strings, then merge the new keys into this catalog (existing translations are never touched)")
       Button {
+        Task { await store.save() }
+      } label: {
+        Label("Save", systemImage: "square.and.arrow.down")
+      }
+      .keyboardShortcut("s")
+      .disabled(!store.canSave)
+      .help(store.canSave
+        ? "Write the edited catalog to \\(store.unsavedCatalogName) — nothing saves on its own"
+        : "No unsaved changes")
+      Button {
         Task { await store.reload() }
       } label: {
         Label("Reload", systemImage: "arrow.clockwise")

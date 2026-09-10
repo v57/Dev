@@ -52,6 +52,11 @@ import SwiftData
 /// Backend calls run ~3 at a time (off-main, the backends are nonisolated);
 /// SwiftData reads/writes stay on the main actor. Progress + cancellation
 /// flow through `TranslateRunProgress`.
+///
+/// A run NEVER writes the .xcstrings artifact — `Save` is the only writer.
+/// It takes the caller's open in-memory catalog as its prompt/comment
+/// source (`catalog:`; nil = read the file), and the caller merges the run's
+/// DB output back into its own catalog when the run returns.
 struct TranslationPipeline {
   /// Convenience entry for the Translate button: runs against the app's ONE
   /// shared SwiftData context (TranslationStore.shared.context).
@@ -61,6 +66,7 @@ struct TranslationPipeline {
     key: String? = nil,
     languages: Set<String>? = nil,
     force: Bool = false,
+    catalog: StringCatalog? = nil,
     progress: TranslateRunProgress? = nil,
     trace: TranslationTrace? = nil
   ) async -> PipelineRunSummary {
@@ -71,6 +77,7 @@ struct TranslationPipeline {
       key: key,
       languages: languages,
       force: force,
+      catalog: catalog,
       progress: progress,
       trace: trace
     )
@@ -79,7 +86,8 @@ struct TranslationPipeline {
   /// Runs the pipeline for one project (or, when `key` is set, for exactly
   /// one key of it — and, when `languages` is set, only those target
   /// languages of that key). `sourceLanguage` is only a fallback — the
-  /// project's catalog file, when readable, is authoritative.
+  /// catalog is authoritative: `catalog` when the caller hands one over
+  /// (the UI's open catalog, unsaved edits included), else `project.catalogURL`.
   static func run(
     project: Project,
     context: ModelContext,
@@ -87,6 +95,7 @@ struct TranslationPipeline {
     key: String? = nil,
     languages: Set<String>? = nil,
     force: Bool = false,
+    catalog: StringCatalog? = nil,
     progress: TranslateRunProgress? = nil,
     trace: TranslationTrace? = nil
   ) async -> PipelineRunSummary {
@@ -97,7 +106,8 @@ struct TranslationPipeline {
       sourceLanguage: sourceLanguage,
       targetKey: key,
       targetLanguages: languages,
-      force: force
+      force: force,
+      catalog: catalog
     )
     progress?.note(key == nil
       ? "Translate run: \(project.name) (\(env.allRecords.count) records, source \(env.sourceLanguage))"

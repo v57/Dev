@@ -67,14 +67,13 @@ final class TranslateRunController {
   /// Same as `begin(project:)` but scopes the run (and its per-cell spinner
   /// candidates) to a single key and `languages` (the selected columns), and
   /// — when `force` — lifts the freshness gate so fresh machine values are
-  /// re-targeted (row "Translate"). Plural form records that do not exist
-  /// yet are created up front (same rule as the pipeline's own reconcile),
-  /// so the spinner covers forms the run is about to fill.
+  /// re-targeted (row "Translate") on a forced run. The caller must run
+  /// `ensurePluralForms` FIRST when the run needs plural forms the catalog
+  /// does not have yet, so the spinner covers forms the run is about to fill.
   func begin(project: Project, key: String?, languages: Set<String>?, force: Bool) -> Bool {
     guard !isRunning else { return false }
     progress = TranslateRunProgress()
     summary = nil
-    ensurePluralForms(project: project, key: key, languages: languages)
     candidates = Self.candidateRecords(of: project, key: key, languages: languages, force: force)
     startedAt = .now
     isRunning = true
@@ -99,9 +98,13 @@ final class TranslateRunController {
 
   /// Runs the pipeline scoped to one key (row-menu "Translate"), restricted
   /// to `languages` when set — else the whole project. `force` lifts the
-  /// freshness gate for the targeted records.
-  func execute(project: Project, key: String?, languages: Set<String>?, force: Bool) async -> PipelineRunSummary {
-    await TranslationPipeline.run(project: project, key: key, languages: languages, force: force, progress: progress)
+  /// freshness gate for the targeted records. `catalog` is the UI's OPEN
+  /// in-memory catalog (prompt/comment source and the run's non-destructive
+  /// view of the world); the caller merges the run's output afterwards.
+  func execute(project: Project, key: String?, languages: Set<String>?, force: Bool, catalog: StringCatalog? = nil) async -> PipelineRunSummary {
+    await TranslationPipeline.run(
+      project: project, key: key, languages: languages, force: force,
+      catalog: catalog, progress: progress)
   }
 
   /// Ends the run and publishes the summary. Called after the caller has
@@ -126,18 +129,26 @@ final class TranslateRunController {
     progress = TranslateRunProgress()
   }
 
-  // MARK: - candidate snapshot
+  // MARK: - plural skeletons
 
-  /// Creates missing plural form records + file skeletons for the run's
-  /// scope BEFORE the candidate snapshot, so newly created forms are
-  /// spinner candidates. Mirrors the pipeline's reconcile rule: only keys
+  /// Creates the missing plural form records + the CLDR form skeleton for
+  /// the run's scope, so newly created forms are spinner candidates and the
+  /// run has forms to fill. Runs BEFORE `begin` — the candidate snapshot must
+  /// see the new records. Mirrors the pipeline's reconcile rule: only keys
   /// whose SOURCE is plural-varied gain forms; single-key runs with no
   /// columns selected (empty set) create nothing.
-  private func ensurePluralForms(project: Project, key: String?, languages: Set<String>?) {
-    // The UI's coalescing worker may still hold the latest save — drain it
-    // so this file read observes every prior write.
-    CatalogFileIO.flush()
-    guard var catalog = try? StringCatalog.load(url: project.catalogURL) else { return }
+  ///
+  /// The catalog half happens on the caller's OPEN catalog, which the caller
+  /// adopts back (this controller never writes the artifact — Save is the
+  /// only writer). Returns the varied catalog, or nil when nothing needed
+  /// varying.
+  func ensurePluralForms(
+    project: Project,
+    catalog: StringCatalog?,
+    key: String?,
+    languages: Set<String>?
+  ) -> StringCatalog? {
+    guard var mutated = catalog else { return nil }
     let context = TranslationStore.shared.context
     let keys: [String]
     if let key {
@@ -145,30 +156,30 @@ final class TranslateRunController {
     } else {
       keys = project.records.map(\.key).uniqued()
     }
-    var touchedFile = false
+    var varied = false
     var touchedDB = false
     for targetKey in keys {
-      guard catalog.hasPlurals(for: targetKey, language: catalog.sourceLanguage) else { continue }
+      guard mutated.hasPlurals(for: targetKey, language: mutated.sourceLanguage) else { continue }
       let targetLanguages: [String]
       if let languages {
         if languages.isEmpty { continue }
         targetLanguages = Array(languages)
       } else {
-        targetLanguages = catalog.languages.filter { $0 != catalog.sourceLanguage }
+        targetLanguages = mutated.languages.filter { $0 != mutated.sourceLanguage }
       }
       for language in targetLanguages {
-        if !catalog.hasPlurals(for: targetKey, language: language) {
-          catalog.varyByPlural(key: targetKey, languages: [language])
-          touchedFile = true
+        if !mutated.hasPlurals(for: targetKey, language: language) {
+          mutated.varyByPlural(key: targetKey, languages: [language])
+          varied = true
         }
-        guard catalog.hasPlurals(for: targetKey, language: language) else { continue }
+        guard mutated.hasPlurals(for: targetKey, language: language) else { continue }
         for category in PluralRules.categories(for: language) {
           if Reconcile.record(key: targetKey, language: language, category: category, in: project) != nil {
             continue
           }
           let record = TranslationRecord(
             key: targetKey,
-            sourceText: catalog.sourcePluralDisplay(for: targetKey, category: category),
+            sourceText: mutated.sourcePluralDisplay(for: targetKey, category: category),
             language: language,
             value: nil, provider: nil, state: .empty,
             contextVersions: Reconcile.persistableVersions(ContextVersions()),
@@ -182,9 +193,7 @@ final class TranslateRunController {
     if touchedDB {
       try? context.save()
     }
-    if touchedFile {
-      CatalogFileIO.schedule(catalog, to: project.catalogURL)
-    }
+    return varied ? mutated : nil
   }
 
   /// The records this run's stages could touch: not human-owned (.reviewed
