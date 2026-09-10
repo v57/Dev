@@ -176,10 +176,24 @@ enum Reconcile {
     }
 
     let sourceLanguage = catalog.sourceLanguage
+    // Newly created records are linked to the project in ONE bulk append
+    // after the loop, never `record.project = project` per record: assigning
+    // the to-one inside the loop makes SwiftData run its inverse-maintenance
+    // bookkeeping once per insert, which is quadratic-ish on a big catalog —
+    // measured 46.1 s for 48,420 records that way versus 2.0 s for
+    // insert-then-`project.records.append(contentsOf:)` (7 MB / 1382-key
+    // playgra catalog, 37 languages; the assignment must not move back into
+    // the loop, and setting it BEFORE the insert is worse still: 455 s).
+    // `catalog.languages` is COMPUTED: it walks every entry of the catalog and
+    // sorts the result. Evaluating it inside the key loop made the reconcile
+    // quadratic in the key count (1382 x 1382 entry walks for the playgra
+    // catalog). Hoisted once, like `sourceLanguage`.
+    let sourceLanguages = catalog.languages
+    var created: [TranslationRecord] = []
     for (key, entry) in catalog.strings {
       // Non-translatable keys are hidden from the workflow entirely.
       if entry.shouldTranslate == false { continue }
-      for language in catalog.languages where language != sourceLanguage {
+      for language in sourceLanguages where language != sourceLanguage {
         let loc = entry.localizations?[language]
         let variations = loc?.variations ?? [:]
         let deviceOnly = !variations.isEmpty && variations["plural"] == nil
@@ -199,7 +213,8 @@ enum Reconcile {
               sourceText: catalog.sourcePluralDisplay(for: key, category: category),
               value: value,
               seedState: unit.map { seedState(fileState: $0.state) },
-              in: project, context: context, bySlot: &bySlot, stats: &stats)
+              context: context, bySlot: &bySlot, stats: &stats,
+              created: &created)
           }
           continue
         }
@@ -214,12 +229,56 @@ enum Reconcile {
           sourceText: catalog.sourceDisplay(for: key),
           value: value,
           seedState: unit.map { seedState(fileState: $0.state) },
-          in: project, context: context, bySlot: &bySlot, stats: &stats)
+          context: context, bySlot: &bySlot, stats: &stats,
+          created: &created)
       }
+    }
+    if !created.isEmpty {
+      project.records.append(contentsOf: created)
     }
 
     try? context.save()
     return stats
+  }
+
+  /// What the FILE says one slot should be — the target an unowned mirror
+  /// must equal after a reconcile.
+  ///
+  /// Exists so the upsert can COMPARE before writing. The previous version
+  /// rewrote every unowned mirror record on every open unconditionally
+  /// (measured: 45,306 records rewritten, 12.7 s on the 7 MB / 1382-key
+  /// playgra catalog) even when file and DB already agreed, and bumped
+  /// `updatedAt` on rows nothing had touched.
+  private struct FileSlot {
+    let value: String?
+    let state: TranslationState
+    let sourceText: String
+
+    /// True when `record` already carries exactly the file's slot: value,
+    /// mapped state, source text and the reset provenance an unowned mirror
+    /// has (no provider/confidence/review stamp, default context versions).
+    func matches(_ record: TranslationRecord) -> Bool {
+      record.value == value
+        && record.state == state
+        && record.provider == nil
+        && record.confidence == nil
+        && record.reviewedAt == nil
+        && record.sourceText == sourceText
+        && record.contextVersions == persistableVersions(ContextVersions())
+    }
+
+    /// Adopts the file's slot: the value and mapped state, plus the provenance
+    /// reset that marks the record an unowned mirror again.
+    func apply(to record: TranslationRecord) {
+      record.value = value
+      record.state = state
+      record.provider = nil
+      record.confidence = nil
+      record.reviewedAt = nil
+      record.contextVersions = persistableVersions(ContextVersions())
+      record.sourceText = sourceText
+      record.updatedAt = .now
+    }
   }
 
   /// Plural (key, language, category) slot. Same ownership rule as the flat
@@ -233,39 +292,25 @@ enum Reconcile {
     sourceText: String,
     value: String?,
     seedState: TranslationState?,
-    in project: Project,
     context: ModelContext,
     bySlot: inout [String: [String: [String: TranslationRecord]]],
-    stats: inout UpsertStats
+    stats: inout UpsertStats,
+    created: inout [TranslationRecord]
   ) {
     if let record = bySlot[key]?[language]?[category] {
-      let owned = record.provider != nil || !record.edits.isEmpty
-      if owned {
-        record.sourceText = sourceText
+      let fileSlot = FileSlot(
+        value: value, state: value != nil ? (seedState ?? .needs_review) : .empty,
+        sourceText: sourceText)
+      if record.provider != nil || !record.edits.isEmpty {
+        // DB-OWNED record: keep value/provider/state/versions; refresh the
+        // source text only when it actually moved.
+        if record.sourceText != sourceText { record.sourceText = sourceText }
         stats.kept += 1
-      } else if let value, let seedState {
-        record.value = value
-        record.state = seedState
-        record.provider = nil
-        record.confidence = nil
-        record.reviewedAt = nil
-        record.contextVersions = persistableVersions(ContextVersions())
-        record.sourceText = sourceText
-        record.updatedAt = .now
-        stats.refreshed += 1
-      } else if record.value != nil || record.state != .empty {
-        record.value = nil
-        record.provider = nil
-        record.state = .empty
-        record.confidence = nil
-        record.reviewedAt = nil
-        record.contextVersions = persistableVersions(ContextVersions())
-        record.sourceText = sourceText
-        record.updatedAt = .now
-        stats.refreshed += 1
+      } else if fileSlot.matches(record) {
+        stats.kept += 1
       } else {
-        record.sourceText = sourceText
-        stats.kept += 1
+        fileSlot.apply(to: record)
+        stats.refreshed += 1
       }
       return
     }
@@ -281,7 +326,9 @@ enum Reconcile {
       category: category
     )
     context.insert(record)
-    record.project = project
+    // The project link is applied by the caller in one bulk append — see
+    // upsertFromCatalog.
+    created.append(record)
     bySlot[key, default: [:]][language, default: [:]][category] = record
     stats.created += 1
   }
@@ -304,41 +351,26 @@ enum Reconcile {
     sourceText: String,
     value: String?,
     seedState: TranslationState?,
-    in project: Project,
     context: ModelContext,
     bySlot: inout [String: [String: [String: TranslationRecord]]],
-    stats: inout UpsertStats
+    stats: inout UpsertStats,
+    created: inout [TranslationRecord]
   ) {
     if let record = bySlot[key]?[language]?[""] {
-      let owned = record.provider != nil || !record.edits.isEmpty
-      if owned {
-        record.sourceText = sourceText
+      let fileSlot = FileSlot(
+        value: value, state: value != nil ? (seedState ?? .needs_review) : .empty,
+        sourceText: sourceText)
+      if record.provider != nil || !record.edits.isEmpty {
+        // DB-OWNED record: keep value/provider/state/versions; the file may
+        // only refresh the source text (and even that is skipped when it
+        // already matches).
+        if record.sourceText != sourceText { record.sourceText = sourceText }
         stats.kept += 1
-      } else if let value, let seedState {
-        // File mirror adopts the file's current value + mapped state.
-        record.value = value
-        record.state = seedState
-        record.provider = nil
-        record.confidence = nil
-        record.reviewedAt = nil
-        record.contextVersions = persistableVersions(ContextVersions())
-        record.sourceText = sourceText
-        record.updatedAt = .now
-        stats.refreshed += 1
-      } else if record.value != nil || record.state != .empty {
-        // File mirror whose unit vanished from the file: slot goes empty.
-        record.value = nil
-        record.provider = nil
-        record.state = .empty
-        record.confidence = nil
-        record.reviewedAt = nil
-        record.contextVersions = persistableVersions(ContextVersions())
-        record.sourceText = sourceText
-        record.updatedAt = .now
-        stats.refreshed += 1
+      } else if fileSlot.matches(record) {
+        stats.kept += 1
       } else {
-        record.sourceText = sourceText
-        stats.kept += 1
+        fileSlot.apply(to: record)
+        stats.refreshed += 1
       }
       return
     }
@@ -353,7 +385,9 @@ enum Reconcile {
       contextVersions: persistableVersions(ContextVersions())
     )
     context.insert(record)
-    record.project = project
+    // The project link is applied by the caller in one bulk append — see
+    // upsertFromCatalog.
+    created.append(record)
     bySlot[key, default: [:]][language, default: [:]][""] = record
     stats.created += 1
   }

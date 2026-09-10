@@ -1240,12 +1240,9 @@ final class LocalizationStore {
       return self.loadGeneration
     }
     CatalogFileIO.flush()
-    let result: Result<StringCatalog, Error>
-    do {
-      result = .success(try StringCatalog.load(url: url))
-    } catch {
-      result = .failure(error)
-    }
+    // Off the main actor: a real detached decode, not the no-op
+    // `MainActor.run` hop this used to be (see `loadOffMainActor`).
+    let result = await StringCatalog.loadOffMainActor(url)
     await MainActor.run {
       // A newer open/reload supersedes this one — never adopt a stale parse.
       guard generation == self.loadGeneration else { return }
@@ -1332,12 +1329,7 @@ final class LocalizationStore {
       return self.loadGeneration
     }
     CatalogFileIO.flush()
-    let result: Result<StringCatalog, Error>
-    do {
-      result = .success(try StringCatalog.load(url: catalogURL))
-    } catch {
-      result = .failure(error)
-    }
+    let result = await StringCatalog.loadOffMainActor(catalogURL)
     await MainActor.run {
       guard generation == self.loadGeneration else { return }
       switch result {

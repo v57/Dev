@@ -29,7 +29,7 @@ enum StringCatalogError: LocalizedError {
 /// format, so a future schema change is a single-file fix.
 /// `nonisolated`: pure value type with no shared state — the scan engine
 /// merges into it off the main actor.
-nonisolated struct StringCatalog: Codable {
+nonisolated struct StringCatalog: Codable, Sendable {
   /// BCP-47 language code the keys are authored in ("en" for this fixture).
   var sourceLanguage: String
   /// Format version ("1.1"). Optional: version 1.0 catalogs omit it.
@@ -93,6 +93,24 @@ nonisolated struct StringCatalog: Codable {
     } catch {
       throw StringCatalogError.undecodable(url, error)
     }
+  }
+
+  /// Decodes `url` genuinely OFF the main actor, for the store's open/reload.
+  ///
+  /// `load(url:)` is a synchronous function: called from the store — whose
+  /// every method is MainActor-isolated, because this target builds with
+  /// `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` — the decode runs ON the
+  /// main thread. Wrapping the call in `await MainActor.run { … }` does NOT
+  /// change that: the hop is to the actor the caller is already on, so the
+  /// parse still blocks the UI (measured 96 ms for a 7 MB / 1382-key
+  /// catalog — noticeable on a big file, but not the freeze that matters).
+  /// Only a detached task actually moves it off.
+  nonisolated static func loadOffMainActor(
+    _ url: URL, priority: TaskPriority = .userInitiated
+  ) async -> Result<StringCatalog, Error> {
+    await Task.detached(priority: priority) {
+      do { return .success(try load(url: url)) } catch { return .failure(error) }
+    }.value
   }
 
   // MARK: - UI-facing helpers
