@@ -121,9 +121,11 @@ nonisolated struct PipelineRunSummary: Sendable {
   // Imported-DB resolve (Phase D)
   var dbFilled = 0            // empty slot filled from the imported DB
   var dbUpgraded = 0          // machine value replaced/promoted by a DB hit
-  // Translate — the only AI stage (Command Code / Muse)
+  // Translate — the only AI stage (model router: free tiers, Muse fallback)
   var translatedFilled = 0    // empty slot got a model translation
   var translatedRewritten = 0 // existing machine value replaced by the model
+  /// Values the paid verification gate corrected.
+  var translatedGateFixes = 0
   // Common
   var failures: [String] = []
   var cancelled = false

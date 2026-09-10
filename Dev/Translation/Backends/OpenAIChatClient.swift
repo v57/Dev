@@ -5,6 +5,19 @@
 
 import Foundation
 
+// MARK: - ChatReply
+
+/// One model reply plus the token accounting the provider reported.
+nonisolated struct ChatReply: Sendable {
+  var content: String
+  var promptTokens: Int?
+  var completionTokens: Int?
+  /// Tokens served from the provider's prompt cache, when reported. A healthy
+  /// stable prefix shows up here; zero across a whole run means the prompt
+  /// layout is not cacheable.
+  var cachedTokens: Int?
+}
+
 // MARK: - OpenAIChatClient
 
 /// One OpenAI-compatible `POST {endpoint}` chat completion. Every hosted
@@ -19,7 +32,13 @@ nonisolated struct OpenAIChatClient: Sendable {
   var headers: [String: String] = [:]
   var timeout: TimeInterval = 180
 
-  func complete(system: String, user: String, temperature: Double = 0.2) async throws -> String {
+  func complete(
+    system: String,
+    user: String,
+    temperature: Double = 0.2,
+    maxTokens: Int? = nil,
+    jsonObject: Bool = false
+  ) async throws -> ChatReply {
     var request = URLRequest(url: endpoint)
     request.httpMethod = "POST"
     request.timeoutInterval = timeout
@@ -29,13 +48,18 @@ nonisolated struct OpenAIChatClient: Sendable {
       request.setValue(value, forHTTPHeaderField: name)
     }
     do {
-      request.httpBody = try JSONEncoder().encode(Request(
+      var body = Request(
         model: model,
         messages: [
           Request.Message(role: "system", content: system),
           Request.Message(role: "user", content: user),
         ],
-        temperature: temperature))
+        temperature: temperature,
+        max_tokens: maxTokens)
+      // JSON mode keeps batch replies parseable; providers that ignore it are
+      // unaffected because the validator parses tolerantly either way.
+      body.response_format = jsonObject ? Request.ResponseFormat(type: "json_object") : nil
+      request.httpBody = try JSONEncoder().encode(body)
     } catch {
       throw BackendError.network("could not encode request: \(error.localizedDescription)")
     }
@@ -72,7 +96,11 @@ nonisolated struct OpenAIChatClient: Sendable {
           !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
       throw BackendError.emptyResult(model)
     }
-    return content.trimmingCharacters(in: .whitespacesAndNewlines)
+    return ChatReply(
+      content: content.trimmingCharacters(in: .whitespacesAndNewlines),
+      promptTokens: decoded.usage?.prompt_tokens,
+      completionTokens: decoded.usage?.completion_tokens,
+      cachedTokens: decoded.usage?.cachedTokens)
   }
 
   /// `Retry-After` in seconds, when the provider sent one.
@@ -91,10 +119,16 @@ nonisolated struct OpenAIChatClient: Sendable {
     var model: String
     var messages: [Message]
     var temperature: Double
+    var max_tokens: Int?
+    var response_format: ResponseFormat?
 
     struct Message: Encodable {
       var role: String
       var content: String
+    }
+
+    struct ResponseFormat: Encodable {
+      var type: String
     }
   }
 
@@ -106,7 +140,21 @@ nonisolated struct OpenAIChatClient: Sendable {
 
     struct APIError: Decodable { var message: String? }
 
+    struct Usage: Decodable {
+      struct PromptDetails: Decodable { var cached_tokens: Int? }
+      var prompt_tokens: Int?
+      var completion_tokens: Int?
+      /// DeepSeek reports cache hits at the top level.
+      var prompt_cache_hit_tokens: Int?
+      var prompt_tokens_details: PromptDetails?
+
+      var cachedTokens: Int? {
+        prompt_cache_hit_tokens ?? prompt_tokens_details?.cached_tokens
+      }
+    }
+
     var choices: [Choice]?
     var error: APIError?
+    var usage: Usage?
   }
 }

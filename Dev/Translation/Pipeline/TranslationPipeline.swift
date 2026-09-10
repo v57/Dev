@@ -24,14 +24,16 @@ import SwiftData
 ///                backend: exact source-text hits copy shipped human
 ///                translations as .reviewed + autoReviewed (the UI shows the
 ///                auto badge until a human confirms); misses fall through.
-///   3. TRANSLATE — every remaining record is translated by Command Code
-///                (the hosted Muse/deepseek model), the ONLY AI backend.
+///   3. TRANSLATE — every remaining record is translated in per-language
+///                batches by the model router (free tiers first, Muse last),
+///                validated, repaired singly, then passed through the paid
+///                verification gate.
 ///
 /// There is deliberately NO local draft stage. Apple Translation and Ollama
 /// (translategemma) used to pre-fill records, but a draft could only ever
 /// *pre-empt* Command Code — never improve on it — because no stage was ever
-/// shown the previous stage's value (see `translatePool`: only the source
-/// text and context reach a backend). Each pass therefore cost a full
+/// shown the previous stage's value (only source text and context ever reach
+/// a backend). Each pass therefore cost a full
 /// on-device sweep of the catalog (Apple and translategemma both run at
 /// single-digit strings/sec) while its output was simply overwritten by the
 /// next stage, or worse, survived unreviewed via the old 'providers agreed'
@@ -51,9 +53,6 @@ import SwiftData
 /// SwiftData reads/writes stay on the main actor. Progress + cancellation
 /// flow through `TranslateRunProgress`.
 struct TranslationPipeline {
-  /// How many backend calls run concurrently.
-  static let poolSize = 3
-
   /// Convenience entry for the Translate button: runs against the app's ONE
   /// shared SwiftData context (TranslationStore.shared.context).
   static func run(
@@ -162,9 +161,7 @@ struct TranslationPipeline {
       progress?.note("Imported DB: \(db.filled) filled, \(db.upgraded) upgraded")
     }
 
-    // TRANSLATE — the one AI stage. Every record that still needs a target
-    // value goes to Command Code (Muse/deepseek). No local draft stages:
-    // they could only pre-empt this model, never improve on it.
+    // TRANSLATE — the one AI stage: batch, validate, repair, paid gate.
     var translated = StageOutcome()
     if progress?.isCancelled != true {
       translated = await runTranslateStage(
@@ -174,6 +171,7 @@ struct TranslationPipeline {
       )
       summary.translatedFilled += translated.filled
       summary.translatedRewritten += translated.corrected
+      summary.translatedGateFixes += translated.gateFixes
       summary.failures += translated.failures
     }
 
@@ -404,58 +402,9 @@ struct TranslationPipeline {
   private struct StageOutcome {
     var filled = 0       // empty record got a value
     var corrected = 0    // existing machine value was rewritten (diff)
+    /// Values the paid verification gate rewrote.
+    var gateFixes = 0
     var failures: [String] = []
-  }
-
-  /// Runs one backend call per work item, ~`poolSize` at a time. Returns the
-  /// results keyed by the item's index in `work`. Pure transport: SwiftData
-  /// is not touched here, so the group runs off the main actor.
-  private static func translatePool(
-    work: [(record: TranslationRecord, context: TranslationContext)],
-    backend: any TranslatorBackend,
-    sourceLanguage: String,
-    progress: TranslateRunProgress?
-  ) async -> [(index: Int, result: Result<String, BackendError>)] {
-    var collected: [(index: Int, result: Result<String, BackendError>)] = []
-    var start = 0
-    while start < work.count {
-      if progress?.isCancelled == true { break }
-      let end = min(start + poolSize, work.count)
-      let slice = work[start..<end]
-
-      let chunk = await withTaskGroup(of: (Int, Result<String, BackendError>).self) { group in
-        for (offset, item) in slice.enumerated() {
-          group.addTask {
-            let index = start + offset
-            let text = item.record.sourceText
-            let language = item.record.language
-            do {
-              let value = try await backend.translate(
-                text,
-                from: sourceLanguage,
-                to: language,
-                context: item.context
-              )
-              return (index, .success(value))
-            } catch let error as BackendError {
-              return (index, .failure(error))
-            } catch {
-              // A backend escaping its error taxonomy still must not crash
-              // the pool; wrap and keep going.
-              return (index, .failure(.network(error.localizedDescription)))
-            }
-          }
-        }
-        var results: [(Int, Result<String, BackendError>)] = []
-        for await result in group {
-          results.append(result)
-        }
-        return results
-      }
-      collected += chunk
-      start = end
-    }
-    return collected
   }
 
   /// Applies a machine fill to an EMPTY record: value + provider +
@@ -563,22 +512,28 @@ struct TranslationPipeline {
 
   // MARK: - translate (the only AI stage)
 
-  /// The one AI stage. Every record that still needs a target value — empty,
-  /// stale against the current ContextDocs, or explicitly forced — is
-  /// translated by Command Code (the hosted Muse/deepseek model) with the
-  /// full context prompt. There is deliberately no draft stage in front of
-  /// it: no stage is ever shown the previous stage's value, so a draft could
-  /// only *pre-empt* this model, never improve on it, while costing a full
-  /// on-device sweep of the catalog.
+  /// The one AI stage. Records that still need a target value — empty, stale
+  /// against the current ContextDocs, or explicitly forced — go out in
+  /// per-language batches, then:
+  ///
+  ///   1. deterministic checks reject broken placeholders, empty replies and
+  ///      untranslated echoes (`TranslationValidator`),
+  ///   2. rejected items are re-run ONE at a time through the router,
+  ///   3. the survivors go to the paid verification gate, whose corrections
+  ///      are themselves validated before being trusted.
+  ///
+  /// Batching is not only throughput: one request carries the L0/L1 context
+  /// blocks once instead of once per record, and for a short UI string those
+  /// blocks ARE the bulk of the input cost.
   private static func runTranslateStage(
     env: PipelineRunContext,
     excluded: Set<PersistentIdentifier>,
     progress: TranslateRunProgress?
   ) async -> StageOutcome {
     var outcome = StageOutcome()
-    // The router owns provider choice: free tiers first, Muse as the paid
-    // fallback. Prompt assembly and the write path are unchanged.
-    let backend = TranslationRouter.shared
+    let router = TranslationRouter.shared
+    // `allRecords` is sorted (language, key, category), so this worklist is
+    // already language-major and a batch never straddles two languages.
     let work = env.allRecords
       .filter {
         env.isTarget($0)
@@ -590,40 +545,122 @@ struct TranslationPipeline {
     guard let probe = work.first else { return outcome }
 
     // Eligibility is "at least one provider key exists" — not a language
-    // pair — so a single probe covers the whole worklist.
-    guard await backend.isEligible(from: env.sourceLanguage, to: probe.record.language) else {
+    // pair — so a single probe covers the whole run.
+    guard await router.isEligible(from: env.sourceLanguage, to: probe.record.language) else {
       outcome.failures.append("Translate: no model available — configure a provider key")
       return outcome
     }
 
     progress?.begin(.translate, total: work.count)
-    let results = await translatePool(work: work, backend: backend, sourceLanguage: env.sourceLanguage, progress: progress)
-    for (index, result) in results.sorted(by: { $0.index < $1.index }) {
-      let record = work[index].record
-      switch result {
-      case .success(let value):
-        if record.state == .empty {
-          writeFill(
-            env: env, record: record, value: value,
-            provider: .deepseek, lastEditor: backend.displayName,
-            reason: "Translate (Command Code): filled empty slot"
-          )
-          outcome.filled += 1
-        } else if rewriteValue(
-          env: env, record: record, value: value,
-          provider: .deepseek, lastEditor: backend.displayName,
-          reason: "Translate (Command Code): differs from previous machine value"
-        ) {
-          outcome.corrected += 1
+
+    var index = 0
+    while index < work.count {
+      if progress?.isCancelled == true { break }
+      let language = work[index].record.language
+      var slice: [(record: TranslationRecord, context: TranslationContext)] = []
+      while index < work.count,
+            work[index].record.language == language,
+            slice.count < TranslationRouter.batchSize {
+        slice.append(work[index])
+        index += 1
+      }
+      await translateLanguageBatch(
+        slice, language: language, env: env, router: router,
+        progress: progress, outcome: &outcome)
+      // Checkpoint per batch: a crash mid-run loses at most one batch.
+      try? env.context.save()
+    }
+    return outcome
+  }
+
+  /// One language batch: route, validate, repair, gate, write.
+  private static func translateLanguageBatch(
+    _ slice: [(record: TranslationRecord, context: TranslationContext)],
+    language: String,
+    env: PipelineRunContext,
+    router: TranslationRouter,
+    progress: TranslateRunProgress?,
+    outcome: inout StageOutcome
+  ) async {
+    guard !slice.isEmpty else { return }
+    let items = slice.enumerated().map { offset, item in
+      ContextPromptBuilder.BatchItem(
+        id: offset, sourceText: item.record.sourceText, context: item.context)
+    }
+
+    // 1. Batched translation — free tiers first, paid destination last.
+    let batch = await router.translateBatch(items, from: env.sourceLanguage, to: language)
+    var resolved: [Int: (value: String, editor: String)] = [:]
+    for (id, value) in batch.values {
+      resolved[id] = (value, batch.model)
+    }
+
+    // 2. Single-item repair for whatever the batch could not deliver.
+    for id in batch.failedIDs where slice.indices.contains(id) {
+      if progress?.isCancelled == true { break }
+      let item = slice[id]
+      do {
+        let value = try await router.translate(
+          item.record.sourceText, from: env.sourceLanguage, to: language, context: item.context)
+        let issues = TranslationValidator.validate(source: item.record.sourceText, target: value)
+        if issues.isEmpty {
+          resolved[id] = (value, router.currentModel)
+        } else {
+          outcome.failures.append(
+            "\(displayKey(item.record)): " + issues.map(\.description).joined(separator: "; "))
         }
-        progress?.tick(key: displayKey(record))
-      case .failure(let backendError):
-        let message = backendError.localizedDescription
-        outcome.failures.append("translate \(displayKey(record)): \(message)")
-        progress?.fail(key: displayKey(record), message: message)
+      } catch {
+        outcome.failures.append("\(displayKey(item.record)): \(error.localizedDescription)")
+        progress?.fail(key: displayKey(item.record), message: error.localizedDescription)
       }
     }
-    try? env.context.save()
-    return outcome
+
+    // 3. Paid verification gate over everything about to be written.
+    if !resolved.isEmpty {
+      var gateItems: [GateItem] = []
+      for id in resolved.keys.sorted() {
+        guard let entry = resolved[id] else { continue }
+        gateItems.append(GateItem(
+          id: id,
+          sourceText: slice[id].record.sourceText,
+          comment: slice[id].context.comment,
+          candidate: entry.value))
+      }
+      let fixes = await router.verifyBatch(gateItems)
+      for (id, fix) in fixes where slice.indices.contains(id) {
+        // A correction is trusted only if it passes the same checks.
+        guard TranslationValidator.validate(
+          source: slice[id].record.sourceText, target: fix).isEmpty else { continue }
+        resolved[id] = (fix, router.currentModel)
+        outcome.gateFixes += 1
+      }
+    }
+
+    // 4. Write, stamping the producing model as the editor.
+    for id in resolved.keys.sorted() {
+      guard let entry = resolved[id] else { continue }
+      let item = slice[id]
+      if item.record.state == .empty {
+        writeFill(
+          env: env, record: item.record, value: entry.value,
+          provider: .deepseek, lastEditor: entry.editor,
+          reason: "Translate (\(entry.editor)): filled empty slot")
+        outcome.filled += 1
+      } else if rewriteValue(
+        env: env, record: item.record, value: entry.value,
+        provider: .deepseek, lastEditor: entry.editor,
+        reason: "Translate (\(entry.editor)): differs from previous machine value") {
+        outcome.corrected += 1
+      }
+      progress?.tick(key: displayKey(item.record))
+    }
+
+    // 5. Anything still unresolved failed for this record.
+    for (id, item) in slice.enumerated() where resolved[id] == nil {
+      if progress?.isCancelled == true { break }
+      let message = "no translation produced"
+      outcome.failures.append("\(displayKey(item.record)): \(message)")
+      progress?.fail(key: displayKey(item.record), message: message)
+    }
   }
 }

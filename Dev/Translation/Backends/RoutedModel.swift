@@ -59,6 +59,17 @@ nonisolated struct RoutedModel: Sendable, Identifiable {
       case .openRouter: return "OpenRouter"
       }
     }
+
+    /// Conservative client-side pacing budget. Kept low deliberately: a
+    /// free tier exhausted by a burst returns 429s for every later record,
+    /// which is far more expensive than waiting a few seconds up front.
+    var requestsPerMinute: Int {
+      switch self {
+      case .openCode: return 30
+      case .commandCode: return 60
+      case .openRouter: return 20
+      }
+    }
   }
 
   let provider: Provider
@@ -102,40 +113,46 @@ nonisolated extension RoutedModel {
     name: "Muse Spark 1.3",
     isFree: false)
 
-  /// Routing order, best-quality-first, paid destination last.
+  /// Routing order, set by measurement rather than model family.
   ///
-  /// Smoke-tested live 2026-09-10 with a one-string translation:
-  /// `[ok]` answered correctly, `[~]` transient provider error (429/503 —
-  /// worth retrying later), `[x]` hard-unavailable right now. Anything that
-  /// fails is cooled down by the router and skipped, so a dead candidate
-  /// costs one call per cooldown window, not one per record.
+  /// A bake-off on this project's own catalog strings (6 UI strings × de/ja/ru,
+  /// judged MQM-lite) ranked: `deepseek-v4-flash` 9.76, `meituan/LongCat-2.0`
+  /// 9.56, `muse-spark-1.3` 8.63, `inclusionai/ling-3.0-flash` 6.44. Two
+  /// conclusions shaped this order:
+  ///
+  ///  - **Muse is an availability fallback, not a quality tier.** It did not
+  ///    win; it is last because it is the model we always have.
+  ///  - **Provider reliability dominates model choice.** Every OpenRouter
+  ///    `:free` id returned HTTP 429 on 18/18 calls at concurrency 16, so
+  ///    they sit at the tail as a last resort rather than mid-chain.
+  ///
+  /// `[ok]` answered correctly, `[~]` transient failure, `[x]` hard-unavailable
+  /// (2026-09-10 smoke test). A failing candidate is cooled down by the
+  /// router, so a dead id costs one call per window, not one per record.
   static let chain: [RoutedModel] = [
-    // OpenCode Zen free tier. Currently unreachable: the free ids answer
-    // "Model is unavailable" until the workspace enables them, and the Go
-    // tier needs credits or the contributor data-policy opt-in. Kept at the
-    // head because these are the only free ids in Muse's own model family.
+    // Command Code free ids — same account and key as the paid fallback, and
+    // the only free tier that both works and scored well.
+    RoutedModel(provider: .commandCode, model: "meituan/LongCat-2.0:free",
+                name: "LongCat 2.0 (free)", isFree: true),                 // [ok] 9.56
+    RoutedModel(provider: .commandCode, model: "inclusionai/ling-3.0-flash-sante:free",
+                name: "Ling 3.0 Flash Sante (free)", isFree: true),        // [ok] 6.44 — weakest tested
+    RoutedModel(provider: .commandCode, model: "poolside/laguna-s-2.1-free",
+                name: "Laguna S 2.1 (free)", isFree: true),                // [~] 503
+    // OpenCode Zen free tier: Muse's own model family, currently dead until
+    // the workspace enables the free ids or opts into the contributor data
+    // policy. Correct the moment that happens.
     RoutedModel(provider: .openCode, model: "deepseek-v4-flash-free",
                 name: "DeepSeek V4 Flash (free)", isFree: true),           // [x]
     RoutedModel(provider: .openCode, model: "muse-spark-1.3-contributor-free",
                 name: "Muse Spark 1.3 (free)", isFree: true),              // [x]
-    RoutedModel(provider: .openCode, model: "muse-spark-1.2-contributor-free",
-                name: "Muse Spark 1.2 (free)", isFree: true),              // [x]
-    // Command Code free ids — same provider and key as the paid destination.
-    RoutedModel(provider: .commandCode, model: "meituan/LongCat-2.0:free",
-                name: "LongCat 2.0 (free)", isFree: true),                 // [ok]
-    RoutedModel(provider: .commandCode, model: "inclusionai/ling-3.0-flash-sante:free",
-                name: "Ling 3.0 Flash Sante (free)", isFree: true),        // [ok]
-    RoutedModel(provider: .commandCode, model: "poolside/laguna-s-2.1-free",
-                name: "Laguna S 2.1 (free)", isFree: true),                // [~] 503
-    // OpenRouter free ids.
+    // OpenRouter free ids — LAST free resort: single calls work, bulk runs
+    // get 429 on every request.
     RoutedModel(provider: .openRouter, model: "nvidia/nemotron-3-super-120b-a12b:free",
-                name: "Nemotron 3 Super (free)", isFree: true),            // [ok]
+                name: "Nemotron 3 Super (free)", isFree: true),            // [~] always 429 under load
     RoutedModel(provider: .openRouter, model: "nex-agi/nex-n2.5-pro:free",
-                name: "Nex N2.5 Pro (free)", isFree: true),                // [ok]
-    RoutedModel(provider: .openRouter, model: "google/gemma-4-31b-it:free",
-                name: "Gemma 4 31B (free)", isFree: true),                 // [~] 429
-    // Paid destination.
-    muse,                                                                  // [ok]
+                name: "Nex N2.5 Pro (free)", isFree: true),                // [~] always 429 under load
+    // Paid destination — availability, not superiority.
+    muse,                                                                  // [ok] 8.63
   ]
 
   /// Just the free tiers, in order (the router's preferred path).

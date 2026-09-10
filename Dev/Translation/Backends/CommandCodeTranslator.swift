@@ -65,6 +65,6 @@ nonisolated struct CommandCodeTranslator: TranslatorBackend {
       apiKey: apiKey,
       model: Self.model,
       timeout: Self.requestTimeout)
-    return try await client.complete(system: prompt.system, user: prompt.user)
+    return try await client.complete(system: prompt.system, user: prompt.user).content
   }
 }
