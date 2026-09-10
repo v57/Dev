@@ -62,6 +62,29 @@ struct TranslationMemoryBadge: View {
   }
 }
 
+// MARK: - AutoReviewedBadge
+
+/// "auto" badge shown on cells whose value came from the imported
+/// translation DB (record.state .reviewed + autoReviewed). ONE CLICK is the
+/// human confirm: the badge calls back, the store clears the auto marker
+/// (value now counts as human-reviewed) and upserts the TM gold entry.
+struct AutoReviewedBadge: View {
+  let confirm: () -> Void
+
+  var body: some View {
+    Button(action: confirm) {
+      Text("auto")
+        .font(.system(size: 8, weight: .semibold))
+        .padding(.horizontal, 4)
+        .padding(.vertical, 1)
+        .background(Color.green.opacity(0.14), in: Capsule())
+        .foregroundStyle(.green)
+    }
+    .buttonStyle(.plain)
+    .help("Imported translation DB — automatically reviewed. Click to confirm as human-reviewed.")
+  }
+}
+
 // MARK: - TranslateRunStatus
 
 /// The footer's right-hand run surface: live stage progress + Cancel while
