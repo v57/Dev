@@ -54,6 +54,21 @@ import SwiftData
   var reviewedAt: Date?
   /// Human name or provider that last wrote the value.
   var lastEditor: String?
+  /// Reviewer note of the ROW this record belongs to (key-scoped: every record
+  /// of one key carries the same note). nil = no note. App-local metadata —
+  /// the .xcstrings format has no note field and Save is the only catalog
+  /// writer. Persisted raw.
+  var note: String?
+  /// What the note does: `project` folds it into the project's ContextDoc as a
+  /// rule the translator follows, `memo` keeps it in the app for humans only.
+  /// Raw `Reconcile.NoteScope` value; nil while there is no note.
+  var noteScope: String?
+  /// When the current note text was folded into the project doc; nil until it
+  /// is. A memo is never folded.
+  var noteFoldedAt: Date?
+  /// The exact note text that WAS folded, so an edit re-folds and clearing the
+  /// note retracts the rule. nil = nothing folded.
+  var noteFoldedText: String?
 
   // MARK: - relationships
 
@@ -69,7 +84,9 @@ import SwiftData
     confidence: Double? = nil, contextVersions: ContextVersions = ContextVersions(),
     createdAt: Date = .now, updatedAt: Date = .now, reviewedAt: Date? = nil,
     lastEditor: String? = nil, project: Project? = nil, edits: [TranslationEdit] = [],
-    category: String? = nil, autoReviewed: Bool = false
+    category: String? = nil, autoReviewed: Bool = false,
+    note: String? = nil, noteScope: String? = nil, noteFoldedAt: Date? = nil,
+    noteFoldedText: String? = nil
   ) {
     self.key = key
     self.sourceText = sourceText
@@ -85,6 +102,10 @@ import SwiftData
     self.updatedAt = updatedAt
     self.reviewedAt = reviewedAt
     self.lastEditor = lastEditor
+    self.note = note
+    self.noteScope = noteScope
+    self.noteFoldedAt = noteFoldedAt
+    self.noteFoldedText = noteFoldedText
     self.project = project
     self.edits = edits
   }

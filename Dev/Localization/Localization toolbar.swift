@@ -86,6 +86,14 @@ struct ControlsBar: ToolbarContent {
         .toggleStyle(ToggleButtonStyle())
 
       Button {
+        store.openContextDocs()
+      } label: {
+        Label("Context Rules", systemImage: "text.book.closed")
+      }
+      .disabled(!store.isLoaded)
+      .help("Edit the project context rules the translator follows — one rule per line, and deleting a line retracts it")
+
+      Button {
         store.startTranslate()
       } label: {
         Label("Translate", systemImage: "translate")

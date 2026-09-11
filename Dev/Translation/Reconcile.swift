@@ -746,6 +746,163 @@ nonisolated enum Reconcile {
     return touched
   }
 
+  // MARK: - reviewer note (DB side)
+
+  /// What a row's reviewer note does. `project` folds the note into the
+  /// project's ContextDoc as a rule the translator follows; `memo` keeps it on
+  /// the record for humans only — the translator never sees it. Persisted as a
+  /// raw string on the record, so the cases must not be renamed.
+  enum NoteScope: String, CaseIterable {
+    case project
+    case memo
+
+    var title: String {
+      switch self {
+      case .project: return "Project rule (guides the translator)"
+      case .memo: return "Note only (stays in the app)"
+      }
+    }
+  }
+
+  /// Sets (or clears) the reviewer note of every record of one key and, for
+  /// `.project`, folds it into the project's ContextDoc.
+  ///
+  /// Folding is DETERMINISTIC, not model-driven: the doc line IS the note, so
+  /// coverage is an exact-line check — no LLM call, no dedup marker, and the
+  /// fold cannot drift from what the reviewer typed. Every real content change
+  /// writes a ContextEdit with `author == .manual` and bumps the version; a
+  /// note re-saved unchanged writes nothing.
+  ///
+  /// The project version is stamped on records for provenance and is the
+  /// signal the Update Translations pass reads; it deliberately does NOT
+  /// auto-enqueue records (see PipelineRunContext.isStale).
+  @discardableResult
+  static func applyNote(
+    key: String,
+    note: String,
+    scope: NoteScope,
+    project: Project,
+    context: ModelContext
+  ) -> Int {
+    let trimmed = note.trimmingCharacters(in: .whitespacesAndNewlines)
+    let records = project.records.filter { $0.key == key }
+    // The line folded by a previous save — retracted or replaced, if any.
+    let previous = records.compactMap(\.noteFoldedText).first { !$0.isEmpty }
+
+    for record in records {
+      record.note = trimmed.isEmpty ? nil : trimmed
+      record.noteScope = trimmed.isEmpty ? nil : scope.rawValue
+      record.updatedAt = .now
+    }
+
+    guard scope == .project else {
+      try? context.save()  // a memo never leaves the DB
+      return records.count
+    }
+
+    foldProjectRule(
+      line: trimmed, previous: previous, key: key, project: project, context: context)
+    for record in records {
+      record.noteFoldedText = trimmed.isEmpty ? nil : trimmed
+      record.noteFoldedAt = trimmed.isEmpty ? nil : .now
+    }
+    try? context.save()
+    return records.count
+  }
+
+  /// Applies ONE rule line to the project doc: replaces the previously folded
+  /// line in place, appends a new one, or drops it when the note was cleared
+  /// (a retraction). No-op when the doc already reads exactly like this, so a
+  /// re-save never churns the version.
+  private static func foldProjectRule(
+    line: String,
+    previous: String?,
+    key: String,
+    project: Project,
+    context: ModelContext
+  ) {
+    let old = (previous ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    let doc = project.contextDoc
+    let current = doc?.content ?? ""
+    var lines = current
+      .split(separator: "\n", omittingEmptySubsequences: false)
+      .map(String.init)
+
+    if !old.isEmpty, let index = lines.firstIndex(of: old) {
+      lines.remove(at: index)
+    }
+    if !line.isEmpty, !lines.contains(line) {
+      lines.append(line)
+    }
+    while let first = lines.first,
+          first.trimmingCharacters(in: .whitespaces).isEmpty {
+      lines.removeFirst()
+    }
+    while let last = lines.last,
+          last.trimmingCharacters(in: .whitespaces).isEmpty {
+      lines.removeLast()
+    }
+    let revised = lines.joined(separator: "\n")
+    guard revised != current else { return }
+
+    let reason = line.isEmpty
+      ? "Reviewer note retracted on \(key) — rule removed from the project context"
+      : "Reviewer note on \(key) — project rule"
+    let audit: ContextEdit
+    if let doc {
+      doc.content = revised
+      doc.version += 1
+      doc.updatedAt = .now
+      audit = ContextEdit(
+        contextDoc: doc, before: current, after: revised, reason: reason, author: .manual)
+    } else {
+      let created = ContextDoc(
+        scope: .project, identifier: project.name, version: 1,
+        content: revised, createdAt: .now, updatedAt: .now, project: project)
+      context.insert(created)
+      project.contextDoc = created
+      audit = ContextEdit(
+        contextDoc: created, before: nil, after: revised, reason: reason, author: .manual)
+    }
+    context.insert(audit)
+  }
+
+  /// Replaces the project's context body wholesale — the human editor's save
+  /// path (trim, audit, ONE version bump; no-op when the text is unchanged).
+  /// This is also where a rule is retracted by hand.
+  @discardableResult
+  static func applyProjectDoc(
+    content: String,
+    project: Project,
+    context: ModelContext
+  ) -> Bool {
+    let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+    let doc = project.contextDoc
+    guard trimmed != (doc?.content ?? "") else { return false }
+    let audit: ContextEdit
+    if let doc {
+      let before = doc.content
+      doc.content = trimmed
+      doc.version += 1
+      doc.updatedAt = .now
+      audit = ContextEdit(
+        contextDoc: doc, before: before, after: trimmed,
+        reason: "Project context edited by hand", author: .manual)
+    } else {
+      let created = ContextDoc(
+        scope: .project, identifier: project.name, version: 1,
+        content: trimmed, createdAt: .now, updatedAt: .now, project: project)
+      context.insert(created)
+      project.contextDoc = created
+      audit = ContextEdit(
+        contextDoc: created, before: nil, after: trimmed,
+        reason: "Project context created by hand", author: .manual)
+    }
+    context.insert(audit)
+    try? context.save()
+    return true
+  }
+
   // MARK: - merge (DB -> in-memory catalog)
 
   /// Merges the working store into a copy of the parsed catalog — the pure,

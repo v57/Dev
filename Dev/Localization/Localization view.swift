@@ -91,6 +91,20 @@ struct LocalizationView: View {
     )) {
       ScanStringsView(store: store)
     }
+    // Reviewer note editor (row menu "Note…").
+    .sheet(isPresented: Binding(
+      get: { store.noteKey != nil },
+      set: { if !$0 { store.closeNote() } }
+    )) {
+      NoteEditorView(store: store)
+    }
+    // Project context rules (toolbar "Context Rules…").
+    .sheet(isPresented: Binding(
+      get: { store.contextDocsOpen },
+      set: { if !$0 { store.closeContextDocs() } }
+    )) {
+      ContextDocsView(store: store)
+    }
   }
 
   private var errorBinding: Binding<Bool> {
@@ -378,6 +392,14 @@ private struct RowContextMenu: View {
     .disabled(store.run.isActive || store.isInspecting)
     .help("Run one row end to end and show which model was used and what was learned")
 
+    Button {
+      store.editNote(row.key)
+    } label: {
+      Label("Note…", systemImage: "text.bubble")
+    }
+    .disabled(store.run.isActive)
+    .help("Attach a reviewer note to this row — a project rule guides the translator, a plain note stays in the app")
+
     Divider()
 
     Button {
@@ -475,6 +497,142 @@ private struct RowContextMenu: View {
     }
   }
 }
+/// Row note editor (row menu "Note…"): the note text plus what it should do.
+/// A project-scoped note becomes a rule in the project ContextDoc, which the
+/// translator follows; a memo stays in the app. Nothing here writes a catalog
+/// file — a note is app-local metadata, and Save is still the only catalog
+/// writer.
+private struct NoteEditorView: View {
+  let store: LocalizationStore
+  @Environment(\.dismiss) private var dismiss
+
+  @State private var text = ""
+  @State private var scope: Reconcile.NoteScope = .project
+  @State private var initialized = false
+
+  private var key: String { store.noteKey ?? "" }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      HStack(spacing: 8) {
+        Image(systemName: "text.bubble")
+        Text(key)
+          .font(.headline)
+          .lineLimit(1)
+          .truncationMode(.middle)
+        Spacer(minLength: 0)
+      }
+      Text("A project rule is sent to the translator with every request for this project. A plain note is for you only.")
+        .font(.caption)
+        .foregroundStyle(.secondary)
+
+      TextEditor(text: $text)
+        .font(.body)
+        .frame(minHeight: 110)
+        .padding(6)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.08)))
+
+      Picker("", selection: $scope) {
+        ForEach(Reconcile.NoteScope.allCases, id: \.self) { option in
+          Text(option.title).tag(option)
+        }
+      }
+      .pickerStyle(.radioGroup)
+      .labelsHidden()
+
+      if !store.projectContextText.isEmpty {
+        DisclosureGroup("Project context now (\(store.projectContextText.count) chars)") {
+          ScrollView {
+            Text(store.projectContextText)
+              .font(.caption.monospaced())
+              .textSelection(.enabled)
+              .frame(maxWidth: .infinity, alignment: .leading)
+          }
+          .frame(height: 110)
+        }
+        .font(.caption)
+      }
+
+      HStack {
+        Button("Remove Note", role: .destructive) {
+          store.setNote(key: key, note: "", scope: scope)
+          dismiss()
+        }
+        .disabled(text.isEmpty && store.note(for: key).text.isEmpty)
+        Spacer()
+        Button("Cancel") { dismiss() }
+        Button("Save") {
+          store.setNote(key: key, note: text, scope: scope)
+          dismiss()
+        }
+        .keyboardShortcut(.defaultAction)
+      }
+    }
+    .padding(18)
+    .frame(width: 540)
+    .onAppear {
+      guard !initialized else { return }
+      let existing = store.note(for: key)
+      text = existing.text
+      scope = existing.scope
+      initialized = true
+    }
+  }
+}
+
+/// Human editor for the project's context document — the rule set the
+/// translator follows, and the place a rule is retracted by hand (delete its
+/// line). Saving writes a ContextEdit audit and exactly one version bump; the
+/// project version does not auto-enqueue re-runs, so nothing re-translates
+/// until "Update Translations" (or the next whole-catalog run) is asked to.
+private struct ContextDocsView: View {
+  let store: LocalizationStore
+  @Environment(\.dismiss) private var dismiss
+
+  @State private var text = ""
+  @State private var initialized = false
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      HStack(spacing: 8) {
+        Image(systemName: "text.book.closed")
+        Text("Project Context")
+          .font(.headline)
+        Spacer(minLength: 0)
+        Text("\(text.count) chars")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+      Text("One rule per line. Sent with every translation request for this project, and followed over the model's own defaults (prompt rule 4).")
+        .font(.caption)
+        .foregroundStyle(.secondary)
+
+      TextEditor(text: $text)
+        .font(.body.monospaced())
+        .frame(minHeight: 320)
+        .padding(6)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.08)))
+
+      HStack {
+        Spacer()
+        Button("Cancel") { dismiss() }
+        Button("Save") {
+          store.setProjectContext(text)
+          dismiss()
+        }
+        .keyboardShortcut(.defaultAction)
+      }
+    }
+    .padding(18)
+    .frame(width: 640)
+    .onAppear {
+      guard !initialized else { return }
+      text = store.projectContextText
+      initialized = true
+    }
+  }
+}
+
 /// Editable language cell: read-only Text until clicked, then a focused
 /// TextEditor for multiline editing. Keystrokes mutate @State draft only, so
 /// the field is never rebuilt while typing; the store override commits on

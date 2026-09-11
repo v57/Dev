@@ -767,6 +767,54 @@ final class LocalizationStore {
     saveRow(key)
   }
 
+  // MARK: - reviewer note
+
+  /// The key whose note editor is open, or nil. Drives the note sheet.
+  var noteKey: String?
+  /// True while the project-context editor sheet is open.
+  var contextDocsOpen = false
+
+  func editNote(_ key: String) { noteKey = key }
+  func closeNote() { noteKey = nil }
+  func openContextDocs() { contextDocsOpen = true }
+  func closeContextDocs() { contextDocsOpen = false }
+
+  /// The row's note + scope, read from the live records (the note is set
+  /// across every record of the key, so the first one that carries one is
+  /// authoritative). Empty text + `.project` when the row has no note.
+  func note(for key: String) -> (text: String, scope: Reconcile.NoteScope) {
+    let all = recordIndex[key]?.values.flatMap { $0.values } ?? []
+    guard let record = all.first(where: { $0.note?.isBlankOrEmpty == false }) else {
+      return ("", .project)
+    }
+    return (record.note ?? "", Reconcile.NoteScope(rawValue: record.noteScope ?? "") ?? .project)
+  }
+
+  /// Saves the row's note. A `project`-scoped note is folded into the project's
+  /// ContextDoc as a rule (audited, version bumped); a memo never leaves the
+  /// DB. No catalog write: the note is app-local metadata.
+  func setNote(key: String, note: String, scope: Reconcile.NoteScope) {
+    guard let project else { return }
+    let context = TranslationStore.shared.context
+    Reconcile.applyNote(
+      key: key, note: note, scope: scope, project: project, context: context)
+    buildRows()
+  }
+
+  /// The project context body — the human-authored rule set the translator
+  /// follows (prompt rule 4: context sections are authoritative).
+  var projectContextText: String { project?.contextDoc?.content ?? "" }
+
+  /// Saves the hand-edited project context (audit + one version bump; a no-op
+  /// when unchanged). Records do NOT become stale from this: the project
+  /// version deliberately stopped auto-enqueueing re-runs — "Update
+  /// Translations" is the explicit pass that re-sends them.
+  func setProjectContext(_ text: String) {
+    guard let project else { return }
+    let context = TranslationStore.shared.context
+    Reconcile.applyProjectDoc(content: text, project: project, context: context)
+  }
+
   // MARK: - imported-DB human confirm
 
   /// One-click human confirm of an auto-reviewed slot (the "auto" badge):
