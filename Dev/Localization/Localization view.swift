@@ -375,7 +375,7 @@ private struct RowContextMenu: View {
     } label: {
       Label("Inspect Row…", systemImage: "magnifyingglass.circle")
     }
-    .disabled(store.run.isRunning || store.isInspecting)
+    .disabled(store.run.isActive || store.isInspecting)
     .help("Run one row end to end and show which model was used and what was learned")
 
     Divider()
@@ -385,7 +385,7 @@ private struct RowContextMenu: View {
     } label: {
       Label("Translate", systemImage: "translate")
     }
-    .disabled(!row.isTranslatable || store.run.isRunning)
+    .disabled(!row.isTranslatable || store.run.isActive)
 
     if row.isTranslatable {
       if row.hasPlurals {
@@ -394,26 +394,26 @@ private struct RowContextMenu: View {
         } label: {
           Label("Generate plural", systemImage: "sparkles")
         }
-        .disabled(store.run.isRunning)
+        .disabled(store.run.isActive)
         Button {
           store.removePlurals(key: row.key)
         } label: {
           Label("Remove plural variations", systemImage: "ellipsis.curlybraces")
         }
-        .disabled(store.run.isRunning)
+        .disabled(store.run.isActive)
       } else {
         Button {
           store.varyByPlural(key: row.key)
         } label: {
           Label("Vary by plural", systemImage: "ellipsis.curlybraces")
         }
-        .disabled(store.run.isRunning)
+        .disabled(store.run.isActive)
         Button {
           store.generatePlural(key: row.key)
         } label: {
           Label("Generate plural", systemImage: "sparkles")
         }
-        .disabled(store.run.isRunning)
+        .disabled(store.run.isActive)
       }
       // One-click human confirm for every imported-DB auto-reviewed slot of
       // the row (badge click does the same per cell).

@@ -214,11 +214,11 @@ private struct ImportedDBInfoView: View {
       Button("Replace…") {
         Task { await db.importViaPanel() }
       }
-      .disabled(store.run.isRunning)
+      .disabled(store.run.isActive)
       Button("Remove", role: .destructive) {
         db.remove()
       }
-      .disabled(store.run.isRunning)
+      .disabled(store.run.isActive)
       Spacer()
     }
     .controlSize(.small)

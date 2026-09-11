@@ -95,7 +95,11 @@ struct TranslateRunStatus: View {
 
   var body: some View {
     Group {
-      if controller.isRunning {
+      // `isActive`, not `isRunning`: the run's PREPARATION (the plural-form
+      // skeleton, which walks the whole catalog off the main actor) reports
+      // through the same surface, so the footer shows a live count while the
+      // user waits for the run to start.
+      if controller.isActive {
         runningView
       } else if let summary = controller.summary {
         doneView(summary)
@@ -117,19 +121,25 @@ struct TranslateRunStatus: View {
         Text("· \(progress.failed) failed")
           .foregroundStyle(.orange)
       }
-      // Which model is answering right now (free tier or paid fallback).
-      Text("· \(TranslationRouter.shared.currentModel)")
-        .foregroundStyle(TranslationRouter.shared.isUsingPaidModel ? Color.secondary : Color.green)
-        .lineLimit(1)
-        .help("Routing: \(TranslationRouter.shared.currentProvider)"
-          + (TranslationRouter.shared.isUsingPaidModel ? " (paid fallback)" : " (free tier)")
-          + "\n" + TranslationRouter.shared.telemetrySummary)
+      // Which model is answering right now (free tier or paid fallback). No
+      // model is in use while the run is being prepared, so the line stays out
+      // until the pipeline actually starts.
+      if controller.isRunning {
+        Text("· \(TranslationRouter.shared.currentModel)")
+          .foregroundStyle(TranslationRouter.shared.isUsingPaidModel ? Color.secondary : Color.green)
+          .lineLimit(1)
+          .help("Routing: \(TranslationRouter.shared.currentProvider)"
+            + (TranslationRouter.shared.isUsingPaidModel ? " (paid fallback)" : " (free tier)")
+            + "\n" + TranslationRouter.shared.telemetrySummary)
+      }
       Button("Cancel") {
         controller.cancel()
       }
       .buttonStyle(.borderless)
       .controlSize(.small)
-      .help("Stop after the current batch")
+      .help(controller.isPreparing
+        ? "Stop preparing the plural forms"
+        : "Stop after the current batch")
     }
     .help(controller.progress.log.suffix(12).joined(separator: "\n"))
   }

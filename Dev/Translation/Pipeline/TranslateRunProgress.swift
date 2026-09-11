@@ -13,6 +13,10 @@ import Observation
 /// The phase a Translate run is in. UI (C-4) renders the footer from this;
 /// the orchestrator advances it between stages and ticks per record.
 enum TranslateStage: String, CaseIterable, Sendable {
+  /// Preparing the run's scope: the plural-form skeleton (see
+  /// `Reconcile.ensurePluralForms`). Runs BEFORE the pipeline, off the main
+  /// actor, and is reported through the same progress surface.
+  case pluralForms
   case stage0Learn
   case tmResolve
   case dbResolve
@@ -23,6 +27,8 @@ enum TranslateStage: String, CaseIterable, Sendable {
   /// Human-readable label for logs and the progress footer.
   var label: String {
     switch self {
+    case .pluralForms:
+      return "Plural forms"
     case .stage0Learn:
       return "Learn (Stage 0)"
     case .tmResolve:
@@ -78,6 +84,14 @@ final class TranslateRunProgress {
     completed += 1
   }
 
+  /// Absolute progress for work that reports in batches from off the main
+  /// actor (the plural-skeleton scan): the background pass yields
+  /// completed/total pairs instead of ticking once per record.
+  func report(completed: Int, key: String?) {
+    self.completed = completed
+    currentKey = key
+  }
+
   /// One record finished with an error. `message` must be UI-safe
   /// (BackendError.errorDescription never carries secrets).
   func fail(key: String?, message: String) {
@@ -94,6 +108,13 @@ final class TranslateRunProgress {
   func cancel() {
     isCancelled = true
     appendLog("Cancelled by user")
+  }
+
+  /// Clears a previous run's cancellation. `begin` deliberately does NOT touch
+  /// this — a cancel that arrives while a stage is winding down must stick —
+  /// so whoever starts a NEW unit of work clears it explicitly.
+  func resetCancellation() {
+    isCancelled = false
   }
 
   // MARK: helpers

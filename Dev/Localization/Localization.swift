@@ -396,7 +396,7 @@ final class LocalizationStore {
   /// catalog is open, its project has a root to scan and no other run is in
   /// flight.
   var canScan: Bool {
-    isLoaded && project != nil && scanRoot != nil && !run.isRunning && !scan.isRunning
+    isLoaded && project != nil && scanRoot != nil && !run.isActive && !scan.isRunning
   }
 
   /// The folder Scan Strings scans: the project's own root when the project
@@ -439,7 +439,7 @@ final class LocalizationStore {
   }
 
   /// True when the Translate button may start a run.
-  var canTranslate: Bool { isLoaded && project != nil && !run.isRunning && !scan.isRunning }
+  var canTranslate: Bool { isLoaded && project != nil && !run.isActive && !scan.isRunning }
 
   /// True when the Save button may write the artifact.
   var canSave: Bool { isDirty && isLoaded && project != nil }
@@ -452,21 +452,31 @@ final class LocalizationStore {
   /// into the OPEN in-memory catalog — never written: the artifact changes
   /// only on Save, so a run cannot touch a file behind the user's back.
   func startTranslate() {
-    guard let project, beginRun(project: project, key: nil, languages: nil, force: false) else { return }
-    Task { await performTranslate(project: project, key: nil) }
+    guard let project else { return }
+    Task {
+      guard await beginRun(project: project, key: nil, languages: nil, force: false) else { return }
+      await performTranslate(project: project, key: nil)
+    }
   }
 
   /// Prepares a run's scope, then starts its lifecycle. Plural forms the
   /// catalog does not have yet are varied FIRST (in memory — the artifact is
   /// written only by Save), so the controller's spinner candidates include
-  /// them. False when a run is already active.
-  private func beginRun(project: Project, key: String?, languages: Set<String>?, force: Bool) -> Bool {
-    guard !run.isRunning else { return false }
-    if let varied = run.ensurePluralForms(
+  /// them; that pass runs OFF the main actor, so the footer shows its progress
+  /// and the window stays responsive (see `TranslateRunController.ensurePluralForms`).
+  /// False when a run is already active, or when the preparation was
+  /// cancelled — a cancelled preparation keeps the records it created but does
+  /// not start a run.
+  private func beginRun(
+    project: Project, key: String?, languages: Set<String>?, force: Bool
+  ) async -> Bool {
+    guard !run.isActive else { return false }
+    if let varied = await run.ensurePluralForms(
       project: project, catalog: catalog, key: key, languages: languages) {
       catalog = varied
       markDirty()
     }
+    guard !run.progress.isCancelled else { return false }
     return run.begin(project: project, key: key, languages: languages, force: force)
   }
 
@@ -478,8 +488,11 @@ final class LocalizationStore {
   /// targets (nothing is translated).
   func translateKey(_ key: String) {
     let languages = Set(selectedLanguages)
-    guard let project, beginRun(project: project, key: key, languages: languages, force: true) else { return }
-    Task { await performTranslate(project: project, key: key, languages: languages, force: true) }
+    guard let project else { return }
+    Task {
+      guard await beginRun(project: project, key: key, languages: languages, force: true) else { return }
+      await performTranslate(project: project, key: key, languages: languages, force: true)
+    }
   }
 
   // MARK: - row inspection (diagnostics)
@@ -495,7 +508,7 @@ final class LocalizationStore {
   /// pipeline run for a row with no reviewed slot, or just the learning fold
   /// for a reviewed one.
   func inspect(_ key: String) {
-    guard !run.isRunning, !isInspecting else { return }
+    guard !run.isActive, !isInspecting else { return }
     inspectedKey = key
     Task { await runInspection(key) }
   }
@@ -626,8 +639,10 @@ final class LocalizationStore {
     varyByPlural(key: key)
     guard let project else { return }
     let languages = Set(selectedLanguages)
-    guard beginRun(project: project, key: key, languages: languages, force: true) else { return }
-    Task { await performGeneratePlural(project: project, key: key, languages: languages) }
+    Task {
+      guard await beginRun(project: project, key: key, languages: languages, force: true) else { return }
+      await performGeneratePlural(project: project, key: key, languages: languages)
+    }
   }
 
   /// Async half of Generate plural: author source forms, then fill targets.
@@ -1060,19 +1075,26 @@ final class LocalizationStore {
   func dismissError() {
     loadError = nil
     saveError = nil
+    run.clearPreparationError()
   }
 
-  /// True when either the catalog failed to load or a save failed.
-  var hasError: Bool { loadError != nil || saveError != nil }
+  /// True when the catalog failed to load, a save failed, or a run's plural
+  /// preparation could not write its records.
+  var hasError: Bool {
+    loadError != nil || saveError != nil || run.preparationError != nil
+  }
 
   /// Alert title for the current error.
   var errorTitle: String {
-    saveError != nil ? "Couldn't save catalog" : "Couldn't open catalog"
+    if saveError != nil { return "Couldn't save catalog" }
+    if run.preparationError != nil { return "Couldn't prepare the run" }
+    return "Couldn't open catalog"
   }
 
-  /// Alert message for the current error (save error wins).
+  /// Alert message for the current error (save error wins, then a failed run
+  /// preparation, then the load error).
   var errorMessage: String? {
-    saveError ?? loadError
+    saveError ?? run.preparationError ?? loadError
   }
 
   // MARK: - save (the only writer)

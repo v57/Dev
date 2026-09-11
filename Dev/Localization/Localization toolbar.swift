@@ -23,7 +23,7 @@ struct ControlsBar: ToolbarContent {
     ToolbarItemGroup(placement: .primaryAction) {
       if allowsOpenCatalog {
         Button("Open…") { store.openPanelAndLoad() }
-          .disabled(store.run.isRunning)
+          .disabled(store.run.isActive)
       }
       Button {
         store.startScan()
@@ -47,7 +47,7 @@ struct ControlsBar: ToolbarContent {
       } label: {
         Label("Reload", systemImage: "arrow.clockwise")
       }
-      .disabled(!store.isLoaded || store.run.isRunning)
+      .disabled(!store.isLoaded || store.run.isActive)
     }
     ToolbarItemGroup(placement: .principal) {
       Picker(
@@ -92,7 +92,7 @@ struct ControlsBar: ToolbarContent {
       }
       .buttonStyle(.borderedProminent)
       .disabled(!store.canTranslate)
-      .help(store.run.isRunning
+      .help(store.run.isActive
         ? "A translation run is in progress — cancel it from the footer"
         : "Run the translation pipeline: learn from confirmed edits, resolve translation memory and the imported DB, then translate every remaining string with Command Code")
     }

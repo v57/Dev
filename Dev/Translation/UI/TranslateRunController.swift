@@ -26,6 +26,14 @@ final class TranslateRunController {
   private(set) var progress = TranslateRunProgress()
   /// True between `begin` and `finish` — the run is active.
   private(set) var isRunning = false
+  /// True while the run's PREPARATION is in flight (the plural-form skeleton,
+  /// which runs off the main actor before `begin`). The footer shows the same
+  /// progress surface for it, and re-entry is guarded against it exactly like
+  /// a running run.
+  private(set) var isPreparing = false
+  /// True while a run is active in ANY phase — preparing or executing. The UI
+  /// disables its run buttons on this, and `cancel()` works in both phases.
+  var isActive: Bool { isPreparing || isRunning }
   /// Outcome of the last finished run (shown by the footer); nil until the
   /// first run completes.
   private(set) var summary: PipelineRunSummary?
@@ -33,8 +41,21 @@ final class TranslateRunController {
   /// still an unwritten run target; once the run writes it the timestamp
   /// moves past `startedAt` and the cell stops spinning.
   private(set) var startedAt: Date?
-  /// Records the current run may still touch, snapshotted at `begin`.
+  /// The records the current run may still touch, snapshotted at `begin`.
   private var candidates: Set<PersistentIdentifier> = []
+
+  /// Set while an off-main preparation pass (plural skeleton) is in flight, so
+  /// `cancel()` can reach it. Cleared when the pass ends.
+  private var preparationCancellation: PreparationCancellation?
+
+  /// Non-nil when the last preparation pass failed to write its records. The
+  /// store surfaces it through the same alert as its load/save errors.
+  private(set) var preparationError: String?
+
+  /// Clears the preparation error once the alert has been dismissed.
+  func clearPreparationError() {
+    preparationError = nil
+  }
 
   /// True while the run is active AND `record` is one of its not-yet-written
   /// targets — the per-cell spinner condition.
@@ -115,9 +136,12 @@ final class TranslateRunController {
   }
 
   /// User-facing cancel: the pipeline checks the flag between records and
-  /// stops at the next safe point.
+  /// stops at the next safe point. Also stops the off-main preparation pass —
+  /// its flag lives outside the main actor on purpose (see
+  /// `PreparationCancellation`), so both are set here.
   func cancel() {
     progress.cancel()
+    preparationCancellation?.cancel()
   }
 
   /// Drops run state when a different catalog is opened.
@@ -131,69 +155,104 @@ final class TranslateRunController {
 
   // MARK: - plural skeletons
 
-  /// Creates the missing plural form records + the CLDR form skeleton for
-  /// the run's scope, so newly created forms are spinner candidates and the
-  /// run has forms to fill. Runs BEFORE `begin` — the candidate snapshot must
-  /// see the new records. Mirrors the pipeline's reconcile rule: only keys
-  /// whose SOURCE is plural-varied gain forms; single-key runs with no
-  /// columns selected (empty set) create nothing.
+  /// Cross-thread cancellation for the off-main preparation pass.
+  /// `TranslateRunProgress.isCancelled` is main-actor state that a detached
+  /// task cannot read; this is the same flag in a form the background loop
+  /// can poll between keys. `nonisolated` (the module defaults to MainActor
+  /// isolation, which would make the flag unreadable from the Sendable closure
+  /// that polls it) and `@unchecked Sendable` behind a lock.
+  nonisolated final class PreparationCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var flag = false
+    var isCancelled: Bool {
+      lock.lock()
+      defer { lock.unlock() }
+      return flag
+    }
+    func cancel() {
+      lock.lock()
+      flag = true
+      lock.unlock()
+    }
+  }
+
+  /// Creates the missing plural form records + the CLDR form skeleton for the
+  /// run's scope, so newly created forms are spinner candidates and the run has
+  /// forms to fill. Runs BEFORE `begin` — the candidate snapshot must see the
+  /// new records — and OFF the main actor: the pass walks every key of the
+  /// catalog and can insert thousands of records (see
+  /// `Reconcile.ensurePluralForms`, which does the work in a background
+  /// context). Returns the varied catalog, or nil when nothing needed varying
+  /// or the pass was cancelled.
   ///
   /// The catalog half happens on the caller's OPEN catalog, which the caller
-  /// adopts back (this controller never writes the artifact — Save is the
-  /// only writer). Returns the varied catalog, or nil when nothing needed
-  /// varying.
+  /// adopts back (this controller never writes the artifact — Save is the only
+  /// writer).
+  @discardableResult
   func ensurePluralForms(
     project: Project,
     catalog: StringCatalog?,
     key: String?,
     languages: Set<String>?
-  ) -> StringCatalog? {
-    guard var mutated = catalog else { return nil }
-    let context = TranslationStore.shared.context
-    let keys: [String]
-    if let key {
-      keys = [key]
-    } else {
-      keys = project.records.map(\.key).uniqued()
+  ) async -> StringCatalog? {
+    guard let catalog, !isPreparing else { return nil }
+    // A cancel left over from a PREVIOUS run must not abort this one: clear it
+    // before the pass starts, so only a click during this pass stops it.
+    progress.resetCancellation()
+    let cancellation = PreparationCancellation()
+    preparationCancellation = cancellation
+    isPreparing = true
+    defer {
+      isPreparing = false
+      preparationCancellation = nil
     }
-    var varied = false
-    var touchedDB = false
-    for targetKey in keys {
-      guard mutated.hasPlurals(for: targetKey, language: mutated.sourceLanguage) else { continue }
-      let targetLanguages: [String]
-      if let languages {
-        if languages.isEmpty { continue }
-        targetLanguages = Array(languages)
-      } else {
-        targetLanguages = mutated.languages.filter { $0 != mutated.sourceLanguage }
+
+    // Progress arrives on the background thread; the stream hands it to this
+    // (main) actor so the footer can render it live while the pass runs.
+    let (stream, continuation) = AsyncStream<Reconcile.PluralSkeletonProgress>.makeStream()
+    let projectID = project.persistentModelID
+    let work = Task.detached(priority: .userInitiated) {
+      () -> Result<Reconcile.PluralSkeletonOutcome, Error> in
+      defer { continuation.finish() }
+      return await Reconcile.ensurePluralForms(
+        catalog: catalog, projectID: projectID, key: key, languages: languages,
+        in: TranslationStore.container,
+        isCancelled: { cancellation.isCancelled },
+        progress: { continuation.yield($0) })
+    }
+    var announced = false
+    for await update in stream {
+      if !announced {
+        progress.begin(.pluralForms, total: update.total, note: "Preparing plural forms")
+        announced = true
       }
-      for language in targetLanguages {
-        if !mutated.hasPlurals(for: targetKey, language: language) {
-          mutated.varyByPlural(key: targetKey, languages: [language])
-          varied = true
-        }
-        guard mutated.hasPlurals(for: targetKey, language: language) else { continue }
-        for category in PluralRules.categories(for: language) {
-          if Reconcile.record(key: targetKey, language: language, category: category, in: project) != nil {
-            continue
-          }
-          let record = TranslationRecord(
-            key: targetKey,
-            sourceText: mutated.sourcePluralDisplay(for: targetKey, category: category),
-            language: language,
-            value: nil, provider: nil, state: .empty,
-            contextVersions: Reconcile.persistableVersions(ContextVersions()),
-            category: category)
-          context.insert(record)
-          record.project = project
-          touchedDB = true
-        }
+      progress.report(completed: update.completed, key: update.key)
+    }
+
+    switch await work.value {
+    case .success(let outcome):
+      preparationError = nil
+      if outcome.inserted > 0 {
+        progress.note("Plural forms: \(outcome.inserted) record(s) created")
       }
+      if outcome.cancelled, !progress.isCancelled {
+        // Cancelled through some other path than the button: keep the flag the
+        // caller checks honest.
+        progress.cancel()
+      }
+      if progress.isCancelled {
+        // Cancelled while preparing: no pipeline ran, but the footer reports
+        // the attempt ("Last run — cancelled") instead of silently snapping
+        // back to idle. A cancelled pass keeps what it inserted (nothing is
+        // rolled back), and its run does not start — the caller checks
+        // `progress.isCancelled`.
+        summary = PipelineRunSummary(cancelled: true)
+      }
+      return outcome.varied ? outcome.catalog : nil
+    case .failure(let error):
+      preparationError = "Couldn't create the plural form records: \(error.localizedDescription)"
+      return nil
     }
-    if touchedDB {
-      try? context.save()
-    }
-    return varied ? mutated : nil
   }
 
   /// The records this run's stages could touch: not human-owned (.reviewed
