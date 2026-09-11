@@ -473,6 +473,60 @@ final class LocalizationStore {
   /// True when the Translate button may start a run.
   var canTranslate: Bool { isLoaded && project != nil && !run.isActive && !scan.isRunning }
 
+  // MARK: - Update Translations (explicit project-context sweep)
+
+  /// Slots (records) the "Update Translations" pass would send right now —
+  /// the records that predate the current project context doc. Cached:
+  /// recomputed by `refreshUpdateCounts()` off `buildRows()` and the record
+  /// index, never derived on render (the selection walks every record).
+  private(set) var updateSlotCount = 0
+  /// Distinct rows (keys) among those slots — the pass sends ONE request per
+  /// row, carrying every target language of the row.
+  private(set) var updateRowCount = 0
+
+  /// Why the Update Translations button cannot run, or nil when it can.
+  var updateUnavailableReason: String? {
+    if project == nil { return "Open a project catalog first." }
+    if project?.contextDoc == nil {
+      return "No project context yet — add a rule under \"Context Rules\" first; there is nothing for the update pass to re-apply."
+    }
+    if updateSlotCount == 0 {
+      return "Every slot already reflects the current project context."
+    }
+    return nil
+  }
+
+  /// True when the Update Translations button may start the paid sweep.
+  var canUpdateTranslations: Bool {
+    isLoaded && !run.isActive && !scan.isRunning && updateUnavailableReason == nil
+  }
+
+  /// Button tooltip: the count, the shape of the pass, and the limit that
+  /// reviewed / hand-typed slots are skipped.
+  var updateTranslationsHelp: String {
+    if run.isActive {
+      return "A translation run is in progress — cancel it from the footer"
+    }
+    if let reason = updateUnavailableReason { return reason }
+    let version = project?.contextDoc?.version ?? 0
+    return "Re-run \(updateSlotCount) slot(s) in \(updateRowCount) row(s) that predate project context v\(version) — a paid sweep, one request per row carrying every target language of that row. Reviewed or hand-typed slots are NOT touched: un-confirm them first (row menu → \"Needs Review\")."
+  }
+
+  /// True while the paid-sweep confirmation is presented. Drives the alert.
+  var updateConfirmationPresented = false
+
+  /// Confirmation text: the pre-run count, the request shape, and the limit.
+  var updateConfirmationMessage: String {
+    let version = project?.contextDoc?.version ?? 0
+    return """
+    \(updateSlotCount) slot(s) in \(updateRowCount) row(s) predate project context v\(version).
+
+    This is a paid sweep: one request per row, carrying every target language of that row. Translation memory is consulted first; the imported database stage is skipped.
+
+    Reviewed and hand-typed slots are NOT touched — un-confirm them first (row menu → "Needs Review") if a rule must reach them.
+    """
+  }
+
   /// True when the Save button may write the artifact.
   var canSave: Bool { isDirty && isLoaded && project != nil }
 
@@ -524,6 +578,38 @@ final class LocalizationStore {
     Task {
       guard await beginRun(project: project, key: key, languages: languages, force: true) else { return }
       await performTranslate(project: project, key: key, languages: languages, force: true)
+    }
+  }
+
+  /// Toolbar "Update Translations": opens the paid-sweep confirmation. The
+  /// pass is explicit because a project-context bump no longer auto-enqueues
+  /// anything, so this is the only channel a project rule has to the records
+  /// that predate it.
+  func requestUpdateTranslations() {
+    guard canUpdateTranslations else { return }
+    updateConfirmationPresented = true
+  }
+
+  /// Dismisses the confirmation without running.
+  func cancelUpdateTranslations() {
+    updateConfirmationPresented = false
+  }
+
+  /// Confirmed: closes the alert and starts the pass.
+  func confirmUpdateTranslations() {
+    updateConfirmationPresented = false
+    startUpdateTranslations()
+  }
+
+  /// Starts the explicit Update Translations pass (async Task; re-entry is
+  /// guarded by `beginRun`). Plural skeletons are prepared first like any run,
+  /// the footer shows progress / Cancel, and the run's output merges into the
+  /// OPEN catalog — never written: Save stays the only artifact writer.
+  func startUpdateTranslations() {
+    guard let project else { return }
+    Task {
+      guard await beginRun(project: project, key: nil, languages: nil, force: true) else { return }
+      await performTranslate(project: project, update: true)
     }
   }
 
@@ -638,9 +724,13 @@ final class LocalizationStore {
     buildRows()
   }
 
-  private func performTranslate(project: Project, key: String? = nil, languages: Set<String>? = nil, force: Bool = false) async {
-    let summary = await run.execute(
-      project: project, key: key, languages: languages, force: force, catalog: catalog)
+  /// Runs the pipeline — or, when `update`, the explicit Update Translations
+  /// pass — then merges its DB output into the OPEN catalog.
+  private func performTranslate(project: Project, key: String? = nil, languages: Set<String>? = nil, force: Bool = false, update: Bool = false) async {
+    let summary = update
+      ? await run.executeUpdate(project: project, catalog: catalog)
+      : await run.execute(
+        project: project, key: key, languages: languages, force: force, catalog: catalog)
     defer { run.finish(summary) }
     // The run writes the DB only — its output reaches the artifact by merging
     // into the OPEN in-memory catalog, never by re-reading the file (which
@@ -845,6 +935,9 @@ final class LocalizationStore {
     guard let project else { return }
     let context = TranslationStore.shared.context
     Reconcile.applyProjectDoc(content: text, project: project, context: context)
+    // A bump changes what the Update Translations pass would sweep; refresh
+    // the toolbar count now (this path does not rebuild rows).
+    refreshUpdateCounts()
   }
 
   /// The row's max-width guideline (nil = none), read from the live records.
@@ -1643,11 +1736,35 @@ final class LocalizationStore {
     visibleRows = shown.sorted(using: sort)
   }
 
+  /// Recomputes the cached Update Translations counts from the live record
+  /// index. Rides `buildRows` on purpose: the toolbar count, the confirmation
+  /// text and the pass's OWN selection have to agree, and the index changes
+  /// underneath a row un-review just as a run's writes change the records'
+  /// context versions. Walks the index (not the catalog), so it stays cheap.
+  private func refreshUpdateCounts() {
+    let version = project?.contextDoc?.version
+    var slots = 0
+    var keys = Set<String>()
+    for (key, byLanguage) in recordIndex {
+      guard !key.isEmpty else { continue }
+      for forms in byLanguage.values {
+        for record in forms.values
+        where UpdateTranslations.qualifies(record, projectVersion: version) {
+          slots += 1
+          keys.insert(key)
+        }
+      }
+    }
+    updateSlotCount = slots
+    updateRowCount = keys.count
+  }
+
   /// (Re)builds `rows` from the open catalog — the strings -> rows
   /// conversion — then re-applies the current filters. Called from
   /// reconcile (every load) and after every commit/save, so `rows` always
   /// mirrors the artifact that was just written.
   private func buildRows() {
+    refreshUpdateCounts()
     guard let catalog else {
       rows = []
       visibleRows = []

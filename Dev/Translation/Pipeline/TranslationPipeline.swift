@@ -69,7 +69,10 @@ struct TranslationPipeline {
     catalog: StringCatalog? = nil,
     progress: TranslateRunProgress? = nil,
     trace: TranslationTrace? = nil,
-    sourceBudget: Int = TranslationRouter.translateSourceBudget
+    sourceBudget: Int = TranslationRouter.translateSourceBudget,
+    skipImportedDB: Bool = false,
+    skipStage0: Bool = false,
+    updatePass: Bool = false
   ) async -> PipelineRunSummary {
     await run(
       project: project,
@@ -81,7 +84,10 @@ struct TranslationPipeline {
       catalog: catalog,
       progress: progress,
       trace: trace,
-      sourceBudget: sourceBudget
+      sourceBudget: sourceBudget,
+      skipImportedDB: skipImportedDB,
+      skipStage0: skipStage0,
+      updatePass: updatePass
     )
   }
 
@@ -90,6 +96,12 @@ struct TranslationPipeline {
   /// languages of that key). `sourceLanguage` is only a fallback — the
   /// catalog is authoritative: `catalog` when the caller hands one over
   /// (the UI's open catalog, unsaved edits included), else `project.catalogURL`.
+  ///
+  /// The Update Translations pass reuses this entry point with
+  /// `updatePass: true` (selection narrowed to records predating the project
+  /// context doc, one request per row) plus `skipImportedDB` / `skipStage0`:
+  /// the pass applies a project rule, so it keeps TM resolve but never spends
+  /// the imported-DB stage or re-learns from edits (Stage 0).
   static func run(
     project: Project,
     context: ModelContext,
@@ -100,7 +112,10 @@ struct TranslationPipeline {
     catalog: StringCatalog? = nil,
     progress: TranslateRunProgress? = nil,
     trace: TranslationTrace? = nil,
-    sourceBudget: Int = TranslationRouter.translateSourceBudget
+    sourceBudget: Int = TranslationRouter.translateSourceBudget,
+    skipImportedDB: Bool = false,
+    skipStage0: Bool = false,
+    updatePass: Bool = false
   ) async -> PipelineRunSummary {
     var summary = PipelineRunSummary()
     let env = PipelineRunContext(
@@ -110,11 +125,14 @@ struct TranslationPipeline {
       targetKey: key,
       targetLanguages: languages,
       force: force,
+      updatePass: updatePass,
       catalog: catalog
     )
-    progress?.note(key == nil
-      ? "Translate run: \(project.name) (\(env.allRecords.count) records, source \(env.sourceLanguage))"
-      : "Translate \(key!)\(languages.map { " (\($0.count) columns)" } ?? ""): source \(env.sourceLanguage)")
+    progress?.note(updatePass
+      ? "Update Translations run: \(project.name) (\(env.allRecords.count) records, source \(env.sourceLanguage))"
+      : key == nil
+        ? "Translate run: \(project.name) (\(env.allRecords.count) records, source \(env.sourceLanguage))"
+        : "Translate \(key!)\(languages.map { " (\($0.count) columns)" } ?? ""): source \(env.sourceLanguage)")
 
     guard !env.allRecords.isEmpty else {
       progress?.note("No records to translate")
@@ -133,8 +151,10 @@ struct TranslationPipeline {
     }
 
     // Stage 0 — learn from pending user-confirmed edits first, so the rest
-    // of the run sees freshly bumped context versions.
-    if progress?.isCancelled != true {
+    // of the run sees freshly bumped context versions. Skipped by the Update
+    // Translations pass (`skipStage0`): that pass re-applies a project rule,
+    // it does not re-learn.
+    if !skipStage0, progress?.isCancelled != true {
       let learned = await Stage0Learner.learn(env: env, progress: progress, trace: trace)
       summary.learnedFolds += learned.folds
       summary.learnedCovered += learned.covered
@@ -166,9 +186,11 @@ struct TranslationPipeline {
     // Imported-DB resolve — shipped human translations (Phase D), BEFORE any
     // AI backend: hits land .reviewed + autoReviewed and never reach the
     // machine stages (their reviewed state already excludes them); misses
-    // fall through exactly as today. Inert with no DB imported.
+    // fall through exactly as today. Inert with no DB imported. Skipped by
+    // the Update Translations pass (`skipImportedDB`): a project-rule sweep
+    // must not silently promote shipped-DB values over the rule.
     var db = DBResolveOutcome()
-    if progress?.isCancelled != true {
+    if !skipImportedDB, progress?.isCancelled != true {
       db = await importedDBResolve(
         env: env,
         excluded: excludedByTM,
@@ -555,7 +577,7 @@ struct TranslationPipeline {
 
   /// The one AI stage. Records that still need a target value — empty, stale
   /// against the current ContextDocs, or explicitly forced — go out in
-  /// per-language batches, then:
+  /// batches, then:
   ///
   ///   1. deterministic checks reject broken placeholders, empty replies and
   ///      untranslated echoes (`TranslationValidator`),
@@ -566,6 +588,14 @@ struct TranslationPipeline {
   /// Batching is not only throughput: one request carries the L0/L1 context
   /// blocks once instead of once per record, and for a short UI string those
   /// blocks ARE the bulk of the input cost.
+  ///
+  /// Two batch shapes share the whole pipeline below:
+  ///  - NORMAL runs group by target language (`runLanguageBatches`) — the
+  ///    worklist is language-major, so one request carries one language's L1
+  ///    block.
+  ///  - the UPDATE TRANSLATIONS pass groups by ROW (`runRowBatches`) — one
+  ///    request per key carrying every target language of it, so a project
+  ///    rule reaches all of a row's languages together.
   private static func runTranslateStage(
     env: PipelineRunContext,
     excluded: Set<PersistentIdentifier>,
@@ -579,7 +609,9 @@ struct TranslationPipeline {
     router.trace = trace
     defer { router.trace = nil }
     // `allRecords` is sorted (language, key, category), so this worklist is
-    // already language-major and a batch never straddles two languages.
+    // already language-major and a language batch never straddles two
+    // languages. `isTarget` already narrows the update pass to records that
+    // predate the project context doc.
     let work = env.allRecords
       .filter {
         env.isTarget($0)
@@ -598,7 +630,30 @@ struct TranslationPipeline {
     }
 
     progress?.begin(.translate, total: work.count)
+    if env.updatePass {
+      await runRowBatches(
+        work, env: env, router: router, progress: progress,
+        outcome: &outcome, trace: trace, sourceBudget: sourceBudget)
+    } else {
+      await runLanguageBatches(
+        work, env: env, router: router, progress: progress,
+        outcome: &outcome, trace: trace, sourceBudget: sourceBudget)
+    }
+    return outcome
+  }
 
+  /// The normal path: the worklist is language-major (`allRecords` is sorted
+  /// (language, key, category)), so a batch never straddles two languages and
+  /// one request carries one language's L1 block.
+  private static func runLanguageBatches(
+    _ work: [(record: TranslationRecord, context: TranslationContext)],
+    env: PipelineRunContext,
+    router: TranslationRouter,
+    progress: TranslateRunProgress?,
+    outcome: inout StageOutcome,
+    trace: TranslationTrace?,
+    sourceBudget: Int
+  ) async {
     var index = 0
     while index < work.count {
       if progress?.isCancelled == true { break }
@@ -620,19 +675,68 @@ struct TranslationPipeline {
         spent += cost
         index += 1
       }
-      await translateLanguageBatch(
+      await translateBatch(
         slice, language: language, env: env, router: router,
         progress: progress, outcome: &outcome, trace: trace)
       // Checkpoint per batch: a crash mid-run loses at most one batch.
       try? env.context.save()
     }
-    return outcome
   }
 
-  /// One language batch: route, validate, repair, gate, write.
-  private static func translateLanguageBatch(
+  /// The Update Translations path: ONE request per ROW (key) carrying every
+  /// target language of that row, so a project rule reaches all of a row's
+  /// languages together. A row whose payload exceeds `sourceBudget` is split
+  /// into consecutive requests; like the language path a slice always takes at
+  /// least one item, so an oversized row is sent rather than skipped.
+  private static func runRowBatches(
+    _ work: [(record: TranslationRecord, context: TranslationContext)],
+    env: PipelineRunContext,
+    router: TranslationRouter,
+    progress: TranslateRunProgress?,
+    outcome: inout StageOutcome,
+    trace: TranslationTrace?,
+    sourceBudget: Int
+  ) async {
+    // Group by key. `work` follows `allRecords` (language, key, category), so
+    // a row's items arrive ordered by (language, category); iterating the keys
+    // sorted keeps the request order deterministic from run to run.
+    var rows: [String: [(record: TranslationRecord, context: TranslationContext)]] = [:]
+    for item in work {
+      rows[item.record.key, default: []].append(item)
+    }
+    for key in rows.keys.sorted() {
+      guard let row = rows[key] else { continue }
+      var index = 0
+      while index < row.count {
+        if progress?.isCancelled == true { return }
+        var slice: [(record: TranslationRecord, context: TranslationContext)] = []
+        var spent = 0
+        while index < row.count {
+          let cost = ContextPromptBuilder.batchCost(
+            sourceText: row[index].record.sourceText,
+            context: row[index].context)
+          if !slice.isEmpty, spent + cost > sourceBudget { break }
+          slice.append(row[index])
+          spent += cost
+          index += 1
+        }
+        await translateBatch(
+          slice, language: nil, env: env, router: router,
+          progress: progress, outcome: &outcome, trace: trace)
+        // Checkpoint per request: a crash mid-row loses at most one request.
+        try? env.context.save()
+      }
+    }
+  }
+
+  /// One batch request: route, validate, repair, gate, write. `language`
+  /// non-nil is the normal language-uniform batch (its item JSON omits a
+  /// per-item language); nil is the Update Translations row batch, where each
+  /// item names its own target language. Truncation, single-item repair and the
+  /// paid gate are shared by both.
+  private static func translateBatch(
     _ slice: [(record: TranslationRecord, context: TranslationContext)],
-    language: String,
+    language: String?,
     env: PipelineRunContext,
     router: TranslationRouter,
     progress: TranslateRunProgress?,
@@ -642,11 +746,22 @@ struct TranslationPipeline {
     guard !slice.isEmpty else { return }
     let items = slice.enumerated().map { offset, item in
       ContextPromptBuilder.BatchItem(
-        id: offset, sourceText: item.record.sourceText, context: item.context)
+        id: offset,
+        sourceText: item.record.sourceText,
+        context: item.context,
+        // Only the mixed-language row batch names a language per item; the
+        // uniform batch leaves it nil so its item JSON (and cache contract) is
+        // byte-identical to before.
+        targetLanguage: language == nil ? item.record.language : nil)
     }
 
     // 1. Batched translation — free tiers first, paid destination last.
-    let batch = await router.translateBatch(items, from: env.sourceLanguage, to: language)
+    let batch: BatchOutcome
+    if let language {
+      batch = await router.translateBatch(items, from: env.sourceLanguage, to: language)
+    } else {
+      batch = await router.translateRowBatch(items, from: env.sourceLanguage)
+    }
     var resolved: [Int: (value: String, editor: String)] = [:]
     for (id, value) in batch.values {
       resolved[id] = (value, batch.model)
@@ -668,24 +783,27 @@ struct TranslationPipeline {
       guard !rest.isEmpty else { return }
       let cut = max(1, rest.count / 2)
       progress?.note("Reply truncated — re-asking \(rest.count) item(s) in smaller batches")
-      await translateLanguageBatch(
+      await translateBatch(
         Array(rest[0..<cut]), language: language, env: env, router: router,
         progress: progress, outcome: &outcome, trace: trace)
       if cut < rest.count {
-        await translateLanguageBatch(
+        await translateBatch(
           Array(rest[cut...]), language: language, env: env, router: router,
           progress: progress, outcome: &outcome, trace: trace)
       }
       return
     }
 
-    // 2. Single-item repair for whatever the batch could not deliver.
+    // 2. Single-item repair for whatever the batch could not deliver. A
+    // single item always knows its own language, so the row batch needs no
+    // special case here.
     for id in batch.failedIDs where slice.indices.contains(id) {
       if progress?.isCancelled == true { break }
       let item = slice[id]
+      let to = language ?? item.record.language
       do {
         let value = try await router.translate(
-          item.record.sourceText, from: env.sourceLanguage, to: language, context: item.context)
+          item.record.sourceText, from: env.sourceLanguage, to: to, context: item.context)
         let issues = TranslationValidator.validate(source: item.record.sourceText, target: value)
         if issues.isEmpty {
           resolved[id] = (value, router.currentModel)

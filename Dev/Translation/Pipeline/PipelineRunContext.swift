@@ -48,6 +48,11 @@ final class PipelineRunContext {
   /// values are re-translated/reviewed even when fresh. The whole-catalog
   /// button leaves this false so it stays incremental.
   let force: Bool
+  /// When true this is the explicit "Update Translations" pass: candidate
+  /// selection is narrowed to the records that predate the CURRENT project
+  /// context doc (`UpdateTranslations.qualifies`) and the translate stage
+  /// sends ONE request per row carrying every target language of that row.
+  let updatePass: Bool
   /// BCP-47 code of the catalog's source language ("en" fallback).
   var sourceLanguage: String
   /// All context documents that exist right now; created docs are appended.
@@ -69,6 +74,7 @@ final class PipelineRunContext {
     targetKey: String? = nil,
     targetLanguages: Set<String>? = nil,
     force: Bool = false,
+    updatePass: Bool = false,
     catalog callerCatalog: StringCatalog? = nil
   ) {
     self.context = context
@@ -76,6 +82,7 @@ final class PipelineRunContext {
     self.targetKey = targetKey
     self.targetLanguages = targetLanguages
     self.force = force
+    self.updatePass = updatePass
     // Catalog wins over the caller's guess: the file IS the source of truth
     // for the source language and comments — unless the caller hands over the
     // UI's open catalog, which may carry edits the file has not been given
@@ -101,7 +108,16 @@ final class PipelineRunContext {
   /// run is language-scoped) the record's language is one of the selected
   /// columns. Applied by every stage's candidate filter so a single-item run
   /// touches exactly the selected languages of one key.
+  ///
+  /// On the Update Translations pass (`updatePass`) the work set is ALSO
+  /// narrowed to records that predate the current project context doc — the
+  /// same `UpdateTranslations.qualifies` predicate the toolbar counts, so the
+  /// pass cannot sweep a record the count did not advertise.
   func isTarget(_ record: TranslationRecord) -> Bool {
+    if updatePass,
+       !UpdateTranslations.qualifies(record, projectVersion: project.contextDoc?.version) {
+      return false
+    }
     if let targetKey, record.key != targetKey { return false }
     if let targetLanguages, !targetLanguages.contains(record.language) { return false }
     return true

@@ -128,6 +128,25 @@ final class TranslateRunController {
       catalog: catalog, progress: progress)
   }
 
+  /// Runs the explicit "Update Translations" pass: the whole project's records
+  /// that predate the current project context doc, one request per ROW with
+  /// every target language of that row (`updatePass`), against the LARGER
+  /// `updateSourceBudget`. The freshness gate is lifted (`force`), TM resolve
+  /// is kept, and the imported-DB stage plus Stage 0 are skipped — this pass
+  /// applies a project rule, it does not re-learn or re-promote DB values.
+  /// `catalog` is the UI's OPEN in-memory catalog, as for a normal run.
+  func executeUpdate(project: Project, catalog: StringCatalog? = nil) async -> PipelineRunSummary {
+    await TranslationPipeline.run(
+      project: project,
+      force: true,
+      catalog: catalog,
+      progress: progress,
+      sourceBudget: TranslationRouter.updateSourceBudget,
+      skipImportedDB: true,
+      skipStage0: true,
+      updatePass: true)
+  }
+
   /// Ends the run and publishes the summary. Called after the caller has
   /// flushed the DB back into the .xcstrings artifact.
   func finish(_ result: PipelineRunSummary) {

@@ -38,6 +38,21 @@ nonisolated struct GateItem: Sendable {
   var maxWidth: Int? = nil
 }
 
+// MARK: - BatchLayout
+
+/// How one batch request names its target language(s). Both `translateBatch`
+/// and `translateRowBatch` funnel through the same private `routeBatch`; this
+/// is the only thing that differs between them (plus the trace title).
+nonisolated enum BatchLayout: Sendable {
+  /// Every item goes into ONE target language: it is a shared L1 block (the
+  /// normal, language-uniform batch).
+  case singleLanguage(String)
+  /// Each item names its OWN target language in the payload. The Update
+  /// Translations row batch mixes languages, so it has no single L1 block
+  /// (see `ContextPromptBuilder.assembleRowBatch`).
+  case perItem
+}
+
 // MARK: - TranslationRouter
 
 /// The single translation entry point the pipeline calls.
@@ -45,9 +60,16 @@ nonisolated struct GateItem: Sendable {
 /// Two operations, both walking the same `RoutedModel.chain` and both falling
 /// through to the paid `muse` model when the free tiers are exhausted:
 ///
-///  - `translateBatch` — the batch path, used for whole language groups.
+///  - `translateBatch` — the language-uniform batch path (whole language
+///    groups; one target language per request).
+///  - `translateRowBatch` — the Update Translations row batch: ONE request
+///    carrying every target language of a row, each item naming its own.
 ///  - `translate` — the single-item path, used to repair batch failures and
 ///    as the `TranslatorBackend` conformance.
+///
+/// `translateBatch` and `translateRowBatch` share the chain walk, pacing,
+/// cooldowns, validation and trace through the private `routeBatch`; only the
+/// prompt assembly and the trace title differ.
 ///
 /// A third operation, `verifyBatch`, ALWAYS runs on the paid model: review is
 /// never routed to a free tier.
@@ -152,6 +174,31 @@ final class TranslationRouter: TranslatorBackend {
     from: String,
     to: String
   ) async -> BatchOutcome {
+    await routeBatch(items, from: from, layout: .singleLanguage(to))
+  }
+
+  /// The Update Translations entry point: ONE request per ROW, every target
+  /// language of that row together. Each item carries its own `targetLanguage`
+  /// (see `BatchLayout.perItem`), so the prompt uses the row layout.
+  ///
+  /// Routing, pacing, cooldowns, validation and truncation are shared with
+  /// `translateBatch` through `routeBatch` — one implementation, two entry
+  /// points.
+  func translateRowBatch(
+    _ items: [ContextPromptBuilder.BatchItem],
+    from: String
+  ) async -> BatchOutcome {
+    await routeBatch(items, from: from, layout: .perItem)
+  }
+
+  /// The shared batch implementation: walks the chain, paces the calls,
+  /// assembles the prompt for `layout`, validates the reply and traces. Only
+  /// `layout` (prompt shape + trace title) distinguishes the two entry points.
+  private func routeBatch(
+    _ items: [ContextPromptBuilder.BatchItem],
+    from: String,
+    layout: BatchLayout
+  ) async -> BatchOutcome {
     guard !items.isEmpty else { return BatchOutcome() }
     let expectedIDs = items.map(\.id)
     var lastFailure: BackendError?
@@ -162,11 +209,20 @@ final class TranslationRouter: TranslatorBackend {
       await admit(candidate.provider)
       note(candidate)
       do {
-        let prompt = ContextPromptBuilder.assembleBatch(
-          items: items,
-          sourceLanguage: from,
-          targetLanguage: to,
-          sharedContext: items.first?.context)
+        let prompt: ContextPromptBuilder.AssembledPrompt
+        switch layout {
+        case .singleLanguage(let to):
+          prompt = ContextPromptBuilder.assembleBatch(
+            items: items,
+            sourceLanguage: from,
+            targetLanguage: to,
+            sharedContext: items.first?.context)
+        case .perItem:
+          prompt = ContextPromptBuilder.assembleRowBatch(
+            items: items,
+            sourceLanguage: from,
+            sharedContext: items.first?.context)
+        }
         let reply = try await Self.call(
           candidate, apiKey: key, system: prompt.system, user: prompt.user,
           maxTokens: nil, jsonObject: false)
@@ -174,7 +230,7 @@ final class TranslationRouter: TranslatorBackend {
         let outcome = validate(reply.content, items: items, candidate: candidate)
         trace?.add(TranslationTrace.Step(
           kind: .translate,
-          title: "Batch of \(items.count) into \(to)",
+          title: Self.batchTitle(items, layout: layout),
           model: candidate.name,
           provider: candidate.provider.displayName,
           isPaid: !candidate.isFree,
@@ -204,6 +260,22 @@ final class TranslationRouter: TranslatorBackend {
       provider: RoutedModel.muse.provider.displayName,
       isPaid: true,
       notes: [lastFailure?.localizedDescription ?? "no candidate available"])
+  }
+
+  /// Trace title for one batch: the language-uniform form names the single
+  /// target language; the row form names how many languages the mixed request
+  /// carried (a row sweeping K languages is ONE request).
+  private static func batchTitle(
+    _ items: [ContextPromptBuilder.BatchItem],
+    layout: BatchLayout
+  ) -> String {
+    switch layout {
+    case .singleLanguage(let to):
+      return "Batch of \(items.count) into \(to)"
+    case .perItem:
+      let languages = Set(items.compactMap(\.targetLanguage))
+      return "Row batch of \(items.count) into \(languages.count) language(s)"
+    }
   }
 
   /// Applies the deterministic checks to a parsed batch reply.

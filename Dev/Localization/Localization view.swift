@@ -174,6 +174,18 @@ struct LocalizationView: View {
     .toolbar {
       ControlsBar(store: store, allowsOpenCatalog: allowsOpenCatalog)
     }
+    // Update Translations: the paid sweep always asks first, with the pre-run
+    // count in the message. Attached here (not on the outer Group) so it
+    // cannot collide with the load/save error alert.
+    .alert("Update Translations", isPresented: Binding(
+      get: { store.updateConfirmationPresented },
+      set: { if !$0 { store.cancelUpdateTranslations() } }
+    )) {
+      Button("Cancel", role: .cancel) { store.cancelUpdateTranslations() }
+      Button("Run Update") { store.confirmUpdateTranslations() }
+    } message: {
+      Text(store.updateConfirmationMessage)
+    }
   }
 
   private var emptyState: some View {

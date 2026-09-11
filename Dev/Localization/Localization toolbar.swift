@@ -103,6 +103,18 @@ struct ControlsBar: ToolbarContent {
       .help(store.run.isActive
         ? "A translation run is in progress — cancel it from the footer"
         : "Run the translation pipeline: learn from confirmed edits, resolve translation memory and the imported DB, then translate every remaining string with Command Code")
+
+      Button {
+        store.requestUpdateTranslations()
+      } label: {
+        Label(
+          store.updateSlotCount > 0
+            ? "Update Translations (\(store.updateSlotCount))"
+            : "Update Translations",
+          systemImage: "arrow.triangle.2.circlepath")
+      }
+      .disabled(!store.canUpdateTranslations)
+      .help(store.updateTranslationsHelp)
     }
   }
   struct ToggleButtonStyle: ToggleStyle {
