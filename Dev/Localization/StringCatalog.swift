@@ -506,42 +506,63 @@ nonisolated struct StringCatalog: Codable, Sendable {
 
 // MARK: - PluralRules
 
-/// CLDR cardinal plural categories per language (base subtag match).
-/// "other" is present in every set — it is the required fallback form.
+/// The plural categories a language's variation template carries.
+///
+/// The table below is Xcode's OWN, extracted from
+/// `/Applications/Xcode.app/Contents/SharedFrameworks/XCStringsParser.framework/Versions/A/Resources/variationConfigFile.plist`
+/// (`PluralRule.ComplementedPluralKeys`, 161 bare locales), keeping only the
+/// languages whose set differs from the ubiquitous `one`/`other` — the
+/// `default` below is exactly that pair, so any code the table does not name
+/// still gets a correct template. Regenerate the same way when the Add
+/// Language set grows; never hand-write these from memory (three of the
+/// pre-12-Sep entries did: `cs`/`sk` were missing `many`, `hr`/`sr` an extra
+/// `many`, and `fr`/`pt` an extra `many`, all against Xcode's own data).
+///
+/// Three locales Xcode ships NO template for are filled from CLDR instead, and
+/// are called out where they appear: `ars` (Arabic rules), `sa` and `sat`
+/// (one/two/other). They are keyboard-only languages; getting them wrong would
+/// silently create or drop a form, and nothing downstream would catch it —
+/// `xcstringstool` accepts any category for any locale (probed).
 nonisolated enum PluralRules {
+  /// Languages whose plural set is not the default `["one", "other"]`.
+  private static let nonDefault: [String: [String]] = [
+    "ar": ["zero", "one", "two", "few", "many", "other"], "be": ["one", "few", "many", "other"],
+    "bm": ["other"], "bo": ["other"],
+    "br": ["one", "two", "few", "many", "other"], "bs": ["one", "few", "other"],
+    "cs": ["one", "few", "many", "other"], "cy": ["zero", "one", "two", "few", "many", "other"],
+    "dsb": ["one", "two", "few", "other"], "dz": ["other"],
+    "ga": ["one", "two", "few", "many", "other"], "gd": ["one", "two", "few", "other"],
+    "gv": ["one", "two", "few", "many", "other"], "he": ["one", "two", "many", "other"],
+    "hr": ["one", "few", "other"], "hsb": ["one", "two", "few", "other"],
+    "id": ["other"], "ig": ["other"],
+    "ii": ["other"], "iu": ["one", "two", "other"],
+    "ja": ["other"], "kde": ["other"],
+    "kea": ["other"], "km": ["other"],
+    "ko": ["other"], "ksh": ["zero", "one", "other"],
+    "kw": ["one", "two", "other"], "lag": ["zero", "one", "other"],
+    "lkt": ["other"], "lo": ["other"],
+    "lt": ["one", "few", "many", "other"], "lv": ["zero", "one", "other"],
+    "ms": ["other"], "mt": ["one", "few", "many", "other"],
+    "my": ["other"], "naq": ["one", "two", "other"],
+    "pl": ["one", "few", "many", "other"], "ro": ["one", "few", "other"],
+    "ru": ["one", "few", "many", "other"], "sah": ["other"],
+    "se": ["one", "two", "other"], "ses": ["other"],
+    "sg": ["other"], "shi": ["one", "few", "other"],
+    "sk": ["one", "few", "many", "other"], "sl": ["one", "two", "few", "other"],
+    "smn": ["one", "two", "other"], "sr": ["one", "few", "other"],
+    "th": ["other"], "to": ["other"],
+    "uk": ["one", "few", "many", "other"], "vi": ["other"],
+    "yo": ["other"], "yue": ["other"],
+    "zh": ["other"],
+    // CLDR, because Xcode's table has no entry for these three at all.
+    "ars": ["zero", "one", "two", "few", "many", "other"],
+    "sa": ["one", "two", "other"],
+    "sat": ["one", "two", "other"],
+  ]
+
   static func categories(for language: String) -> [String] {
     let base = language.split(separator: "-").first?.split(separator: "_").first.map(String.init)?.lowercased() ?? language.lowercased()
-    switch base {
-    case "ar":
-      return ["zero", "one", "two", "few", "many", "other"]
-    case "cs", "sk":
-      return ["one", "few", "other"]
-    case "ru", "uk", "hr", "sr", "bs", "be", "pl", "lt":
-      return ["one", "few", "many", "other"]
-    case "ro":
-      return ["one", "few", "other"]
-    case "he":
-      return ["one", "two", "many", "other"]
-    case "fr", "pt":
-      return ["one", "many", "other"]
-    case "sl":
-      return ["one", "two", "few", "other"]
-    case "lv":
-      return ["zero", "one", "other"]
-    case "ga", "cy":
-      return ["zero", "one", "two", "few", "many", "other"]
-    case "mt":
-      return ["one", "few", "many", "other"]
-    case "ja", "zh", "ko", "th", "vi", "id", "ms", "lo", "my", "km", "tr", "ka":
-      // NOTE: ka (Georgian) CLDR is one/other; grouped here as other-only to
-      // match Xcode's variation template — the AI reconciles real forms on Translate.
-      // az (Azerbaijani) is NOT in this group: its CLDR set is one/other, and
-      // it is offerable from the Add Language menu, so an added az column must
-      // get both forms.
-      return ["other"]
-    default:
-      return ["one", "other"]
-    }
+    return nonDefault[base] ?? ["one", "other"]
   }
 
   /// Display names for the editor ("one" -> "One").

@@ -373,23 +373,35 @@ final class LocalizationStore {
 
   var isLoaded: Bool { catalog != nil }
 
-  /// Language codes the "Add Language" menu offers — the set this tool
-  /// supports, alphabetical. The menu marks the ones the open catalog already
-  /// carries.
+  /// Language codes the "Add Language" menu offers — every language Apple's own
+  /// platforms carry as a keyboard OR a UI language, alphabetical. The menu
+  /// marks the ones the open catalog already carries.
   ///
-  /// Every European entry is one Apple's own platforms carry as a device or
-  /// keyboard language (verified against the installed iOS runtime's
-  /// `System/Library/TextInput` bundles and `.lproj` sets, plus Xcode's own
-  /// locale table — see plans/localization.md); a language Apple ships no
-  /// keyboard or UI for (Bosnian, Breton, Corsican, Scottish Gaelic,
-  /// Luxembourgish, the North-Caucasus languages) is deliberately absent, so
-  /// nothing here promises a localization the platform cannot render.
+  /// Verified locally against the installed iOS 27 runtime: the
+  /// `System/Library/TextInput/TextInput_<code>.bundle` set (keyboard/device
+  /// languages, 98 codes) union the `.lproj` sets of its first-party apps
+  /// (UI languages, 66 codes), so nothing here is offered that the OS cannot
+  /// render. Not separate entries: regional variants (pt-BR, en-GB, es-419,
+  /// de-CH, fr-CA…), Apple's generic `no` (Norwegian is offered as nb + nn)
+  /// and `tl` (Filipino carries Tagalog). A catalog may of course still carry
+  /// any code it likes — that is the catalog's business, not this menu's.
   static let offeredLanguages: [String] = [
-    "ar", "az", "be", "bg", "ca", "cs", "cy", "da", "de", "el", "en", "es",
-    "et", "fi", "fil", "fo", "fr", "ga", "he", "hi", "hr", "hu", "hy", "id",
-    "is", "it", "ja", "ka", "lt", "lv", "mk", "ms", "mt", "nb", "nl", "nn",
-    "pl", "pt_PT", "ro", "ru", "sk", "sl", "sq", "sr", "sv", "th", "tr", "uk",
-    "vi", "zh-Hans",
+    "ar", "ars", "as", "az", "be", "bg",
+    "bn", "bo", "brx", "ca", "chr", "ckb",
+    "cs", "cy", "da", "de", "doi", "dv",
+    "el", "en", "es", "et", "fa", "fi",
+    "fil", "fo", "fr", "ga", "gu", "haw",
+    "he", "hi", "hr", "hu", "hy", "id",
+    "is", "it", "ja", "ka", "kk", "km",
+    "kn", "ko", "kok", "ks", "ku", "ky",
+    "lo", "lt", "lv", "mai", "mi", "mk",
+    "ml", "mn", "mni", "mr", "ms", "mt",
+    "my", "nb", "ne", "nl", "nn", "or",
+    "pa", "pl", "ps", "pt_PT", "ro", "ru",
+    "sa", "sat", "sd", "si", "sk", "sl",
+    "sq", "sr", "sv", "sw", "ta", "te",
+    "tg", "th", "tk", "to", "tr", "ug",
+    "uk", "ur", "vi", "yue", "zh-Hans",
   ]
 
   /// Languages added during THIS window, before any of their records exist.
