@@ -12,6 +12,14 @@ import Foundation
 nonisolated struct ScanPackageManifest: Decodable {
   var name: String?
   var targets: [ScanTargetManifest]?
+  /// The undecoded `dump-package` JSON — for the manifest fields this model
+  /// does not carry (products, platforms). Set by the dumper, never decoded.
+  var rawJSON: Data?
+
+  private enum CodingKeys: String, CodingKey {
+    case name
+    case targets
+  }
 }
 
 /// A single target entry from dump-package.
@@ -79,7 +87,9 @@ nonisolated enum ScanPackageDumper {
       throw ScanPackageDumpError.decodeFailed("output was not UTF-8")
     }
     do {
-      return try JSONDecoder().decode(ScanPackageManifest.self, from: data)
+      var manifest = try JSONDecoder().decode(ScanPackageManifest.self, from: data)
+      manifest.rawJSON = data
+      return manifest
     } catch {
       throw ScanPackageDumpError.decodeFailed("\(error)")
     }

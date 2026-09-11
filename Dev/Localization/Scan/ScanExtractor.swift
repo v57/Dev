@@ -31,6 +31,19 @@ nonisolated struct ScanCompileUnit {
   /// Build settings of the unit's own project (`ScanSwiftSettings`), appended
   /// after the platform arguments.
   var settingsArguments: [String] = []
+  /// The project's own package dependencies that this unit can see, one entry
+  /// per package: the products it vends (importable module names) and every
+  /// target module it builds, clang ones included.
+  ///
+  /// The salvage loop needs both halves: a dependency can be only PARTLY
+  /// usable — SwiftPM's build of avif.swift exposes `avifnuke` and `avif` but
+  /// not the clang module `avifc` they re-export — so the diagnostic names a
+  /// module no source imports (`avifc`) while the files that must be dropped
+  /// import its product (`avifnuke`). Matching the missing module against the
+  /// dependency's TARGET list and then dropping that package's PRODUCT
+  /// importers keeps the fallback narrow: a missing module of package A never
+  /// costs you the files that import package B.
+  var dependencies: [ScanDependencyModules] = []
 }
 
 /// Result of extracting localizable keys from one module's sources.
@@ -50,6 +63,14 @@ nonisolated struct ScanModuleOutcome: Identifiable, Sendable {
 
   var id: String { "\(owner) · \(module)" }
   var keyCount: Int { keys.count }
+}
+
+/// One package dependency a compile unit can see (see
+/// `ScanCompileUnit.dependencies`).
+nonisolated struct ScanDependencyModules: Sendable {
+  var identity: String
+  var products: [String]
+  var targets: [String]
 }
 
 /// Runs the toolchain's localizable-key extraction over one module's sources
@@ -132,7 +153,28 @@ nonisolated enum ScanExtractor {
 
         // Drop the files the compiler blamed and retry with the rest — their
         // keys are lost, but every other file can still contribute.
-        let blamed = ScanExtractor.blamedSourceFiles(in: attempt.output)
+        var blamed = ScanExtractor.blamedSourceFiles(in: attempt.output)
+        if blamed.isEmpty, let module = ScanExtractor.unresolvableModule(in: attempt.output) {
+          // A module-level failure names no source file ("missing required
+          // module 'avifc'", because a package dependency's clang module is not
+          // exposed by a `swift build` tree), so nothing would be dropped and
+          // the whole module's keys would be lost. Drop the files that import
+          // it instead: their keys are lost either way, and the rest compiles.
+          blamed = ScanExtractor.filesImporting(module, in: remaining)
+          if blamed.isEmpty {
+            // The missing module is not imported by name — it belongs to a
+            // dependency's own targets (avifc ← avif.swift), so drop the files
+            // importing that package's products.
+            for dependency in unit.dependencies
+            where dependency.targets.contains(module) || dependency.targets.contains(where: {
+              $0 == module || module.hasPrefix($0 + ".")
+            }) {
+              blamed += dependency.products.flatMap {
+                ScanExtractor.filesImporting($0, in: remaining)
+              }
+            }
+          }
+        }
         let newlyBlamed = blamed.filter { path in
           !excluded.contains(path) && remaining.contains { $0.path == path }
         }
@@ -157,7 +199,12 @@ nonisolated enum ScanExtractor {
   }
 
   /// Extra whole-module compiles allowed per pass after dropping blamed files.
-  private static let maxSalvageRounds = 2
+  /// Four, not two: a module can have several independently broken files (the
+  /// playgra app target loses App.swift and the other `avifnuke` importers on
+  /// top of its missing-dependency file), and each round drops everything the
+  /// compiler named at once — so the cost is one compile per round only for
+  /// modules that fail.
+  private static let maxSalvageRounds = 4
 
   private struct AttemptOutcome {
     var succeeded: Bool
@@ -239,6 +286,41 @@ nonisolated enum ScanExtractor {
       succeeded: false, detail: retry.firstErrorLine, output: combined)
   }
 
+  /// The module a "can't find it" diagnostic names, or nil. Both spellings
+  /// appear: `no such module 'X'` (absent) and `missing required module 'X'`
+  /// (a dependency of a module that WAS found is missing).
+  static func unresolvableModule(in output: String) -> String? {
+    guard let regex = try? NSRegularExpression(
+      pattern: "(?:no such module|missing required module|could not find module) '([A-Za-z_][A-Za-z0-9_.]*)'")
+    else { return nil }
+    let range = NSRange(output.startIndex..<output.endIndex, in: output)
+    guard let match = regex.firstMatch(in: output, range: range),
+          match.numberOfRanges > 1,
+          let captured = Range(match.range(at: 1), in: output)
+    else { return nil }
+    return String(output[captured])
+  }
+
+  /// The files that import `module` (or a submodule of it).
+  static func filesImporting(_ module: String, in files: [URL]) -> [String] {
+    let root = module.split(separator: ".").first.map(String.init) ?? module
+    var matching: [String] = []
+    for file in files {
+      guard let text = try? String(contentsOf: file, encoding: .utf8) else { continue }
+      for line in text.split(separator: "\n").prefix(80) {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard trimmed.hasSuffix(root) || trimmed.contains("import \(root)"),
+              trimmed.contains("import")
+        else { continue }
+        if trimmed.hasSuffix(root), trimmed.contains("import ") {
+          matching.append(file.path)
+          break
+        }
+      }
+    }
+    return matching
+  }
+
   /// True when the compiler output blames `Bundle.module` — either the member
   /// is missing, or it resolved to another module's internal declaration.
   static func needsBundleModuleShim(_ output: String) -> Bool {
@@ -311,7 +393,15 @@ nonisolated enum ScanExtractor {
   static func moduleSearchPaths(
     packageRoot: URL, toolchain: ScanToolchain
   ) -> (includeDirs: [String], moduleMapFiles: [String]) {
-    let buildRoot = packageRoot.appendingPathComponent(".build")
+    moduleSearchPaths(
+      buildRoot: packageRoot.appendingPathComponent(".build"), toolchain: toolchain)
+  }
+
+  /// Same, for any SwiftPM/swiftbuild scratch tree — a package's own `.build`,
+  /// or the scratch path a dependency was built into (`ScanProjectPackages`).
+  static func moduleSearchPaths(
+    buildRoot: URL, toolchain: ScanToolchain
+  ) -> (includeDirs: [String], moduleMapFiles: [String]) {
     let enumerator = FileManager.default.enumerator(
       at: buildRoot,
       includingPropertiesForKeys: [.isRegularFileKey],
@@ -348,13 +438,25 @@ nonisolated enum ScanExtractor {
         guard components.contains(where: toolchain.moduleMapDirectoryNames.contains) else {
           continue
         }
-        let name = url.deletingPathExtension().lastPathComponent
+        let name = moduleName(forModuleMap: url.path)
         if let existing = moduleMaps[name], existing.count <= url.path.count { continue }
         moduleMaps[name] = url.path
       default:
         break
       }
     }
+    // A C target whose headers are PUBLIC gets no generated map in
+    // `GeneratedModuleMaps-<platform>`; SwiftPM emits the map as
+    // `<products>/include/module.modulemap` instead (avif.swift's `avifc` —
+    // without it the consumer fails with "missing required module 'avifc'").
+    for directory in parents {
+      let candidate = URL(fileURLWithPath: directory)
+        .appendingPathComponent("include/module.modulemap")
+      guard FileManager.default.fileExists(atPath: candidate.path) else { continue }
+      let name = moduleName(forModuleMap: candidate.path)
+      if moduleMaps[name] == nil { moduleMaps[name] = candidate.path }
+    }
+
     // Clang-only modules only: a name that also has a `.swiftmodule` product
     // would be redefined by its modulemap.
     let clangOnly = moduleMaps
@@ -362,6 +464,40 @@ nonisolated enum ScanExtractor {
       .values
       .sorted()
     return (parents.sorted(), clangOnly)
+  }
+
+  /// The module a `.modulemap` DECLARES, falling back to its file name. Needed
+  /// because SwiftPM's public-header map is named `module.modulemap` for every
+  /// such target — keying maps by file name would collide them.
+  static func moduleName(forModuleMap path: String) -> String {
+    let fallback = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+    guard let text = try? String(contentsOfFile: path, encoding: .utf8),
+          let regex = try? NSRegularExpression(
+            pattern: "(?m)^\\s*(?:explicit\\s+)?module\\s+([A-Za-z_][A-Za-z0-9_]*)"),
+          let match = regex.firstMatch(
+            in: text, range: NSRange(text.startIndex..<text.endIndex, in: text)),
+          match.numberOfRanges > 1,
+          let captured = Range(match.range(at: 1), in: text)
+    else { return fallback }
+    return String(text[captured])
+  }
+
+  /// One `-fmodule-map-file=` argument per MODULE NAME, keeping the first
+  /// occurrence of each. Attaching the same module's map twice makes clang
+  /// report "redefinition of module 'X'" before any source is read — and a
+  /// dependency built by the scan produces a second copy of every map the
+  /// project's package build already generated (playgra: built
+  /// `client-sdk-swift` next to the package's own maps → `LKObjCHelpers` twice,
+  /// which failed all four project targets). Pass the list whose maps belong to
+  /// the build the units actually type-check against FIRST.
+  static func uniqueModuleMaps(_ paths: [String]) -> [String] {
+    var seen: Set<String> = []
+    var unique: [String] = []
+    for path in paths {
+      let name = moduleName(forModuleMap: path)
+      if seen.insert(name).inserted { unique.append(path) }
+    }
+    return unique
   }
 
   /// Directories the XCTest/derived-data products of a project may live in

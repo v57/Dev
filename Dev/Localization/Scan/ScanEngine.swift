@@ -95,6 +95,7 @@ nonisolated enum ScanEngine {
     let toolchain = resolveToolchain(
       projectURLs: projectURLs, packageRoots: packageRoots, manifests: manifests,
       warnings: &warnings, emit: emit)
+    let platformLabel = toolchain.platform == .iosSimulator ? "iOS Simulator" : "the host"
 
     // MARK: 2. packages -> compile units
 
@@ -137,17 +138,16 @@ nonisolated enum ScanEngine {
     ///    only `import SwiftUI`, which re-exports AppKit on macOS). Compiling
     ///    it for iOS fails on exactly those symbols;
     ///  - everything else follows the run's resolved platform.
-    func unitPlatform(_ files: [URL], projectTarget: Bool) -> ScanPlatform {
+    func unitPlatform(_ files: [URL]) -> ScanPlatform {
       if ScanPlatformResolver.importsUIKit(files) { return .iosSimulator }
-      if ScanPlatformResolver.importsAppKit(files) { return .host }
-      if projectTarget, toolchain.platform == .iosSimulator { return .host }
+      if ScanPlatformResolver.usesMacOSOnlyAPI(files) { return .host }
       return toolchain.platform
     }
 
     /// The toolchain + search paths for one unit, defaulting to the run's
     /// platform when the unit's platform has no products of its own.
-    func unitCompileSetup(_ files: [URL], projectTarget: Bool) -> (ScanToolchain, [String], [String]) {
-      let platform = unitPlatform(files, projectTarget: projectTarget)
+    func unitCompileSetup(_ files: [URL]) -> (ScanToolchain, [String], [String]) {
+      let platform = unitPlatform(files)
       guard let paths = platformSearchPaths[platform] else {
         return (toolchain, allIncludeDirs.sorted(), allModuleMapFiles.sorted())
       }
@@ -165,7 +165,6 @@ nonisolated enum ScanEngine {
       let manifest = manifests[packageRoot.path]
 
       if config.buildRefresh, !cancellation.isCancelled {
-        let platformLabel = toolchain.platform == .iosSimulator ? "iOS Simulator" : "the host"
         emit(.phase("Building \(name) for \(platformLabel)… (module products the extraction typechecks against)"))
         let buildWarning = ScanExtractor.buildWarning(for: packageRoot, toolchain: toolchain)
         if !buildWarning.isEmpty {
@@ -193,7 +192,7 @@ nonisolated enum ScanEngine {
         } else {
           directory = packageRoot.appendingPathComponent("Sources/\(target.name)").path
         }
-        let setup = unitCompileSetup(files, projectTarget: false)
+        let setup = unitCompileSetup(files)
         units.append(
           ScanCompileUnit(
             owner: packageName,
@@ -223,9 +222,45 @@ nonisolated enum ScanEngine {
           warnings.append("\(projectName): no scannable targets in \(projectURL.path)")
           emit(.log("warning: \(projectName): no scannable targets"))
         }
-        // The project's own Swift package dependencies (SwiftUIIntrospect, …)
-        // are built by Xcode, not by any package build, so each target also
-        // looks for its products in the project's derived data.
+        // The project's own Swift package dependencies (SwiftUIIntrospect,
+        // avif.swift, …) are built by Xcode's package resolution, never by the
+        // SwiftPM package build above. Two sources are used, in order:
+        //   1. the project's derived data, when Xcode has built it before
+        //      (`ScanExtractor.derivedDataIncludeDirs`);
+        //   2. the pinned revisions in Xcode's local package cache, materialized
+        //      and built for the scan's platform (`ScanProjectPackages`) — the
+        //      route that works when resolution cannot run at all.
+        var projectPackageIncludes: [String] = []
+        var projectPackageMaps: [String] = []
+        var dependencyModules: [ScanDependencyModules] = []
+        if !targets.isEmpty, !cancellation.isCancelled {
+          let imported = importedModules(in: targets)
+          let pins = ScanProjectPackages.resolvedPins(forProjectAt: projectURL)
+          if !pins.isEmpty, !imported.isEmpty {
+            emit(.phase("Building \(projectName)'s package dependencies for \(platformLabel)…"))
+            let packagePaths = ScanProjectPackages.build(
+              pins: pins, projectName: projectName, importedModules: imported,
+              toolchain: toolchain, workDirectory: workDirectory,
+              cancellation: cancellation
+            ) { outcome in
+              switch outcome.status {
+              case .built:
+                emit(.log("package \(outcome.identity): built \(outcome.modules.joined(separator: ", "))"))
+              case .cached:
+                emit(.log("package \(outcome.identity): reused a previous build"))
+              case .notImported:
+                break
+              case .noCheckout:
+                emit(.log("package \(outcome.identity): no cached checkout — \(outcome.detail)"))
+              case .failed:
+                emit(.log("warning: package \(outcome.identity): \(outcome.detail)"))
+              }
+            }
+            projectPackageIncludes = packagePaths.includeDirs
+            projectPackageMaps = packagePaths.moduleMapFiles
+            dependencyModules = packagePaths.dependencies
+          }
+        }
         for target in targets {
           if cancellation.isCancelled { break }
           var files = target.files.filter { FileManager.default.fileExists(atPath: $0.path) }
@@ -238,7 +273,7 @@ nonisolated enum ScanEngine {
             .sorted { $0.path < $1.path }
           guard !files.isEmpty else { continue }
           let roots = (target.directories.map(\.path) + (target.files.isEmpty ? [] : ["listed sources"]))
-          let setup = unitCompileSetup(files, projectTarget: true)
+          let setup = unitCompileSetup(files)
           let derivedData = ScanExtractor.derivedDataIncludeDirs(
             projectName: projectName, toolchain: setup.0)
           projectUnits.append(
@@ -249,14 +284,18 @@ nonisolated enum ScanEngine {
               directory: roots.isEmpty ? "listed sources" : roots.joined(separator: ", "),
               files: files,
               workingDirectory: projectURL.deletingLastPathComponent(),
-              includeDirs: Array(Set(setup.1).union(derivedData)).sorted(),
-              moduleMapFiles: setup.2,
+              includeDirs: Array(Set(setup.1).union(derivedData).union(
+                setup.0.platform == toolchain.platform ? projectPackageIncludes : [])).sorted(),
+              moduleMapFiles: ScanExtractor.uniqueModuleMaps(
+                projectPackageMaps + setup.2.sorted()),
               toolchain: setup.0,
-              settingsArguments: settingsArguments))
+              settingsArguments: settingsArguments,
+              dependencies: dependencyModules))
         }
       }
     }
 
+    allModuleMapFiles = Set(ScanExtractor.uniqueModuleMaps(allModuleMapFiles.sorted()))
     let allUnits = units + projectUnits
     emit(.phase("Extracting strings from \(allUnits.count) module(s)…"))
 
@@ -316,6 +355,37 @@ nonisolated enum ScanEngine {
       warnings: warnings,
       cancelled: cancellation.isCancelled,
       errorMessage: nil)
+  }
+
+  /// Every module the project's targets import (`import Foo`), the filter for
+  /// which pinned package dependencies are worth building.
+  private static func importedModules(in targets: [ScanXcodeTarget]) -> Set<String> {
+    var files: [URL] = targets.flatMap(\.files)
+    for target in targets {
+      files += target.directories.flatMap { ScanExtractor.swiftFiles(in: $0) }
+    }
+    // Module names may be lowercase (`import avifnuke`) — no case filter.
+    let modifiers: Set<String> = [
+      "class", "struct", "enum", "protocol", "func", "var", "let", "typealias", "actor",
+    ]
+    var modules: Set<String> = []
+    for file in files.prefix(600) {
+      guard let text = try? String(contentsOf: file, encoding: .utf8) else { continue }
+      for line in text.split(separator: "\n").prefix(80) {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard trimmed.hasPrefix("import ") else { continue }
+        var tokens = trimmed.dropFirst("import ".count)
+          .trimmingCharacters(in: .whitespaces)
+          .split(separator: " ").map(String.init)
+        // `import class Foo.Bar` names a declaration, not a module.
+        if let first = tokens.first, modifiers.contains(first) { tokens.removeFirst() }
+        guard let name = tokens.first, !name.isEmpty else { continue }
+        // `import Foo.Bar` → `Foo`.
+        let module = name.split(separator: ".").first.map(String.init) ?? name
+        if !module.isEmpty { modules.insert(module) }
+      }
+    }
+    return modules
   }
 
   /// Decides the platform the scan type-checks against and builds the matching

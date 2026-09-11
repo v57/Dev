@@ -29,11 +29,16 @@ nonisolated struct ScanShellResult {
       let generic = line.contains("emit-module command failed")
         || line.contains("failed with a nonzero exit code")
         || line.contains("Command line")
-      if !generic { specific.append(String(line.prefix(200))) }
+      // A compiler diagnostic is `<long absolute path>:<line>:<col>: error:
+      // <message>` — keep the TAIL when the line is long, so the report names
+      // the message instead of stopping inside the path.
+      if !generic {
+        specific.append(line.count > 200 ? "…" + String(line.suffix(200)) : String(line))
+      }
       if specific.count == limit { return specific }
     }
     if specific.isEmpty, let line = lines.first(where: { $0.contains("error:") }) {
-      return [String(line.prefix(200))]
+      return [line.count > 200 ? "…" + String(line.suffix(200)) : String(line)]
     }
     return specific.isEmpty ? ["compile failed"] : specific
   }

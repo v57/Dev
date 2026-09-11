@@ -173,14 +173,25 @@ nonisolated enum ScanSliceDetector {
 /// than a setting: an SDKROOT the project declares, or any module that imports
 /// UIKit.
 nonisolated enum ScanPlatformResolver {
-  /// True when any of `files` imports AppKit — a macOS-only target inside a
-  /// tree that is otherwise iOS. Its module has to be compiled for the host
-  /// (AppKit does not exist in the iOS SDK), so the platform decision is
-  /// per-unit, not per-run.
-  static func importsAppKit(_ files: [URL], limit: Int = 400) -> Bool {
+  /// True when any of `files` uses a macOS-ONLY API — AppKit, either imported
+  /// by name or reached through SwiftUI's macOS re-export.
+  ///
+  /// The distinction decides the platform for a target inside a tree that
+  /// builds for both (playgra: an iOS app, an iOS broadcast extension and an
+  /// AppKit preview app in one project). Requiring `import AppKit` was not
+  /// enough — IconsPreview uses `NSBezierPath` with only `import SwiftUI` — and
+  /// treating every unnamed target as macOS was worse: the extension
+  /// (Broadcast: `ReplayKit` + `LiveKit`, no UIKit) then compiled for the host
+  /// and could not find an iOS-only module.
+  static func usesMacOSOnlyAPI(_ files: [URL], limit: Int = 400) -> Bool {
+    let markers = [
+      "import AppKit",
+      "NSBezierPath", "NSView", "NSWindow", "NSApplication", "NSPasteboard",
+      "NSScreen", "NSColor", "NSFont", "NSImage",
+    ]
     for file in files.prefix(limit) {
       guard let text = try? String(contentsOf: file, encoding: .utf8) else { continue }
-      if text.contains("import AppKit") { return true }
+      for marker in markers where text.contains(marker) { return true }
     }
     return false
   }
