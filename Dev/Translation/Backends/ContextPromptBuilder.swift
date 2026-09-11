@@ -49,6 +49,28 @@ nonisolated struct ContextPromptBuilder {
   static let maxCommentCharacters = 600
   static let maxKeyCharacters = 200
 
+  // MARK: - batch sizing
+
+  /// Approximate payload cost of ONE batch item, in characters: its source
+  /// text plus the per-item key/comment overhead the JSON payload carries. The
+  /// batch budget is spent on these; the context blocks are on top of it.
+  ///
+  /// Deliberately NOT a token estimate: the routed models carry very large
+  /// context windows, so a grapheme count is accurate enough and free. Batches
+  /// are sized by this instead of by record count because records vary from a
+  /// label to a sentence — a fixed count is either wasteful or oversized.
+  static func batchCost(sourceText: String, context: TranslationContext?) -> Int {
+    var cost = sourceText.count
+    if let key = context?.key {
+      cost += min(key.count, maxKeyCharacters)
+    }
+    if let comment = context?.comment {
+      cost += min(comment.count, maxCommentCharacters)
+    }
+    // JSON scaffolding: id, quotes, field names, separators.
+    return cost + 24
+  }
+
   // MARK: - output
 
   /// Two chat messages any OpenAI-style client can send verbatim.

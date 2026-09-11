@@ -68,7 +68,8 @@ struct TranslationPipeline {
     force: Bool = false,
     catalog: StringCatalog? = nil,
     progress: TranslateRunProgress? = nil,
-    trace: TranslationTrace? = nil
+    trace: TranslationTrace? = nil,
+    sourceBudget: Int = TranslationRouter.translateSourceBudget
   ) async -> PipelineRunSummary {
     await run(
       project: project,
@@ -79,7 +80,8 @@ struct TranslationPipeline {
       force: force,
       catalog: catalog,
       progress: progress,
-      trace: trace
+      trace: trace,
+      sourceBudget: sourceBudget
     )
   }
 
@@ -97,7 +99,8 @@ struct TranslationPipeline {
     force: Bool = false,
     catalog: StringCatalog? = nil,
     progress: TranslateRunProgress? = nil,
-    trace: TranslationTrace? = nil
+    trace: TranslationTrace? = nil,
+    sourceBudget: Int = TranslationRouter.translateSourceBudget
   ) async -> PipelineRunSummary {
     var summary = PipelineRunSummary()
     let env = PipelineRunContext(
@@ -187,7 +190,8 @@ struct TranslationPipeline {
         env: env,
         excluded: excludedByTM,
         progress: progress,
-        trace: trace
+        trace: trace,
+        sourceBudget: sourceBudget
       )
       summary.translatedFilled += translated.filled
       summary.translatedRewritten += translated.corrected
@@ -566,7 +570,8 @@ struct TranslationPipeline {
     env: PipelineRunContext,
     excluded: Set<PersistentIdentifier>,
     progress: TranslateRunProgress?,
-    trace: TranslationTrace? = nil
+    trace: TranslationTrace? = nil,
+    sourceBudget: Int
   ) async -> StageOutcome {
     var outcome = StageOutcome()
     let router = TranslationRouter.shared
@@ -599,10 +604,20 @@ struct TranslationPipeline {
       if progress?.isCancelled == true { break }
       let language = work[index].record.language
       var slice: [(record: TranslationRecord, context: TranslationContext)] = []
-      while index < work.count,
-            work[index].record.language == language,
-            slice.count < TranslationRouter.batchSize {
+      var spent = 0
+      // Sized by payload, not by record count: the worklist is language-major
+      // (sorted by (language, key, category)) so a batch never straddles two
+      // languages, and its cost is what the request actually carries.
+      while index < work.count, work[index].record.language == language {
+        let cost = ContextPromptBuilder.batchCost(
+          sourceText: work[index].record.sourceText,
+          context: work[index].context)
+        // A batch always takes at least one item, even when that item alone
+        // exceeds the whole budget: a long record must still be sent, never
+        // silently skipped.
+        if !slice.isEmpty, spent + cost > sourceBudget { break }
         slice.append(work[index])
+        spent += cost
         index += 1
       }
       await translateLanguageBatch(
@@ -637,6 +652,33 @@ struct TranslationPipeline {
       resolved[id] = (value, batch.model)
     }
 
+    // 1b. A reply the model CUT OFF is not a set of bad translations: the ids
+    // it never reached were lost to the cut, while everything salvaged is real
+    // output. So gate and write what arrived, then re-ask the remainder in
+    // halves — cheaper and more faithful than one repair call per lost id, and
+    // it keeps them off the paid single-item path. Recursion terminates: every
+    // level halves the count, and a single item is never split (it falls
+    // through to the repair path below).
+    if batch.truncated, slice.count > 1 {
+      await finishBatch(
+        resolved, slice: slice, env: env, router: router,
+        progress: progress, outcome: &outcome, trace: trace,
+        markMissingAsFailed: false)
+      let rest = slice.enumerated().filter { resolved[$0.offset] == nil }.map(\.element)
+      guard !rest.isEmpty else { return }
+      let cut = max(1, rest.count / 2)
+      progress?.note("Reply truncated — re-asking \(rest.count) item(s) in smaller batches")
+      await translateLanguageBatch(
+        Array(rest[0..<cut]), language: language, env: env, router: router,
+        progress: progress, outcome: &outcome, trace: trace)
+      if cut < rest.count {
+        await translateLanguageBatch(
+          Array(rest[cut...]), language: language, env: env, router: router,
+          progress: progress, outcome: &outcome, trace: trace)
+      }
+      return
+    }
+
     // 2. Single-item repair for whatever the batch could not deliver.
     for id in batch.failedIDs where slice.indices.contains(id) {
       if progress?.isCancelled == true { break }
@@ -656,6 +698,28 @@ struct TranslationPipeline {
         progress?.fail(key: displayKey(item.record), message: error.localizedDescription)
       }
     }
+
+    // The gate, the write and the "still unresolved" report, shared with the
+    // truncation path above (which flushes salvaged values through the same
+    // code without calling the cut ids failures).
+    await finishBatch(
+      resolved, slice: slice, env: env, router: router,
+      progress: progress, outcome: &outcome, trace: trace)
+  }
+
+  /// Gates and writes a batch's accepted values, then reports whatever is
+  /// still unresolved for this batch.
+  private static func finishBatch(
+    _ accepted: [Int: (value: String, editor: String)],
+    slice: [(record: TranslationRecord, context: TranslationContext)],
+    env: PipelineRunContext,
+    router: TranslationRouter,
+    progress: TranslateRunProgress?,
+    outcome: inout StageOutcome,
+    trace: TranslationTrace?,
+    markMissingAsFailed: Bool = true
+  ) async {
+    var resolved = accepted
 
     // 3. Paid verification gate over everything about to be written.
     if !resolved.isEmpty {
@@ -702,7 +766,9 @@ struct TranslationPipeline {
       progress?.tick(key: displayKey(item.record))
     }
 
-    // 5. Anything still unresolved failed for this record.
+    // 5. Anything still unresolved failed for this record — unless the caller
+    // is the truncation path, where the missing ids are re-asked instead.
+    guard markMissingAsFailed else { return }
     for (id, item) in slice.enumerated() where resolved[id] == nil {
       if progress?.isCancelled == true { break }
       let message = "no translation produced"

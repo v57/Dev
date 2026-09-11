@@ -19,6 +19,11 @@ nonisolated struct BatchOutcome: Sendable {
   var isPaid = false
   /// Human-readable reasons for the failures, for the run log.
   var notes: [String] = []
+  /// True when the reply was CUT OFF: the ids in `failedIDs` were lost to the
+  /// cut rather than individually rejected, and `values` holds whatever arrived
+  /// complete. The caller re-asks the remainder in smaller batches instead of
+  /// repairing id by id.
+  var truncated = false
 }
 
 /// One record handed to the paid verification gate.
@@ -94,9 +99,18 @@ final class TranslationRouter: TranslatorBackend {
   /// Cooldown after a NON-quota failure. Without this a dead or unknown free
   /// id would be retried once per record instead of once per window.
   static let transientCooldown: TimeInterval = 5 * 60
-  /// Records per batch request. Large enough to amortise the context block,
-  /// small enough that one malformed reply cannot sink much work.
-  static let batchSize = 20
+  /// Source-character budget for one batch request; the context block is on
+  /// top of it. Spent via `ContextPromptBuilder.batchCost`, so a batch is sized
+  /// by its payload instead of by record count — records range from a label to
+  /// a sentence, and a fixed count is either wasteful or oversized. No
+  /// tokenizer: the routed models carry very large context windows, so a
+  /// grapheme count is accurate enough and free.
+  /// `nonisolated`: read as a default argument value by the pipeline's entry
+  /// points, which are not actor-isolated.
+  nonisolated static let translateSourceBudget = 10_000
+  /// The explicit "Update Translations" pass re-runs ONE row per request with
+  /// every target language of that row in it, so its budget is larger.
+  nonisolated static let updateSourceBudget = 20_000
 
   // MARK: - TranslatorBackend
 
@@ -201,6 +215,7 @@ final class TranslationRouter: TranslatorBackend {
       isPaid: !candidate.isFree)
     for issue in parsed.issues {
       outcome.notes.append(issue.description)
+      if case .truncated = issue { outcome.truncated = true }
     }
     for item in items {
       guard let value = parsed.values[item.id] else {
