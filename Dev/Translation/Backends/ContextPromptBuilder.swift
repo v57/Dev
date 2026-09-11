@@ -33,8 +33,15 @@ import Foundation
 nonisolated struct ContextPromptBuilder {
   // MARK: - limits
 
-  /// Per-document cap for the global / project / language context bodies.
-  static let maxContextCharacters = 3_000
+  /// Per-scope cap for the context-document bodies, in characters. Separate
+  /// numbers because the scopes carry different material: the global doc is
+  /// cross-project vocabulary, the project doc is human-authored rules, and
+  /// the language doc is accumulated Stage-0 lessons — small on purpose, since
+  /// per-key lessons live in translation memory, which resolves exact hits
+  /// without any prompt at all.
+  static let maxGlobalCharacters = 5_000
+  static let maxProjectCharacters = 10_000
+  static let maxLanguageCharacters = 1_000
   /// Neighbor samples are capped in count and per-item length.
   static let maxNeighbors = 10
   static let maxNeighborCharacters = 400
@@ -162,7 +169,9 @@ nonisolated struct ContextPromptBuilder {
     // L1 — stable across every record of this target language.
     sections.append("TARGET LANGUAGE\n\(targetLanguage)")
     if let language = context?.languageContext {
-      appendContext(&sections, title: "CONTEXT — LANGUAGE (\(targetLanguage))", text: language)
+      appendContext(
+        &sections, title: "CONTEXT — LANGUAGE (\(targetLanguage))", text: language,
+        limit: maxLanguageCharacters)
     }
 
     // L2 — per record.
@@ -190,7 +199,9 @@ nonisolated struct ContextPromptBuilder {
     // L1 — stable across every record of this target language.
     sections.append("TARGET LANGUAGE\n\(targetLanguage)")
     if let language = sharedContext?.languageContext {
-      appendContext(&sections, title: "CONTEXT — LANGUAGE (\(targetLanguage))", text: language)
+      appendContext(
+        &sections, title: "CONTEXT — LANGUAGE (\(targetLanguage))", text: language,
+        limit: maxLanguageCharacters)
     }
     let neighbors = normalizeNeighbors(sharedContext?.neighbors ?? [])
     if !neighbors.isEmpty {
@@ -242,10 +253,12 @@ nonisolated struct ContextPromptBuilder {
   /// L0 blocks: identical for every target language.
   private static func appendSharedLeading(_ sections: inout [String], context: TranslationContext?) {
     if let global = context?.globalContext {
-      appendContext(&sections, title: "CONTEXT — GLOBAL", text: global)
+      appendContext(
+        &sections, title: "CONTEXT — GLOBAL", text: global, limit: maxGlobalCharacters)
     }
     if let project = context?.projectContext {
-      appendContext(&sections, title: "CONTEXT — PROJECT", text: project)
+      appendContext(
+        &sections, title: "CONTEXT — PROJECT", text: project, limit: maxProjectCharacters)
     }
   }
 
@@ -271,8 +284,19 @@ nonisolated struct ContextPromptBuilder {
   // MARK: - helpers
 
   /// Deduplicates a context-document body line by line (order preserved),
-  /// then truncates the whole block to the per-document cap.
-  private static func appendContext(_ sections: inout [String], title: String, text: String) {
+  /// then truncates the whole block to the scope's cap.
+  ///
+  /// The truncation keeps the TAIL: context docs are append-ordered (lessons
+  /// and rules are added at the end), so when a doc outgrows its cap the
+  /// OLDEST lines are what must go. A head-keeping cut would hide everything
+  /// learned since the doc crossed the cap, and only the model would ever see
+  /// the truncation marker.
+  private static func appendContext(
+    _ sections: inout [String],
+    title: String,
+    text: String,
+    limit: Int
+  ) {
     var seen = Set<String>()
     var kept: [String] = []
     for rawLine in text.split(separator: "\n", omittingEmptySubsequences: true) {
@@ -283,7 +307,7 @@ nonisolated struct ContextPromptBuilder {
     }
     let deduped = kept.joined(separator: "\n")
     guard !deduped.isEmpty else { return }
-    sections.append("\(title)\n\(clamp(deduped, to: maxContextCharacters))")
+    sections.append("\(title)\n\(clampTail(deduped, to: limit))")
   }
 
   /// Neighbors: trim, drop empties, dedupe on the truncated value, cap count.
@@ -303,9 +327,36 @@ nonisolated struct ContextPromptBuilder {
   }
 
   /// Character-prefix truncation on grapheme boundaries, with a marker so
-  /// the model knows a section was cut.
+  /// the model knows a section was cut. Used for the per-record blocks (key,
+  /// comment, neighbor sample), where the head carries the meaning.
   private static func clamp(_ text: String, to limit: Int) -> String {
     guard text.count > limit else { return text }
     return String(text.prefix(limit)) + "\n[section truncated]"
+  }
+
+  /// Line-aware, TAIL-preserving truncation for context documents, with a
+  /// marker at the top naming what was dropped. Input is the already-deduped
+  /// document body; lines are kept newest-first until the budget is spent, so
+  /// the newest lessons and rules always survive. A single line longer than
+  /// the whole budget has no line-level answer — its own tail is kept, so the
+  /// block is still bounded and never empty.
+  private static func clampTail(_ text: String, to limit: Int) -> String {
+    guard text.count > limit else { return text }
+    let marker = "[section truncated — oldest lines dropped]"
+    let budget = max(0, limit - marker.count - 1)
+    var kept: [String] = []
+    var used = 0
+    for rawLine in text.split(separator: "\n", omittingEmptySubsequences: false).reversed() {
+      let line = String(rawLine)
+      let cost = line.count + (kept.isEmpty ? 0 : 1)
+      if kept.isEmpty, cost > budget {
+        kept.append(String(line.suffix(budget)))
+        break
+      }
+      guard used + cost <= budget else { break }
+      kept.append(line)
+      used += cost
+    }
+    return marker + "\n" + kept.reversed().joined(separator: "\n")
   }
 }
