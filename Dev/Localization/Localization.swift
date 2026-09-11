@@ -1431,6 +1431,17 @@ final class LocalizationStore {
     Task { await self.performOpen(url) }
   }
 
+  /// Opens `url` only when it is NOT the catalog already open — the
+  /// Localization tab's lazy open (see `ProjectDetailView`). Catalog loading is
+  /// expensive (parse + the whole-catalog mirror + row build), so it happens
+  /// when the user first opens the tool for a project, never merely because the
+  /// project was selected; a tab revisit that still holds this catalog is a
+  /// no-op, so per-catalog view state survives.
+  func openIfNeeded(_ url: URL) async {
+    guard catalogURL != url else { return }
+    await open(url)
+  }
+
   /// Opens `url`. When the open catalog has unsaved edits the request is held
   /// on the unsaved-changes prompt instead — nothing is written implicitly, so
   /// leaving has to be answered first.

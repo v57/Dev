@@ -32,14 +32,17 @@ extension View {
 ///
 /// Two modes:
 ///  - PROJECTLESS (projectCatalogURL == nil): arbitrary open — the app's
-///    original behavior; auto-opens the dev fixture when nothing is loaded.
+///    original behavior; auto-opens the dev fixture (the repo-root test
+///    catalog) when nothing is loaded, on first appearance of this pane.
 ///  - PROJECT-BOUND (P40, projectCatalogURL set): the pane belongs to a
 ///    selected sidebar project. It renders content ONLY while the store
 ///    holds THAT project's catalog — a different open catalog is never
 ///    shown under the project's name, and no arbitrary Open… is offered
 ///    (opening another file would re-target reconcile away from the
-///    selected project). ProjectDetailView opens the catalog on selection;
-///    when the file is absent this view shows the 'no catalog' state.
+///    selected project). ProjectDetailView opens the catalog LAZILY, the
+///    moment the Localization tool is first opened for the project; while
+///    that open is in flight this view shows "Opening catalog…", and when
+///    the file is absent it shows the 'no catalog' state.
 struct LocalizationView: View {
   @Environment(LocalizationStore.self) private var store
 
@@ -64,10 +67,11 @@ struct LocalizationView: View {
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
-    // The projectless auto-open (dev fixture) must never fire while bound —
-    // a bound pane only ever opens its project's catalog, which
-    // ProjectDetailView drives on selection. The id makes the bound/
-    // projectless flip re-evaluate the guard.
+    // The projectless auto-open (dev fixture — the repo-root test catalog)
+    // must never fire while bound: a bound pane only ever opens its project's
+    // catalog, which ProjectDetailView drives when the tool is opened. The id
+    // makes the bound/projectless flip re-evaluate the guard. Lazy either way:
+    // the fixture loads when this pane first appears, not at launch.
     .task(id: projectCatalogURL) {
       guard projectCatalogURL == nil else { return }
       await store.openDefaultIfPresent()
