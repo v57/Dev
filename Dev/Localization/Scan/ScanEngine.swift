@@ -70,6 +70,32 @@ nonisolated enum ScanEngine {
         errorMessage: "Nothing to scan in \(config.root.path) — no Package.swift and no .xcodeproj found.")
     }
 
+    // MARK: 1b. which platform the tree builds for
+
+    // Package manifests are read once here: the platform decision needs their
+    // target source lists, and the unit loop below needs them again.
+    var manifests: [String: ScanPackageManifest] = [:]
+    for packageRoot in packageRoots {
+      if cancellation.isCancelled { break }
+      let name = packageRoot.lastPathComponent
+      emit(.phase("Reading \(name)…"))
+      do {
+        manifests[packageRoot.path] = try ScanPackageDumper.dump(packageRoot: packageRoot)
+      } catch {
+        let detail = error.localizedDescription
+        warnings.append("\(name): \(detail)")
+        emit(.log("warning: \(name): \(detail)"))
+      }
+    }
+
+    // An iOS tree cannot type-check against the host's module products (and its
+    // host build usually fails outright), so the platform is decided from the
+    // tree itself: an SDKROOT the project declares, or a module that imports
+    // UIKit. See `ScanToolchain`.
+    let toolchain = resolveToolchain(
+      projectURLs: projectURLs, packageRoots: packageRoots, manifests: manifests,
+      warnings: &warnings, emit: emit)
+
     // MARK: 2. packages -> compile units
 
     var units: [ScanCompileUnit] = []
@@ -78,36 +104,84 @@ nonisolated enum ScanEngine {
     var allModuleMapFiles: Set<String> = []
     var packageSeeds: [(name: String, root: URL, warning: String)] = []
 
+    // A tree can hold targets for both platforms (playgra: an iOS app next to
+    // an AppKit preview app; Dev: a project whose SDKROOT is `auto`). The
+    // platform is therefore chosen per UNIT from the sources themselves, with
+    // the run's resolved platform as the default, and each unit is compiled
+    // against its own platform's product directories — a host slice in an iOS
+    // compile is unusable and vice versa.
+    var platformSearchPaths: [ScanPlatform: (includeDirs: [String], moduleMapFiles: [String])] = [:]
+    var hostSearch: (includeDirs: Set<String>, moduleMapFiles: Set<String>) = ([], [])
+    var iosSearch: (includeDirs: Set<String>, moduleMapFiles: Set<String>) = ([], [])
+    for packageRoot in packageRoots {
+      let host = ScanExtractor.moduleSearchPaths(packageRoot: packageRoot, toolchain: .host())
+      hostSearch.includeDirs.formUnion(host.includeDirs)
+      hostSearch.moduleMapFiles.formUnion(host.moduleMapFiles)
+      if toolchain.platform == .iosSimulator {
+        let ios = ScanExtractor.moduleSearchPaths(packageRoot: packageRoot, toolchain: toolchain)
+        iosSearch.includeDirs.formUnion(ios.includeDirs)
+        iosSearch.moduleMapFiles.formUnion(ios.moduleMapFiles)
+      }
+    }
+    platformSearchPaths[.host] = (hostSearch.includeDirs.sorted(), hostSearch.moduleMapFiles.sorted())
+    if toolchain.platform == .iosSimulator {
+      platformSearchPaths[.iosSimulator] = (iosSearch.includeDirs.sorted(), iosSearch.moduleMapFiles.sorted())
+    }
+
+    /// The platform this unit compiles for:
+    ///  - an explicit UIKit import means iOS;
+    ///  - an explicit AppKit import (and no UIKit) means the host;
+    ///  - a PROJECT target that imports neither is not an iOS target — an
+    ///    Xcode project routinely holds a mixed set (playgra: the iOS app next
+    ///    to an AppKit-less SwiftUI preview app that uses `NSBezierPath` with
+    ///    only `import SwiftUI`, which re-exports AppKit on macOS). Compiling
+    ///    it for iOS fails on exactly those symbols;
+    ///  - everything else follows the run's resolved platform.
+    func unitPlatform(_ files: [URL], projectTarget: Bool) -> ScanPlatform {
+      if ScanPlatformResolver.importsUIKit(files) { return .iosSimulator }
+      if ScanPlatformResolver.importsAppKit(files) { return .host }
+      if projectTarget, toolchain.platform == .iosSimulator { return .host }
+      return toolchain.platform
+    }
+
+    /// The toolchain + search paths for one unit, defaulting to the run's
+    /// platform when the unit's platform has no products of its own.
+    func unitCompileSetup(_ files: [URL], projectTarget: Bool) -> (ScanToolchain, [String], [String]) {
+      let platform = unitPlatform(files, projectTarget: projectTarget)
+      guard let paths = platformSearchPaths[platform] else {
+        return (toolchain, allIncludeDirs.sorted(), allModuleMapFiles.sorted())
+      }
+      switch platform {
+      case .host:
+        return (.host(), paths.includeDirs, paths.moduleMapFiles)
+      case .iosSimulator:
+        return (toolchain, paths.includeDirs, paths.moduleMapFiles)
+      }
+    }
+
     for packageRoot in packageRoots {
       if cancellation.isCancelled { break }
       let name = packageRoot.lastPathComponent
-      emit(.phase("Reading \(name)…"))
-
-      var warning = ""
-      var manifest: ScanPackageManifest?
-      do {
-        manifest = try ScanPackageDumper.dump(packageRoot: packageRoot)
-      } catch {
-        warning = error.localizedDescription
-        warnings.append("\(name): \(warning)")
-        emit(.log("warning: \(name): \(warning)"))
-      }
+      let manifest = manifests[packageRoot.path]
 
       if config.buildRefresh, !cancellation.isCancelled {
-        emit(.phase("Building \(name)… (module products the extraction typechecks against)"))
-        let buildWarning = ScanExtractor.buildWarning(for: packageRoot)
+        let platformLabel = toolchain.platform == .iosSimulator ? "iOS Simulator" : "the host"
+        emit(.phase("Building \(name) for \(platformLabel)… (module products the extraction typechecks against)"))
+        let buildWarning = ScanExtractor.buildWarning(for: packageRoot, toolchain: toolchain)
         if !buildWarning.isEmpty {
           warnings.append("\(name): \(buildWarning)")
           emit(.log("warning: \(name): \(buildWarning)"))
         }
       }
 
-      let searchPaths = ScanExtractor.moduleSearchPaths(packageRoot: packageRoot)
+      let searchPaths = ScanExtractor.moduleSearchPaths(
+        packageRoot: packageRoot, toolchain: toolchain)
       allIncludeDirs.formUnion(searchPaths.includeDirs)
       allModuleMapFiles.formUnion(searchPaths.moduleMapFiles)
 
       let packageName = manifest?.name.flatMap { $0.isEmpty ? nil : $0 } ?? name
-      packageSeeds.append((packageName, packageRoot, warning))
+      packageSeeds.append((packageName, packageRoot, manifests[packageRoot.path] == nil
+        ? "manifest unreadable" : ""))
       guard let manifest else { continue }
 
       for target in (manifest.targets ?? []).filter({ !$0.isSkippable }) {
@@ -119,6 +193,7 @@ nonisolated enum ScanEngine {
         } else {
           directory = packageRoot.appendingPathComponent("Sources/\(target.name)").path
         }
+        let setup = unitCompileSetup(files, projectTarget: false)
         units.append(
           ScanCompileUnit(
             owner: packageName,
@@ -127,8 +202,9 @@ nonisolated enum ScanEngine {
             directory: directory,
             files: files,
             workingDirectory: packageRoot,
-            includeDirs: searchPaths.includeDirs,
-            moduleMapFiles: searchPaths.moduleMapFiles))
+            includeDirs: setup.1,
+            moduleMapFiles: setup.2,
+            toolchain: setup.0))
       }
     }
 
@@ -141,11 +217,15 @@ nonisolated enum ScanEngine {
         if cancellation.isCancelled { break }
         let projectName = projectURL.deletingPathExtension().lastPathComponent
         emit(.phase("Reading \(projectName).xcodeproj…"))
+        let settingsArguments = ScanSwiftSettings.arguments(fromProjectAt: projectURL)
         let targets = ScanXcodeProject.targets(inProjectAt: projectURL)
         if targets.isEmpty {
           warnings.append("\(projectName): no scannable targets in \(projectURL.path)")
           emit(.log("warning: \(projectName): no scannable targets"))
         }
+        // The project's own Swift package dependencies (SwiftUIIntrospect, …)
+        // are built by Xcode, not by any package build, so each target also
+        // looks for its products in the project's derived data.
         for target in targets {
           if cancellation.isCancelled { break }
           var files = target.files.filter { FileManager.default.fileExists(atPath: $0.path) }
@@ -158,6 +238,9 @@ nonisolated enum ScanEngine {
             .sorted { $0.path < $1.path }
           guard !files.isEmpty else { continue }
           let roots = (target.directories.map(\.path) + (target.files.isEmpty ? [] : ["listed sources"]))
+          let setup = unitCompileSetup(files, projectTarget: true)
+          let derivedData = ScanExtractor.derivedDataIncludeDirs(
+            projectName: projectName, toolchain: setup.0)
           projectUnits.append(
             ScanCompileUnit(
               owner: projectName,
@@ -166,8 +249,10 @@ nonisolated enum ScanEngine {
               directory: roots.isEmpty ? "listed sources" : roots.joined(separator: ", "),
               files: files,
               workingDirectory: projectURL.deletingLastPathComponent(),
-              includeDirs: allIncludeDirs.sorted(),
-              moduleMapFiles: allModuleMapFiles.sorted()))
+              includeDirs: Array(Set(setup.1).union(derivedData)).sorted(),
+              moduleMapFiles: setup.2,
+              toolchain: setup.0,
+              settingsArguments: settingsArguments))
         }
       }
     }
@@ -231,6 +316,66 @@ nonisolated enum ScanEngine {
       warnings: warnings,
       cancelled: cancellation.isCancelled,
       errorMessage: nil)
+  }
+
+  /// Decides the platform the scan type-checks against and builds the matching
+  /// toolchain: an iOS app (SDKROOT = iphoneos, or any source importing UIKit)
+  /// is compiled for the iOS simulator with the product directories its own
+  /// build wrote; anything else stays on the host.
+  private static func resolveToolchain(
+    projectURLs: [URL],
+    packageRoots: [URL],
+    manifests: [String: ScanPackageManifest],
+    warnings: inout [String],
+    emit: (ScanEvent) -> Void
+  ) -> ScanToolchain {
+    let projectUsesIOS = projectURLs.contains {
+      ScanPlatformResolver.projectUsesIOSSDK(at: $0)
+    }
+    let packageImportsUIKit = packageRoots.contains { packageRoot in
+      guard let manifest = manifests[packageRoot.path] else { return false }
+      for target in (manifest.targets ?? []).filter({ !$0.isSkippable }) {
+        let files = ScanExtractor.targetSourceFiles(for: target, packageRoot: packageRoot)
+        if ScanPlatformResolver.importsUIKit(files, limit: 12) { return true }
+      }
+      return false
+    }
+    guard projectUsesIOS || packageImportsUIKit else {
+      emit(.phase("Targets the host platform"))
+      return .host()
+    }
+
+    // The triple has to match the slices the tree's products were built for.
+    let deploymentTarget = ScanPlatformResolver.deploymentTarget(
+      projectURLs: projectURLs, packageManifestText: nil) ?? "17.0"
+    let productDirectories = packageRoots.flatMap { packageRoot -> [URL] in
+      let buildRoot = packageRoot.appendingPathComponent(".build")
+      var found: [URL] = []
+      for productName in ["Debug-iphonesimulator", "debug-iphonesimulator"] {
+        let candidate = buildRoot.appendingPathComponent("out/Products/\(productName)")
+        if FileManager.default.fileExists(atPath: candidate.path) { found.append(candidate) }
+        let legacy = buildRoot.appendingPathComponent("debug-iphonesimulator")
+        if FileManager.default.fileExists(atPath: legacy.path) { found.append(legacy) }
+      }
+      return found
+    }
+    var triple: String?
+    for directory in productDirectories {
+      if let candidate = ScanSliceDetector.iosSimulatorTriple(
+        inProductsDirectory: directory, deploymentTarget: deploymentTarget) {
+        triple = candidate
+        break
+      }
+    }
+    let resolved = triple ?? "arm64-apple-ios\(deploymentTarget)-simulator"
+    emit(.phase("Targets iOS Simulator (\(resolved))"))
+    if triple == nil {
+      warnings.append(
+        "no iOS Simulator build products found under .build — the extraction assumes \(resolved); "
+          + "run the package's iOS build once (Xcode or swift build --sdk iphonesimulator) "
+          + "if modules come back missing.")
+    }
+    return .iosSimulator(doubleTarget: resolved)
   }
 
   /// Cheap root heuristic for the UI: a folder that directly holds an

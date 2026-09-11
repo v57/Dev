@@ -25,6 +25,12 @@ nonisolated struct ScanCompileUnit {
   var workingDirectory: URL
   var includeDirs: [String]
   var moduleMapFiles: [String]
+  /// The SDK/triple/conditions this unit is compiled with — the platform the
+  /// tree's own build products belong to (see `ScanToolchain`).
+  var toolchain: ScanToolchain = .host()
+  /// Build settings of the unit's own project (`ScanSwiftSettings`), appended
+  /// after the platform arguments.
+  var settingsArguments: [String] = []
 }
 
 /// Result of extracting localizable keys from one module's sources.
@@ -49,11 +55,11 @@ nonisolated struct ScanModuleOutcome: Identifiable, Sendable {
 /// Runs the toolchain's localizable-key extraction over one module's sources
 /// and parses the emitted `.stringsdata` fragments.
 nonisolated enum ScanExtractor {
-  /// Artifact/foreign directories never searched for module products.
+  /// Artifact/foreign directories never searched for module products. The
+  /// platform product directories are NOT in here: which one is usable is
+  /// decided by `ScanToolchain`, not by name-matching.
   private static let moduleSkipComponents = [
     "checkouts", "SwiftExplicitPrecompiledModules",
-    "Debug-iphonesimulator", "Release-iphonesimulator",
-    "Debug-maccatalyst", "Release-maccatalyst",
   ]
 
   static let maxConcurrentCompiles = 4
@@ -177,6 +183,10 @@ nonisolated enum ScanExtractor {
       "-parse-as-library",
       "-module-name", unit.module,
     ]
+    // The platform's SDK/triple/conditions come first: they select the module
+    // slice every `-I` directory is read for.
+    args += unit.toolchain.platformArguments
+    args += unit.settingsArguments
     args += files.map { $0.path }
     args += [
       "-emit-localized-strings",
@@ -205,7 +215,15 @@ nonisolated enum ScanExtractor {
     }
 
     let combined = retry.stderr + "\n" + retry.stdout
-    if combined.contains("no member 'module'"), combined.contains("Bundle") {
+    // `Bundle.module` is synthesized by SwiftPM for resource-bearing targets
+    // (DerivedSources/resource_bundle_accessor.swift) and declared `internal`,
+    // so a standalone swiftc sees either no member at all, or — worse — the
+    // SAME declaration from a sibling module that was built with
+    // `-enable-testing`, which reports `'module' is inaccessible due to
+    // 'internal' protection level` and points at that other target's file
+    // (both messages verified on playgra's VideoEditor). Either way the shim
+    // declares the accessor for THIS module, which wins the lookup.
+    if needsBundleModuleShim(combined) {
       let shim = bundleModuleShim(in: workDirectory)
       let shimRun = ScanShell.swiftc(
         args + [shim.path], currentDirectory: unit.workingDirectory, timeout: 900)
@@ -221,11 +239,30 @@ nonisolated enum ScanExtractor {
       succeeded: false, detail: retry.firstErrorLine, output: combined)
   }
 
+  /// True when the compiler output blames `Bundle.module` — either the member
+  /// is missing, or it resolved to another module's internal declaration.
+  static func needsBundleModuleShim(_ output: String) -> Bool {
+    guard output.contains("module") , output.contains("Bundle") || output.contains(".module") else {
+      return false
+    }
+    return output.contains("no member 'module'")
+      || output.contains("'module' is inaccessible")
+      || output.contains("value of type 'Bundle' has no member 'module'")
+  }
+
   /// The `.swift` paths the compiler blamed with a source-level error —
   /// `<path>:<line>:<col>: error: …`.
+  ///
+  /// The path itself may contain SPACES (playgra: `Chat camera.swift`,
+  /// `Selected item.swift`, `Server manager.swift`), so the match takes
+  /// everything up to the last `.swift:` before the position, and tolerates
+  /// the indentation some diagnostics carry. A `\S+\.swift` pattern silently
+  /// matches none of those files — verified: 1 of 6 real diagnostics — which
+  /// disables the salvage loop for whole modules and loses every key in them
+  /// (playgra's app target: 171 files, 0 keys).
   static func blamedSourceFiles(in output: String) -> [String] {
     guard let regex = try? NSRegularExpression(
-      pattern: "(?m)^(\\S+\\.swift):\\d+:\\d+: error:")
+      pattern: "(?m)^[ \\t]*(.+?\\.swift):\\d+:\\d+: (?:fatal )?error:")
     else { return [] }
     let range = NSRange(output.startIndex..<output.endIndex, in: output)
     var paths: [String] = []
@@ -239,23 +276,41 @@ nonisolated enum ScanExtractor {
 
   // MARK: - Package build + module search paths
 
-  /// Refreshes a package's build so sibling `.swiftmodule` products exist.
-  /// A failure is a warning: extraction continues with whatever products the
-  /// package already had.
-  static func buildWarning(for packageRoot: URL) -> String {
-    let result = ScanShell.swift(["build"], currentDirectory: packageRoot, timeout: 1800)
+  /// Refreshes a package's build so sibling `.swiftmodule` products exist, for
+  /// the platform the scan is going to type-check against. A failure is a
+  /// warning: extraction continues with whatever products the package already
+  /// had.
+  ///
+  /// The platform matters: building a UIKit/iOS package for the host either
+  /// fails outright or refreshes the WRONG products, leaving the extraction to
+  /// read stale modules (the source errors that follow — "requires that 'X'
+  /// conform to 'Observable'", "cannot assign to property: 'y' is a 'let'
+  /// constant" — are version skew, not source defects).
+  static func buildWarning(for packageRoot: URL, toolchain: ScanToolchain) -> String {
+    var arguments = ["build"]
+    if let sdkPath = toolchain.sdkPath { arguments += ["--sdk", sdkPath] }
+    if let triple = toolchain.targetTriple { arguments += ["--triple", triple] }
+    let result = ScanShell.swift(arguments, currentDirectory: packageRoot, timeout: 1800)
     if result.succeeded { return "" }
-    return "swift build failed (\(result.status)); extraction used the existing module products.\n"
+    let platform = toolchain.platform == .iosSimulator ? "iOS Simulator" : "the host"
+    return "swift build failed for \(platform) (\(result.status)); extraction used the "
+      + "existing module products.\n"
       + result.errorLines(limit: 3).joined(separator: "\n")
   }
 
   /// Search paths that let a module's sources import sibling modules during a
   /// standalone compile:
   /// - include dirs: unique parent directories of `*.swiftmodule` files under
-  ///   the package's `.build` tree (foreign slices excluded);
-  /// - module maps: every `<Module>.modulemap` SwiftPM generated for the
-  ///   package's C/ObjC targets.
-  static func moduleSearchPaths(packageRoot: URL) -> (includeDirs: [String], moduleMapFiles: [String]) {
+  ///   the package's `.build` tree, restricted to the platform's product
+  ///   directories (a host slice in the search path is unusable for an iOS
+  ///   compile and vice versa);
+  /// - module maps: the clang-only modules of that platform (a target without
+  ///   a `.swiftmodule` product — the C/ObjC ones, e.g. `SomeC`, and a binary
+  ///   dependency's helper, e.g. `LKObjCHelpers`). Passing the Swift targets'
+  ///   modulemaps too redefines modules the `.swiftmodule` already provides.
+  static func moduleSearchPaths(
+    packageRoot: URL, toolchain: ScanToolchain
+  ) -> (includeDirs: [String], moduleMapFiles: [String]) {
     let buildRoot = packageRoot.appendingPathComponent(".build")
     let enumerator = FileManager.default.enumerator(
       at: buildRoot,
@@ -263,27 +318,80 @@ nonisolated enum ScanExtractor {
       options: [.skipsHiddenFiles]
     )
     var parents: Set<String> = []
+    // Keyed by module name: a build tree can hold the same generated modulemap
+    // more than once (playgra: `.build/out/Intermediates.noindex/GeneratedModuleMaps`
+    // and a nested `.build/out/out/...` copy), and passing both makes clang
+    // report "redefinition of module 'CallUI'" before any source is read. The
+    // shortest path wins, which is the primary directory.
     var moduleMaps: [String: String] = [:]
+    var swiftModuleNames: Set<String> = []
+    // Both the swiftbuild layout (`out/Products/Debug-iphonesimulator`) and the
+    // classic SwiftPM one (`.build/<triple>/debug-iphonesimulator`).
+    let acceptedProductDirectories = Set(
+      toolchain.productDirectoryNames + [toolchain.platform.legacyProductDirectoryName])
     while let url = enumerator?.nextObject() as? URL {
       let components = url.path.split(separator: "/").map(String.init)
-      if components.contains(where: moduleSkipComponents.contains) {
-        continue
-      }
+      if components.contains(where: moduleSkipComponents.contains) { continue }
       switch url.pathExtension {
       case "swiftmodule":
-        parents.insert(url.deletingLastPathComponent().path)
+        // Slice files live INSIDE the module bundle:
+        // `<products>/VijoUI.swiftmodule/arm64-apple-ios-simulator.swiftmodule`.
+        let bundle = url.deletingLastPathComponent()
+        let productsDirectory = bundle.deletingLastPathComponent()
+        let slice = url.deletingPathExtension().lastPathComponent
+        guard slice.contains("apple-"),
+              acceptedProductDirectories.contains(productsDirectory.lastPathComponent)
+        else { continue }
+        parents.insert(productsDirectory.path)
+        swiftModuleNames.insert(bundle.deletingPathExtension().lastPathComponent)
       case "modulemap":
-        if components.contains("GeneratedModuleMaps") {
-          let moduleName = url.deletingPathExtension().lastPathComponent
-          if moduleMaps[moduleName] == nil {
-            moduleMaps[moduleName] = url.path
-          }
+        guard components.contains(where: toolchain.moduleMapDirectoryNames.contains) else {
+          continue
         }
+        let name = url.deletingPathExtension().lastPathComponent
+        if let existing = moduleMaps[name], existing.count <= url.path.count { continue }
+        moduleMaps[name] = url.path
       default:
         break
       }
     }
-    return (parents.sorted(), moduleMaps.values.sorted())
+    // Clang-only modules only: a name that also has a `.swiftmodule` product
+    // would be redefined by its modulemap.
+    let clangOnly = moduleMaps
+      .filter { name, _ in !swiftModuleNames.contains(name) }
+      .values
+      .sorted()
+    return (parents.sorted(), clangOnly)
+  }
+
+  /// Directories the XCTest/derived-data products of a project may live in
+  /// (`~/Library/Developer/Xcode/DerivedData/<Project>-*/Build/Products/<Config>-<platform>`).
+  /// A project target's own Swift package dependencies (e.g. `SwiftUIIntrospect`)
+  /// only exist there — `swift build` does not build another project's
+  /// dependencies — so when the user has built the app in Xcode, its extracted
+  /// keys can still come out of this scan. Absent → the salvage loop drops the
+  /// handful of files that import those packages and reports the module name.
+  static func derivedDataIncludeDirs(
+    projectName: String, toolchain: ScanToolchain
+  ) -> [String] {
+    let derivedData = URL(fileURLWithPath: NSHomeDirectory())
+      .appendingPathComponent("Library/Developer/Xcode/DerivedData", isDirectory: true)
+    guard let entries = try? FileManager.default.contentsOfDirectory(
+      at: derivedData, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
+    else { return [] }
+    var directories: [String] = []
+    for entry in entries.sorted(by: { $0.path < $1.path })
+    where entry.lastPathComponent.hasPrefix(projectName + "-") {
+      for productName in toolchain.productDirectoryNames {
+        let candidate = entry
+          .appendingPathComponent("Build/Products", isDirectory: true)
+          .appendingPathComponent(productName, isDirectory: true)
+        if FileManager.default.fileExists(atPath: candidate.path) {
+          directories.append(candidate.path)
+        }
+      }
+    }
+    return directories
   }
 
   // MARK: - source discovery
