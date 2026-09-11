@@ -532,9 +532,12 @@ nonisolated enum PluralRules {
       return ["zero", "one", "two", "few", "many", "other"]
     case "mt":
       return ["one", "few", "many", "other"]
-    case "ja", "zh", "ko", "th", "vi", "id", "ms", "lo", "my", "km", "tr", "az", "ka":
+    case "ja", "zh", "ko", "th", "vi", "id", "ms", "lo", "my", "km", "tr", "ka":
       // NOTE: ka (Georgian) CLDR is one/other; grouped here as other-only to
-      // match Xcode's varia­tion template — the AI reconciles real forms on Translate.
+      // match Xcode's variation template — the AI reconciles real forms on Translate.
+      // az (Azerbaijani) is NOT in this group: its CLDR set is one/other, and
+      // it is offerable from the Add Language menu, so an added az column must
+      // get both forms.
       return ["other"]
     default:
       return ["one", "other"]

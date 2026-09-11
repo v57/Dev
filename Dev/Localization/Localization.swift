@@ -374,11 +374,22 @@ final class LocalizationStore {
   var isLoaded: Bool { catalog != nil }
 
   /// Language codes the "Add Language" menu offers — the set this tool
-  /// supports. The menu marks the ones the open catalog already carries.
+  /// supports, alphabetical. The menu marks the ones the open catalog already
+  /// carries.
+  ///
+  /// Every European entry is one Apple's own platforms carry as a device or
+  /// keyboard language (verified against the installed iOS runtime's
+  /// `System/Library/TextInput` bundles and `.lproj` sets, plus Xcode's own
+  /// locale table — see plans/localization.md); a language Apple ships no
+  /// keyboard or UI for (Bosnian, Breton, Corsican, Scottish Gaelic,
+  /// Luxembourgish, the North-Caucasus languages) is deliberately absent, so
+  /// nothing here promises a localization the platform cannot render.
   static let offeredLanguages: [String] = [
-    "ar", "cs", "da", "de", "el", "en", "es", "fi", "fil", "fr", "he", "hi",
-    "hr", "hu", "id", "it", "ja", "ka", "ms", "nb", "nl", "pt_PT", "ro", "ru",
-    "sk", "th", "tr", "uk", "vi", "zh-Hans",
+    "ar", "az", "be", "bg", "ca", "cs", "cy", "da", "de", "el", "en", "es",
+    "et", "fi", "fil", "fo", "fr", "ga", "he", "hi", "hr", "hu", "hy", "id",
+    "is", "it", "ja", "ka", "lt", "lv", "mk", "ms", "mt", "nb", "nl", "nn",
+    "pl", "pt_PT", "ro", "ru", "sk", "sl", "sq", "sr", "sv", "th", "tr", "uk",
+    "vi", "zh-Hans",
   ]
 
   /// Languages added during THIS window, before any of their records exist.
