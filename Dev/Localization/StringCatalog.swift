@@ -60,6 +60,16 @@ nonisolated struct StringCatalog: Codable, Sendable {
     /// a flat cell leaves them in place, and dropping them would silently
     /// destroy a real catalog's argument plurals.
     var substitutions: [String: Substitution]?
+
+    /// True when the node carries nothing to write — no flat unit, no
+    /// variation rule with content and no substitution arguments. Xcode's
+    /// compiler rejects a bare localization node, so such an entry is dropped
+    /// on the way to disk (see `StringCatalog.normalizeForWrite`).
+    var isEmptySlot: Bool {
+      if stringUnit != nil { return false }
+      if let substitutions, !substitutions.isEmpty { return false }
+      return variations?.values.allSatisfy(\.isEmpty) ?? true
+    }
   }
 
   /// One `substitutions` argument: the format specifier plus its own
@@ -337,19 +347,153 @@ nonisolated struct StringCatalog: Codable, Sendable {
 
   /// Sets a source-language plural form directly (source has no DB records —
   /// it is authored text, written straight to the file by the caller).
+  /// `state` is not optional in the artifact: a unit carrying only a value is
+  /// rejected by Xcode's compiler ("Missing required key 'state'"), so the
+  /// form inherits the entry's existing source state and falls back to "new".
   mutating func setSourcePluralValue(_ text: String, key: String, category: String) {
-    setPluralValue(text, state: nil, key: key, language: sourceLanguage, category: category)
+    setPluralValue(
+      text, state: sourceUnitState(for: key), key: key,
+      language: sourceLanguage, category: category)
+  }
+
+  /// State a freshly written source form should carry: the entry's own source
+  /// unit state, else the source "other" form's, else "new" (what Xcode
+  /// writes for authored source text).
+  private func sourceUnitState(for key: String) -> String {
+    let loc = strings[key]?.localizations?[sourceLanguage]
+    if let state = loc?.stringUnit?.state { return state }
+    for category in ["other"] + PluralRules.categories(for: sourceLanguage) {
+      if let state = loc?.variations?["plural"]?[category]?.stringUnit?.state { return state }
+    }
+    return "new"
   }
 
   // MARK: - saving
 
   /// Atomically encodes the catalog back to its file. Shared by the
-  /// record-commit path and the direct source-plural writes.
+  /// record-commit path and the direct source-plural writes — and this is
+  /// where the artifact is guaranteed to COMPILE: the model is normalized
+  /// first (see `normalizeForWrite`), because two shapes it can legitimately
+  /// hold in memory are hard errors for Xcode's compiler while every JSON
+  /// parser accepts them.
   func save(to url: URL) throws {
+    var outgoing = self
+    if needsWriteNormalization {
+      outgoing.normalizeForWrite()
+    }
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-    let data = try encoder.encode(self)
+    let data = try encoder.encode(outgoing)
     try data.write(to: url, options: .atomic)
+  }
+
+  /// True when at least one unit would change on the way out. Read-only, so a
+  /// clean catalog encodes straight from `self` — no copy, and a save that
+  /// changes nothing stays byte-identical.
+  var needsWriteNormalization: Bool {
+    for entry in strings.values {
+      guard let localizations = entry.localizations else { continue }
+      for (language, loc) in localizations
+      where normalized(loc, language: language).changed || loc.isEmptySlot {
+        return true
+      }
+    }
+    return false
+  }
+
+  /// In-place `normalized` for the whole catalog, on the way to disk. Nodes
+  /// left with nothing are dropped: Xcode's compiler rejects a bare
+  /// `"de" : { }` localization entry too. A language whose only content was
+  /// empty form skeletons therefore leaves the FILE (the in-memory catalog
+  /// keeps it — the UI is unaffected until a reload — and adding the language
+  /// again is the user's explicit action through `addLanguage`, which the
+  /// per-key records survive in all cases).
+  mutating func normalizeForWrite() {
+    for key in strings.keys {
+      guard var entry = strings[key], var localizations = entry.localizations else { continue }
+      for language in Array(localizations.keys) {
+        guard let loc = localizations[language] else { continue }
+        let repaired = normalized(loc, language: language)
+        if repaired.slot.isEmptySlot {
+          localizations.removeValue(forKey: language)
+        } else if repaired.changed {
+          localizations[language] = repaired.slot
+        }
+      }
+      entry.localizations = localizations.isEmpty ? nil : localizations
+      strings[key] = entry
+    }
+  }
+
+  /// One localization node as it should reach the file: every unit either
+  /// carries a complete stringUnit or is gone. Two shapes are dropped —
+  ///
+  ///   - `"one" : { }`, the skeleton form `varyByPlural` / `setPluralValue`
+  ///     create so `hasPlurals()` reads true while a run fills them. On disk a
+  ///     form is EITHER present with a value OR absent, the same rule flat
+  ///     slots follow ("Missing required key 'stringUnit'" otherwise).
+  ///   - a unit with no `state` at all ("Missing required key 'state'") —
+  ///     what the source-form write path used to produce.
+  ///
+  /// A unit that kept its state but lost the value gets `value: ""` (Xcode's
+  /// own shape for a string that exists untranslated); a unit that kept a
+  /// value but lost the state gets `defaultState(for:)`. Device variations
+  /// and `substitutions` argument trees are never touched: this phase does not
+  /// write them, and inventing a shape for a dropped argument is worse than
+  /// carrying it through.
+  private func normalized(_ loc: Language, language: String) -> (slot: Language, changed: Bool) {
+    var slot = loc
+    var changed = false
+
+    if let unit = slot.stringUnit {
+      if unit.state == nil, unit.value == nil {
+        slot.stringUnit = nil                          // nothing to write — absent
+        changed = true
+      } else if unit.state == nil || unit.value == nil {
+        var repaired = unit
+        if repaired.value == nil { repaired.value = "" }
+        if repaired.state == nil { repaired.state = defaultState(for: language) }
+        slot.stringUnit = repaired
+        changed = true
+      }
+    }
+
+    if var variations = slot.variations, var plural = variations["plural"] {
+      for category in Array(plural.keys) {
+        guard let unit = plural[category]?.stringUnit else {
+          plural.removeValue(forKey: category)         // skeleton — absence IS empty
+          changed = true
+          continue
+        }
+        if unit.state == nil, unit.value == nil {
+          plural.removeValue(forKey: category)         // `"stringUnit" : { }`
+          changed = true
+        } else if unit.state == nil || unit.value == nil {
+          var repaired = unit
+          if repaired.value == nil { repaired.value = "" }
+          if repaired.state == nil { repaired.state = defaultState(for: language) }
+          plural[category] = VariationUnit(stringUnit: repaired)
+          changed = true
+        }
+      }
+      if plural.isEmpty {
+        variations.removeValue(forKey: "plural")       // an empty plural is no plural
+        changed = true
+      } else {
+        variations["plural"] = plural
+      }
+      slot.variations = variations.isEmpty ? nil : variations
+    }
+
+    return (slot, changed)
+  }
+
+  /// State a repaired unit gets when it carries none. The source language
+  /// holds authored text, so "new" (what Xcode writes for it); anything else
+  /// can only be machine output here and lands in the needs_review bucket the
+  /// pipeline uses.
+  private func defaultState(for language: String) -> String {
+    language == sourceLanguage ? "new" : "needs_review"
   }
 }
 
