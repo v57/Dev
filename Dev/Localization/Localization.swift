@@ -373,9 +373,101 @@ final class LocalizationStore {
 
   var isLoaded: Bool { catalog != nil }
 
-  var pickerLanguages: [String] {
-    guard let catalog else { return [] }
-    return catalog.languages.filter { $0 != catalog.sourceLanguage }
+  /// Language codes the "Add Language" menu offers — the set this tool
+  /// supports. The menu marks the ones the open catalog already carries.
+  static let offeredLanguages: [String] = [
+    "ar", "cs", "da", "de", "el", "en", "es", "fi", "fil", "fr", "he", "hi",
+    "hr", "hu", "id", "it", "ja", "ka", "ms", "nb", "nl", "pt_PT", "ro", "ru",
+    "sk", "th", "tr", "uk", "vi", "zh-Hans",
+  ]
+
+  /// Languages added during THIS window, before any of their records exist.
+  /// Kept only so an add is visible immediately on a catalog with no keys (a
+  /// freshly generated one, where there is nothing to seed and nothing to
+  /// persist). Once the catalog has keys, the seeded records carry the
+  /// language — see `browserLanguages`.
+  private(set) var addedLanguages: [String] = []
+
+  /// Every language the browser projects a cell/column for: the open
+  /// catalog's own codes, the ones added in this window, and the ones this
+  /// project's records carry.
+  ///
+  /// The records are what make an ADDED language survive a reopen: the
+  /// catalog's nodes for it are empty, and an empty localization node is a
+  /// file error, so the save path prunes them (see `normalizeForWrite`) — the
+  /// file only ever gains the language where a translation exists to write.
+  private(set) var browserLanguages: [String] = []
+
+  /// True while an add-language pass is seeding its records.
+  private(set) var isAddingLanguage = false
+
+  /// Tail of the add-language chain: each pass waits for the previous one, so
+  /// two adds never write the same slots from two background contexts.
+  private var languageChain: Task<Void, Never> = Task {}
+
+  /// Language columns the strip offers: every language of the browser except
+  /// the source (whose column is permanent).
+  var pickerLanguages: [String] { browserLanguages }
+
+  /// True when the open catalog — or this project's records — already carries
+  /// `language`. The source language counts as present: it is not a target.
+  func isLanguagePresent(_ language: String) -> Bool {
+    browserLanguages.contains(language) || catalog?.sourceLanguage == language
+  }
+
+  /// "Add Language": gives the open catalog the language and seeds the records
+  /// the Translate pipeline fills (`Reconcile.addLanguage`, off the main actor
+  /// — a large catalog's seeding is thousands of inserts).
+  ///
+  /// Nothing is written to the artifact: adding a language is a DB-side
+  /// operation until a translation exists for it, and Save stays the only
+  /// writer. The new column is selected so its missing cells are visible
+  /// straight away.
+  ///
+  /// The document half happens HERE, on the current document rather than on a
+  /// snapshot the seeding pass was given: an edit, a Translate run or a reload
+  /// can land while the pass runs, and adopting the pass's older copy of the
+  /// document would drop it.
+  func addLanguage(_ language: String) {
+    guard !language.isEmpty, let catalog, let project else { return }
+    guard !isLanguagePresent(language) else { return }
+    // The language's nodes (empty — pruned on the way to disk, so the file
+    // only gains the language where a translation exists to write) plus the
+    // CLDR form skeleton for every key whose SOURCE is plural-varied, which is
+    // what makes its plural keys read as plural targets instead of flat slots.
+    var updated = catalog
+    updated.addLanguage(language)
+    for key in Array(updated.strings.keys)
+    where updated.hasPlurals(for: key, language: updated.sourceLanguage) {
+      updated.varyByPlural(key: key, languages: [language])
+    }
+    self.catalog = updated
+    addedLanguages.append(language)
+    if !selectedLanguages.contains(language) {
+      selectedLanguages.append(language)
+    }
+    buildRows()
+    let projectID = project.persistentModelID
+    let previous = languageChain
+    isAddingLanguage = true
+    languageChain = Task {
+      await previous.value
+      let result = await Reconcile.addLanguage(
+        language, catalog: catalog, projectID: projectID,
+        in: TranslationStore.container)
+      isAddingLanguage = false
+      switch result {
+      case .success:
+        // Another catalog may have been opened while the pass ran: its rows
+        // are not this project's. The records it seeded are durable either
+        // way, and the next open/adopt picks them up.
+        guard self.project?.persistentModelID == projectID else { return }
+        rebuildRecordIndex()
+        buildRows()
+      case .failure(let error):
+        saveError = "Couldn't add \(language): \(error.localizedDescription)"
+      }
+    }
   }
 
   var sourceLanguageTitle: String {
@@ -1449,6 +1541,7 @@ final class LocalizationStore {
     showLongest = false
     sortOrder = [CatalogSort(.source)]
     selectedLanguages = []
+    addedLanguages = []
     run.reset()
     let project = await mirrorCatalog(blank, url: url)
     adopt(blank, project: project, url: url)
@@ -1552,6 +1645,7 @@ final class LocalizationStore {
       showLongest = false
       sortOrder = [CatalogSort(.source)]
       selectedLanguages = []
+      addedLanguages = []
       // A different catalog: drop the previous project's run summary.
       run.reset()
       adopt(catalog, project: project, url: url)
@@ -1588,6 +1682,8 @@ final class LocalizationStore {
     rows = []
     visibleRows = []
     valueOverrides = [:]
+    addedLanguages = []
+    browserLanguages = []
     isDirty = false
     pendingLeave = nil
     isUnsavedPromptPresented = false
@@ -1651,6 +1747,9 @@ final class LocalizationStore {
     } else {
       rebuildRecordIndex(from: [])
     }
+    // The document must name every language the records carry before the rows
+    // are derived from it (see `topUpCatalogLanguages`).
+    topUpCatalogLanguages()
     buildRows()
     // The scan's merge preview is a diff against the catalog — keep it
     // current while its sheet is open.
@@ -1837,6 +1936,7 @@ final class LocalizationStore {
   /// mirrors the artifact that was just written.
   private func buildRows() {
     refreshUpdateCounts()
+    browserLanguages = computeBrowserLanguages()
     guard let catalog else {
       rows = []
       visibleRows = []
@@ -1851,6 +1951,48 @@ final class LocalizationStore {
     recomputeVisibleRows()
   }
 
+  /// Recomputes `browserLanguages`: the open catalog's codes, the languages
+  /// added in this window, and the ones this project's records carry (an
+  /// added language lives in the DB before the file knows it — see
+  /// `addLanguage`). Sorted, source excluded.
+  private func computeBrowserLanguages() -> [String] {
+    var seen = Set(catalog?.languages ?? [])
+    seen.formUnion(addedLanguages)
+    for byLanguage in recordIndex.values {
+      seen.formUnion(byLanguage.keys)
+    }
+    if let source = catalog?.sourceLanguage {
+      seen.remove(source)
+    }
+    return seen.sorted()
+  }
+
+  /// Gives the open document every language this project's records carry.
+  ///
+  /// A language added in an earlier session is in the RECORDS only (its empty
+  /// file nodes are pruned on save), while the engine's own language list —
+  /// `catalog.languages`, read by the plural-skeleton passes — is the
+  /// document's. Topping the document up here is what keeps the two halves
+  /// from disagreeing: a whole-catalog run varies plural keys for every
+  /// language the catalog names, so an added language missing from the
+  /// document would silently get no plural forms at all.
+  private func topUpCatalogLanguages() {
+    guard let catalog else { return }
+    let known = Set(catalog.languages)
+    var missing = Set<String>()
+    for byLanguage in recordIndex.values {
+      for language in byLanguage.keys where !known.contains(language) {
+        missing.insert(language)
+      }
+    }
+    guard !missing.isEmpty else { return }
+    var updated = catalog
+    for language in missing.sorted() {
+      updated.addLanguage(language)
+    }
+    self.catalog = updated
+  }
+
   private func makeRow(
     catalog: StringCatalog,
     key: String,
@@ -1858,8 +2000,11 @@ final class LocalizationStore {
   ) -> CatalogRow {
     let translatable = entry.shouldTranslate != false
     let rowHasPlurals = catalog.hasPlurals(for: key)
-    // Cells for EVERY non-source language, selected or not — a language
-    // column toggle only re-projects `visibleRows`, never re-derives rows.
+    // Cells for EVERY language the browser shows, selected or not — a
+    // language column toggle only re-projects `visibleRows`, never re-derives
+    // rows. `browserLanguages` (catalog codes + added/record-carried ones,
+    // see `computeBrowserLanguages`) is what the strip lists, so a language
+    // the file does not know yet still gets its missing cells.
     // The same per-language pass feeds each LangCell AND the row review
     // flags (all languages, flat + plural forms).
     var cells: [String: LangCell] = [:]
@@ -1883,7 +2028,7 @@ final class LocalizationStore {
         else if fileState == "needs_review" { needsReview += 1 }
       }
     }
-    for language in catalog.languages where language != catalog.sourceLanguage {
+    for language in browserLanguages {
       let loc = entry.localizations?[language]
       let plural = catalog.hasPlurals(for: key, language: language)
       let device = !plural && (loc?.variations?.isEmpty == false)

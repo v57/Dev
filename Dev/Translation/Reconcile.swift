@@ -373,6 +373,114 @@ nonisolated enum Reconcile {
     }.value
   }
 
+  // MARK: - adding a language (off the main actor)
+
+  /// What one "add a language" pass produced. Only counts cross the actor
+  /// boundary — the document half of the add is the caller's own catalog,
+  /// mutated in place (see `LocalizationStore.addLanguage`), never a snapshot
+  /// from before the pass: a translation run or an edit can land while the
+  /// seeding runs, and adopting a stale document would drop it.
+  struct LanguageAddOutcome: Sendable {
+    /// Records created — one per translatable key, one per CLDR form for a
+    /// plural-source key.
+    let inserted: Int
+    /// Keys in scope when the pass ran (0 = an empty catalog, nothing to
+    /// seed).
+    let keyCount: Int
+  }
+
+  /// Seeds the records a freshly added `language` needs, OFF the main actor (a
+  /// big catalog's seeding is thousands of inserts).
+  ///
+  /// Pairs with `StringCatalog.addLanguage`, which gives the document the
+  /// language's nodes only. Those nodes are EMPTY, and an empty localization
+  /// node is a file error — `normalizeForWrite` prunes them on the way to disk
+  /// — so the added language is recognizable again after a reopen by its
+  /// RECORDS, never by the file: the browser reads the record set alongside
+  /// the catalog's own codes (see `LocalizationStore.browserLanguages`).
+  ///
+  /// Slot seeding follows the mirror's rule for a pair the file carries no unit
+  /// for (an `.empty` record the pipeline fills), with one deliberate
+  /// difference: a key whose SOURCE is plural-varied gets its per-form records
+  /// straight away, because a flat record on a plural slot is something the
+  /// merge refuses to write and nothing ever cleans up. The caller varies the
+  /// document's forms for that key in the same breath.
+  ///
+  /// Records the project already holds for this language are left exactly as
+  /// they are (value, provenance, state), so re-adding a language costs nothing
+  /// and can never rewrite a translation.
+  static func addLanguage(
+    _ language: String,
+    catalog: StringCatalog,
+    projectID: PersistentIdentifier,
+    in container: ModelContainer
+  ) async -> Result<LanguageAddOutcome, Error> {
+    await Task.detached(priority: .userInitiated) {
+      let context = ModelContext(container)
+      guard let project = project(id: projectID, in: context) else {
+        // The project is gone (removed while the add was in flight): nothing
+        // to seed.
+        return .success(LanguageAddOutcome(inserted: 0, keyCount: 0))
+      }
+      // This context is COLD, so the existing slots come from one scoped
+      // fetch — iterating the relationship here would fault per row.
+      let existing = records(of: project, in: context)
+      var slots = Set<SlotKey>()
+      slots.reserveCapacity(existing.count)
+      for record in existing {
+        slots.insert(SlotKey(
+          key: record.key, language: record.language, category: record.category ?? ""))
+      }
+
+      var created: [TranslationRecord] = []
+      var keyCount = 0
+      for key in catalog.strings.keys {
+        // Non-translatable keys are hidden from the workflow entirely.
+        guard let entry = catalog.strings[key], entry.shouldTranslate != false else { continue }
+        keyCount += 1
+        if catalog.hasPlurals(for: key, language: catalog.sourceLanguage) {
+          for category in PluralRules.categories(for: language) {
+            let slot = SlotKey(key: key, language: language, category: category)
+            if slots.contains(slot) { continue }
+            let record = TranslationRecord(
+              key: key,
+              sourceText: catalog.sourcePluralDisplay(for: key, category: category),
+              language: language,
+              value: nil, provider: nil, state: .empty,
+              contextVersions: persistableVersions(ContextVersions()),
+              category: category)
+            context.insert(record)
+            created.append(record)
+            slots.insert(slot)
+          }
+          continue
+        }
+        let slot = SlotKey(key: key, language: language, category: "")
+        if slots.contains(slot) { continue }
+        let record = TranslationRecord(
+          key: key,
+          sourceText: catalog.sourceDisplay(for: key),
+          language: language,
+          value: nil, provider: nil, state: .empty,
+          contextVersions: persistableVersions(ContextVersions()))
+        context.insert(record)
+        created.append(record)
+        slots.insert(slot)
+      }
+
+      if !created.isEmpty {
+        // ONE bulk append instead of a to-one assignment per insert.
+        project.records.append(contentsOf: created)
+      }
+      do {
+        try context.save()
+      } catch {
+        return .failure(error)
+      }
+      return .success(LanguageAddOutcome(inserted: created.count, keyCount: keyCount))
+    }.value
+  }
+
   /// Mirrors the parsed catalog into the project's TranslationRecords:
   /// every (translatable key, non-source language) pair the catalog knows.
   /// Pairs the file carries no unit for become `.empty` records (Stage 1

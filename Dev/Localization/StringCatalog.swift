@@ -275,10 +275,17 @@ nonisolated struct StringCatalog: Codable, Sendable {
   }
 
   /// Adds an empty localization slot for `language` to every key that lacks
-  /// one (a bare unit-less entry — no stringUnit, no variations). The
-  /// language then appears in `languages`, the column buttons and reconcile
-  /// (which seeds empty records Translate fills). Returns how many keys
-  /// gained the slot.
+  /// one (a unit-less entry — no stringUnit, no variations). The language then
+  /// appears in `languages`, which is what the plural-skeleton passes read.
+  /// Returns how many keys gained the slot.
+  ///
+  /// In-memory only, and deliberately so: a node with no content is a BARE
+  /// localization entry, which Xcode's compiler rejects, so `normalizeForWrite`
+  /// prunes these on the way to disk. The file therefore gains a language only
+  /// where a translation exists to write; the app keeps an added language
+  /// visible through the records it seeds (`Reconcile.addLanguage`), which is
+  /// also what makes it survive a reopen — see
+  /// `LocalizationStore.browserLanguages`.
   @discardableResult
   mutating func addLanguage(_ language: String) -> Int {
     var added = 0

@@ -321,7 +321,10 @@ struct LocalizationView: View {
 // MARK: - Language buttons
 
 /// Horizontal strip of language buttons on the second row; selected ones are
-/// highlighted. Tapping toggles the language column.
+/// highlighted. Tapping toggles the language column. The trailing "Add
+/// Language" menu offers the codes this tool supports — the ones the catalog
+/// already carries are checked and inert, so the menu doubles as the answer to
+/// "which languages does this project have?".
 private struct LanguageButtonsRow: View {
   let store: LocalizationStore
 
@@ -343,11 +346,47 @@ private struct LanguageButtonsRow: View {
           .buttonStyle(.plain)
           .help(selected ? "Hide \(language) column" : "Show \(language) column")
         }
+        if !store.pickerLanguages.isEmpty {
+          Divider().frame(height: 18)
+        }
+        addLanguageMenu
       }
       .padding(.horizontal, 12)
       .padding(.vertical, 6)
     }
     .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  /// Adds a language the catalog does not carry yet: its column appears here
+  /// and Translate fills it. Nothing is written to the catalog file until a
+  /// translation exists to save.
+  private var addLanguageMenu: some View {
+    Menu {
+      ForEach(LocalizationStore.offeredLanguages, id: \.self) { language in
+        let present = store.isLanguagePresent(language)
+        Button {
+          store.addLanguage(language)
+        } label: {
+          if present {
+            Label(language, systemImage: "checkmark")
+          } else {
+            Text(language)
+          }
+        }
+        .disabled(present || store.isAddingLanguage)
+      }
+    } label: {
+      Label("Add Language", systemImage: "plus")
+        .font(.callout)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .background(Color.secondary.opacity(0.12), in: Capsule())
+    }
+    .menuStyle(.button)
+    .buttonStyle(.plain)
+    .fixedSize()
+    .disabled(!store.isLoaded || store.isAddingLanguage)
+    .help("Add a language this catalog does not carry yet — its column appears here and Translate fills it. The catalog file only gains the language where a translation exists to save")
   }
 }
 
