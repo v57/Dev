@@ -903,6 +903,34 @@ nonisolated enum Reconcile {
     return true
   }
 
+  // MARK: - max width guideline (DB side)
+
+  /// Sets (or clears, with nil) the row's MAX WIDTH guideline across every
+  /// record of the key. App-local metadata: the .xcstrings format has no width
+  /// field and Save is the only catalog writer, so nothing here touches the
+  /// file.
+  ///
+  /// The guideline is NEVER sent to the translator — a width constraint in a
+  /// translation prompt degrades the translation, which is exactly why it
+  /// lives on the review side: the browser flags an over-width value for the
+  /// human, and the paid verification gate may shorten one.
+  @discardableResult
+  static func applyMaxWidth(
+    key: String,
+    width: Int?,
+    project: Project,
+    context: ModelContext
+  ) -> Int {
+    var touched = 0
+    for record in project.records where record.key == key {
+      record.maxWidth = width
+      record.updatedAt = .now
+      touched += 1
+    }
+    try? context.save()
+    return touched
+  }
+
   // MARK: - merge (DB -> in-memory catalog)
 
   /// Merges the working store into a copy of the parsed catalog — the pure,

@@ -363,6 +363,11 @@ private struct LanguageCell: View {
             store.confirmAutoReviewed(key: row.key, language: language)
           }
         }
+        if let limit = row.maxWidth, cell.isOverWidth(limit) {
+          WidthBadge(
+            chars: cell.longestValueCharacters, limit: limit,
+            sourceChars: row.sourceText.count)
+        }
         LanguageEditCell(
           store: store, rowKey: row.key, language: language,
           cell: cell, record: cell.record)
@@ -399,6 +404,23 @@ private struct RowContextMenu: View {
     }
     .disabled(store.run.isActive)
     .help("Attach a reviewer note to this row — a project rule guides the translator, a plain note stays in the app")
+
+    Menu {
+      ForEach([nil, 6, 8, 12, 16, 32] as [Int?], id: \.self) { option in
+        Button {
+          store.setMaxWidth(key: row.key, width: option)
+        } label: {
+          if row.maxWidth == option {
+            Label(option.map { "\($0) chars" } ?? "None", systemImage: "checkmark")
+          } else {
+            Text(option.map { "\($0) chars" } ?? "None")
+          }
+        }
+      }
+    } label: {
+      Label("Max Width", systemImage: "arrow.left.and.right")
+    }
+    .help("Guideline for the rendered width of this row's text. It is never sent to the translator — over-width values are flagged here for you, and the reviewer may shorten one")
 
     Divider()
 
@@ -497,6 +519,25 @@ private struct RowContextMenu: View {
     }
   }
 }
+/// Advisory marker: this value is longer than the row's max-width guideline.
+/// It never changes state and never blocks "Reviewed" — the reviewer decides
+/// whether to rephrase, abbreviate, or accept it as it is.
+private struct WidthBadge: View {
+  let chars: Int
+  let limit: Int
+  /// Length of the source text, when the caller knows it (0 = unknown).
+  var sourceChars: Int = 0
+
+  var body: some View {
+    Image(systemName: "arrow.left.and.right")
+      .font(.system(size: 9))
+      .foregroundStyle(.orange)
+      .help(sourceChars > 0
+        ? "\(chars) chars — over the \(limit)-char limit (source \(sourceChars))"
+        : "\(chars) chars — over the \(limit)-char limit")
+  }
+}
+
 /// Row note editor (row menu "Note…"): the note text plus what it should do.
 /// A project-scoped note becomes a rule in the project ContextDoc, which the
 /// translator follows; a memo stays in the app. Nothing here writes a catalog
@@ -834,6 +875,11 @@ private struct PluralFormRow: View {
             store.confirmAutoReviewed(
               key: rowKey, language: language, category: category)
           }
+        }
+        if let limit = store.maxWidth(for: rowKey),
+           let value = formRecord?.value, !value.isBlankOrEmpty,
+           value.count > limit {
+          WidthBadge(chars: value.count, limit: limit)
         }
         Text(PluralRules.displayName(for: category))
           .font(.caption)

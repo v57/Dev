@@ -32,6 +32,10 @@ nonisolated struct GateItem: Sendable {
   var sourceText: String
   var comment: String?
   var candidate: String
+  /// The row's max-width guideline, passed ONLY when the candidate is longer
+  /// than it. The reviewer may then rephrase or abbreviate — this is the only
+  /// place a width ever reaches a model, and it never reaches the translator.
+  var maxWidth: Int? = nil
 }
 
 // MARK: - TranslationRouter
@@ -253,6 +257,9 @@ final class TranslationRouter: TranslatorBackend {
       if let comment = item.comment, !comment.isEmpty {
         row["comment"] = comment
       }
+      if let limit = item.maxWidth {
+        row["maxChars"] = String(limit)
+      }
       return row
     }
     guard let data = try? JSONSerialization.data(
@@ -270,6 +277,11 @@ final class TranslationRouter: TranslatorBackend {
     placeholder, wrong language, wrong grammatical agreement, or clearly \
     non-idiomatic register. Do not rewrite a correct translation to your own \
     preference — when in doubt, mark it valid and leave "fix" empty.
+    An item may carry "maxChars": its candidate is longer than the limit the \
+    UI gives that string. Then rephrase or abbreviate it so it fits (for \
+    example "Изменить" -> "Изм."), keeping the meaning, the placeholders and \
+    the register. If it cannot be shortened without losing meaning, mark it \
+    valid and leave "fix" empty.
     """
     do {
       let reply = try await Self.call(

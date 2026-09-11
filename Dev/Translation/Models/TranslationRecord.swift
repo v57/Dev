@@ -69,6 +69,12 @@ import SwiftData
   /// The exact note text that WAS folded, so an edit re-folds and clearing the
   /// note retracts the rule. nil = nothing folded.
   var noteFoldedText: String?
+  /// Reviewer's MAX WIDTH guideline for this row's rendered text, in
+  /// characters; nil = no guideline (the default). Key-scoped: every record of
+  /// the key carries the same limit. App-local metadata, NEVER sent to the
+  /// translator — only the reviewer side uses it (the browser flags a value
+  /// that exceeds it, and the paid verification gate may shorten one).
+  var maxWidth: Int?
 
   // MARK: - relationships
 
@@ -86,7 +92,7 @@ import SwiftData
     lastEditor: String? = nil, project: Project? = nil, edits: [TranslationEdit] = [],
     category: String? = nil, autoReviewed: Bool = false,
     note: String? = nil, noteScope: String? = nil, noteFoldedAt: Date? = nil,
-    noteFoldedText: String? = nil
+    noteFoldedText: String? = nil, maxWidth: Int? = nil
   ) {
     self.key = key
     self.sourceText = sourceText
@@ -106,6 +112,7 @@ import SwiftData
     self.noteScope = noteScope
     self.noteFoldedAt = noteFoldedAt
     self.noteFoldedText = noteFoldedText
+    self.maxWidth = maxWidth
     self.project = project
     self.edits = edits
   }

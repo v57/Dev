@@ -707,6 +707,14 @@ struct TranslationPipeline {
       progress: progress, outcome: &outcome, trace: trace)
   }
 
+  /// The width guideline to hand the reviewer: the row's limit ONLY when the
+  /// candidate actually exceeds it. A limit on a value that already fits is
+  /// noise, and the reviewer must not be invited to rewrite what fits.
+  private static func reviewerWidth(_ limit: Int?, _ candidate: String) -> Int? {
+    guard let limit else { return nil }
+    return candidate.count > limit ? limit : nil
+  }
+
   /// Gates and writes a batch's accepted values, then reports whatever is
   /// still unresolved for this batch.
   private static func finishBatch(
@@ -730,7 +738,8 @@ struct TranslationPipeline {
           id: id,
           sourceText: slice[id].record.sourceText,
           comment: slice[id].context.comment,
-          candidate: entry.value))
+          candidate: entry.value,
+          maxWidth: Self.reviewerWidth(slice[id].record.maxWidth, entry.value)))
       }
       let fixes = await router.verifyBatch(gateItems)
       for (id, fix) in fixes where slice.indices.contains(id) {
@@ -739,6 +748,13 @@ struct TranslationPipeline {
           source: slice[id].record.sourceText, target: fix).isEmpty else { continue }
         resolved[id] = (fix, router.currentModel)
         outcome.gateFixes += 1
+        // A width fix is BEST-EFFORT: the value is accepted even when it is
+        // still over the guideline — never loop, never re-ask. The browser
+        // keeps flagging it for the human to shorten or accept.
+        if let limit = slice[id].record.maxWidth, fix.count > limit {
+          progress?.note(
+            "\(displayKey(slice[id].record)): still \(fix.count) chars over the \(limit)-char limit")
+        }
       }
     }
 

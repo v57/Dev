@@ -19,6 +19,9 @@ enum RowFilter: String, CaseIterable, Identifiable {
   case missing
   case translated
   case new
+  /// Rows that carry a max-width guideline with at least one filled value
+  /// over it — the reviewer's shortening worklist.
+  case tooWide
 
   var id: String { rawValue }
 
@@ -29,6 +32,7 @@ enum RowFilter: String, CaseIterable, Identifiable {
     case .missing: return "Missing"
     case .translated: return "Translated"
     case .new: return "New"
+    case .tooWide: return "Too wide"
     }
   }
 
@@ -39,6 +43,7 @@ enum RowFilter: String, CaseIterable, Identifiable {
     case .missing: return "questionmark.circle"
     case .translated: return "checkmark.circle"
     case .new: return "sparkles"
+    case .tooWide: return "arrow.left.and.right.righttriangle.left.righttriangle.right"
     }
   }
 }
@@ -74,6 +79,8 @@ struct CatalogRow: Identifiable {
   let isFullyNeedsReview: Bool
   /// Folded haystack for search, built once at row materialization.
   let searchBlob: String
+  /// The row's max-width guideline (nil = none), read from its live records.
+  let maxWidth: Int?
 
   var id: String { key }
 }
@@ -117,6 +124,31 @@ struct LangCell {
       return pluralRecords.values.allSatisfy { $0.value?.isBlankOrEmpty != false }
     }
     return !hasParsed && !hasOverride && !hasVariations
+  }
+
+  /// Length of the longest FILLED value in this slot, in grapheme clusters
+  /// (0 when the slot holds nothing) — the same counting rule the batch budget
+  /// and the guideline use, so the submenu and the warning cannot disagree.
+  /// Plural slots weigh their FORMS; the cell's summary text is not a value.
+  var longestValueCharacters: Int {
+    var longest = 0
+    func weigh(_ value: String?) {
+      guard let value, !value.isBlankOrEmpty else { return }
+      longest = max(longest, value.count)
+    }
+    weigh(record?.value)
+    if pluralRecords.isEmpty {
+      weigh(hasPlurals ? nil : text)
+    } else {
+      for form in pluralRecords.values { weigh(form.value) }
+    }
+    return longest
+  }
+
+  /// True when this slot holds a value longer than the row's guideline.
+  func isOverWidth(_ limit: Int) -> Bool {
+    let longest = longestValueCharacters
+    return longest > 0 && longest > limit
   }
 }
 
@@ -813,6 +845,23 @@ final class LocalizationStore {
     guard let project else { return }
     let context = TranslationStore.shared.context
     Reconcile.applyProjectDoc(content: text, project: project, context: context)
+  }
+
+  /// The row's max-width guideline (nil = none), read from the live records.
+  func maxWidth(for key: String) -> Int? {
+    let all = recordIndex[key]?.values.flatMap { $0.values } ?? []
+    return all.compactMap(\.maxWidth).first
+  }
+
+  /// Sets (nil clears) the row's max-width guideline across every record of
+  /// the key. Nothing is written to the catalog file: the guideline is
+  /// app-local metadata, and Save stays the only catalog writer.
+  func setMaxWidth(key: String, width: Int?) {
+    guard let project else { return }
+    Reconcile.applyMaxWidth(
+      key: key, width: width, project: project,
+      context: TranslationStore.shared.context)
+    buildRows()
   }
 
   // MARK: - imported-DB human confirm
@@ -1691,6 +1740,11 @@ final class LocalizationStore {
         pluralRecords: [:])
     }
     let sourceText = catalog.sourceDisplay(for: key)
+    // The guideline is key-scoped metadata on the records; the first one that
+    // carries it is authoritative (same rule as the reviewer note).
+    let width = cells.values.compactMap { cell -> Int? in
+      cell.record?.maxWidth ?? cell.pluralRecords.values.compactMap(\.maxWidth).first
+    }.first
     let (longestText, longestLanguage) = Self.longestValue(
       catalog: catalog, key: key, sourceText: sourceText,
       overrides: valueOverrides[key])
@@ -1707,7 +1761,8 @@ final class LocalizationStore {
       cells: cells,
       isFullyReviewed: filled > 0 && reviewed == filled,
       isFullyNeedsReview: filled > 0 && needsReview == filled,
-      searchBlob: folded(searchBlobText(key: key, entry: entry)))
+      searchBlob: folded(searchBlobText(key: key, entry: entry)),
+      maxWidth: width)
   }
 
   /// Longest value across the source display text and every language
@@ -1785,6 +1840,9 @@ final class LocalizationStore {
       return selectedLanguages.contains { row.cells[$0]?.state == "translated" }
     case .new:
       return selectedLanguages.contains { row.cells[$0]?.state == "new" }
+    case .tooWide:
+      guard let limit = row.maxWidth else { return false }
+      return selectedLanguages.contains { row.cells[$0]?.isOverWidth(limit) == true }
     }
   }
 
