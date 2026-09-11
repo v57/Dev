@@ -244,15 +244,23 @@ nonisolated enum GlossaryFormat {
 struct Stage0Learner {
   /// Per-run results of the learn stage.
   struct Outcome {
-    var folds = 0       // docs actually changed (each = one audit + one bump)
-    var covered = 0     // already in doc / model said NO_CHANGE
+    var folds = 0        // docs actually changed (each = one audit + one bump)
+    var covered = 0      // already in doc / model said NO_CHANGE
+    /// Oversized docs rewritten smaller (each = one audit + one bump).
+    var compressions = 0
     var failures: [String] = []
   }
 
-  /// Gathers and folds every pending confirmed edit of the project.
+  /// Gathers and folds every pending confirmed edit of the project, then
+  /// compresses any language doc that has outgrown the prompt cap.
+  ///
+  /// The compression pass belongs to THIS stage on purpose: it runs after
+  /// every fold of the run, so each folded lesson already carries its TM-gold
+  /// entry — the marker that survives a doc rewrite.
   static func learn(
     env: PipelineRunContext,
-    progress: TranslateRunProgress?
+    progress: TranslateRunProgress?,
+    trace: TranslationTrace? = nil
   ) async -> Outcome {
     var outcome = Outcome()
 
@@ -266,37 +274,190 @@ struct Stage0Learner {
     }
     pending.sort { $0.edit.createdAt < $1.edit.createdAt }
 
-    guard !pending.isEmpty else { return outcome }
-    progress?.begin(.stage0Learn, total: pending.count)
-
-    // One upfront configuration gate: without Command Code the whole learn
-    // stage is inert and every edit simply stays pending for a later run.
-    if !Stage0ModelClient.isConfigured {
+    // One upfront configuration gate: without Command Code the whole stage is
+    // inert — folding AND the compression pass below — and every edit simply
+    // stays pending for a later run.
+    if !pending.isEmpty, !Stage0ModelClient.isConfigured {
       outcome.failures.append("Stage 0 learning skipped: Command Code is not configured")
       progress?.fail(key: nil, message: "learning skipped: Command Code is not configured")
+      try? env.context.save()
       return outcome
     }
 
-    for item in pending {
-      if progress?.isCancelled == true {
-        outcome.failures.append("Stage 0 cancelled by user")
-        progress?.note("Stage 0 cancelled")
-        break
-      }
-      let record = item.record
-      let failuresBefore = outcome.failures.count
-      await fold(item, env: env, outcome: &outcome)
-      if outcome.failures.count > failuresBefore {
-        progress?.fail(
-          key: "\(record.language).\(record.key)",
-          message: outcome.failures.last ?? "learning failed"
-        )
-      } else {
-        progress?.tick(key: "\(record.language).\(record.key)")
+    if !pending.isEmpty {
+      progress?.begin(.stage0Learn, total: pending.count)
+      for item in pending {
+        if progress?.isCancelled == true {
+          outcome.failures.append("Stage 0 cancelled by user")
+          progress?.note("Stage 0 cancelled")
+          break
+        }
+        let record = item.record
+        let failuresBefore = outcome.failures.count
+        await fold(item, env: env, outcome: &outcome)
+        if outcome.failures.count > failuresBefore {
+          progress?.fail(
+            key: "\(record.language).\(record.key)",
+            message: outcome.failures.last ?? "learning failed"
+          )
+        } else {
+          progress?.tick(key: "\(record.language).\(record.key)")
+        }
       }
     }
+
+    // Nothing to fold is not nothing to do: an oversized doc still has to come
+    // back under its prompt cap. Compression runs LAST, after every fold, so a
+    // lesson whose line the rewrite drops already has its TM-gold entry.
+    await compressOversizedDocs(env: env, progress: progress, trace: trace, outcome: &outcome)
+
     try? env.context.save()
     return outcome
+  }
+
+  // MARK: - compression
+
+  /// Rewrites every language doc that has outgrown the prompt cap, so the
+  /// STORED doc fits what a prompt can send and the tail-keeping truncation
+  /// never has to fire. One model call per doc.
+  ///
+  /// This replaces the old "the doc is too big — needs human cleanup" park:
+  /// nothing is ever parked, a failed or unusable reply leaves the doc exactly
+  /// as it was (the truncation path is the safety net), and a rewrite that
+  /// canonicalizes to the stored content writes nothing and bumps nothing —
+  /// a language-doc bump makes every other record of that language stale, so
+  /// an unconditional compression would re-translate that whole column on
+  /// every run.
+  ///
+  /// What survives a dropped line: every folded lesson already has a reviewed
+  /// TM entry keyed (sourceText, sourceLanguage, targetLanguage), and TM
+  /// resolves exact hits without any prompt — so compressing the doc costs
+  /// prompt space, not the lesson. Hand-written lines in a language doc have
+  /// no such backstop; the ContextEdit audit holds the before/after for them.
+  private static func compressOversizedDocs(
+    env: PipelineRunContext,
+    progress: TranslateRunProgress?,
+    trace: TranslationTrace?,
+    outcome: inout Outcome
+  ) async {
+    let limit = ContextPromptBuilder.maxLanguageCharacters
+    let oversized = env.allLanguageDocs().filter { $0.content.count > limit }
+    guard !oversized.isEmpty else { return }
+    guard Stage0ModelClient.isConfigured else {
+      outcome.failures.append(
+        "Stage 0 compression skipped: Command Code is not configured "
+          + "(\(oversized.count) doc(s) over \(limit) chars)"
+      )
+      return
+    }
+
+    for doc in oversized {
+      if progress?.isCancelled == true {
+        outcome.failures.append("Stage 0 compression cancelled by user")
+        break
+      }
+      let language = doc.identifier ?? "?"
+      let before = doc.content
+      let prompt = compressionPrompt(doc: before, language: language, limit: limit)
+
+      let reply: GlossaryFormat.FoldReply
+      do {
+        let raw = try await Stage0ModelClient.complete(system: prompt.system, user: prompt.user)
+        reply = GlossaryFormat.parseFoldReply(raw)
+      } catch {
+        outcome.failures.append("compress \(language): \(error.localizedDescription)")
+        progress?.note("Compression failed for \(language) — doc left as stored")
+        continue
+      }
+
+      let revised: String
+      switch reply {
+      case .noChange:
+        continue
+      case .unusable:
+        outcome.failures.append("compress \(language): unusable model reply")
+        continue
+      case .revised(let text):
+        revised = text
+      }
+
+      let canonical = GlossaryFormat.canonicalize(
+        revised.trimmingCharacters(in: .whitespacesAndNewlines))
+      guard !canonical.isEmpty else {
+        outcome.failures.append("compress \(language): empty revision")
+        continue
+      }
+      guard canonical != before else { continue }
+
+      doc.content = canonical
+      doc.version += 1
+      doc.updatedAt = .now
+      let audit = ContextEdit(
+        contextDoc: doc,
+        before: before,
+        after: canonical,
+        reason: "Stage-0 compression of the language doc (deduped to fit the "
+          + "\(limit)-char prompt cap)",
+        author: .deepseek
+      )
+      env.context.insert(audit)
+      outcome.compressions += 1
+      trace?.add(TranslationTrace.Step(
+        kind: .learn,
+        title: "Compressed \(language) glossary doc",
+        model: RoutedModel.muse.name,
+        provider: RoutedModel.muse.provider.displayName,
+        isPaid: true,
+        input: "\(before.count) chars, target <= \(limit)",
+        output: "\(canonical.count) chars",
+        before: before,
+        after: canonical,
+        isFailure: false))
+      progress?.note("Compressed \(language): \(before.count) -> \(canonical.count) chars")
+    }
+  }
+
+  /// The compression instruction: dedupe, merge, keep every term and
+  /// convention, fit the cap. The entry format is NOT restated loosely — it is
+  /// the same tab-separated contract the fold writes, because the reply is
+  /// canonicalized and re-checked against it.
+  private static func compressionPrompt(doc: String, language: String, limit: Int) -> FoldPrompt {
+    let system = """
+    You are the glossary-compression engine of a self-improving software \
+    localization pipeline. You maintain ONE plain-text glossary document for the \
+    target language "\(language)". You receive the current document and must \
+    return it COMPRESSED and DEDUPLICATED.
+
+    Entry format is unchanged — every lesson occupies exactly ONE line, its three \
+    fields separated by a real tab character (U+0009), exactly like this line:
+    cancel\tCancel\tОтмена
+    Separators are REAL tab characters — never the two-character text \\t. A tab, \
+    newline or backslash INSIDE a field is escaped as \\t, \\n, \\\\ — reproduce \
+    those escapes exactly.
+
+    Rules:
+    1. Reply ONLY with the complete rewritten document text — no explanations, no \
+    markdown fences, no commentary.
+    2. Keep exactly ONE line per (key, source) pair. When two lines contradict \
+    each other for the same key and source, keep the LAST one: entries are \
+    appended over time, so the last is the newest.
+    3. Merge duplicates and redundant wording. Never drop a term, a proper noun, \
+    a transliteration rule, or a register convention.
+    4. Never invent a lesson that the input does not imply, and never change a \
+    value that carries no duplicate.
+    5. The result MUST be at most \(limit) characters. Drop the most generic and \
+    the oldest lines first; keep the newest and the most specific ones.
+    6. If the document cannot be usefully shortened, reply with exactly the \
+    single line NO_CHANGE.
+    """
+
+    let user = """
+    CURRENT \(language.uppercased()) GLOSSARY DOCUMENT — \(doc.count) characters, \
+    target at most \(limit)
+
+    \(doc)
+    """
+    return FoldPrompt(system: system, user: user)
   }
 
   // MARK: - one fold
@@ -436,17 +597,12 @@ struct Stage0Learner {
       return
     }
 
-    // An oversized doc cannot be rewritten losslessly by the model. Park the
-    // fold WITHOUT the TM marker so it stays pending: the failure repeats on
-    // every run until a human trims the doc, then the fold proceeds on its
-    // own.
-    if let doc, doc.content.count > PipelineRunContext.maxDocFoldCharacters {
-      outcome.failures.append(
-        "learn \(targetLanguage).\(lessonKey): language doc exceeds "
-          + "\(PipelineRunContext.maxDocFoldCharacters) chars — needs human cleanup"
-      )
-      return
-    }
+    // No size gate here anymore. An oversized doc is folded into like any
+    // other, and the stage's compression pass brings it back under the prompt
+    // cap once every fold of this run has landed (see compressOversizedDocs).
+    // Parked folds used to mean a lesson could never arrive; the tail-keeping
+    // truncation in the prompt builder is now the only failure path, and it
+    // costs prompt space rather than the lesson (TM gold still resolves it).
 
     guard Stage0ModelClient.isConfigured else {
       outcome.failures.append(

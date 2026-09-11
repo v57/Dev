@@ -132,12 +132,16 @@ struct TranslationPipeline {
     // Stage 0 — learn from pending user-confirmed edits first, so the rest
     // of the run sees freshly bumped context versions.
     if progress?.isCancelled != true {
-      let learned = await Stage0Learner.learn(env: env, progress: progress)
+      let learned = await Stage0Learner.learn(env: env, progress: progress, trace: trace)
       summary.learnedFolds += learned.folds
       summary.learnedCovered += learned.covered
-      summary.contextBumps += learned.folds
+      // A compression rewrites a doc + audit + bump exactly like a fold, so it
+      // counts as a context bump too.
+      summary.contextBumps += learned.folds + learned.compressions
       summary.failures += learned.failures
-      progress?.note("Stage 0: \(learned.folds) fold(s), \(learned.covered) already covered")
+      progress?.note(
+        "Stage 0: \(learned.folds) fold(s), \(learned.covered) already covered"
+          + (learned.compressions > 0 ? ", \(learned.compressions) doc(s) compressed" : ""))
     }
 
     // TM resolve — exact hits are copied and skip the machine stages.

@@ -62,11 +62,6 @@ final class PipelineRunContext {
   /// OTHER keys — register samples the model stays consistent with.
   private var neighborPool: [String: [(key: String, value: String)]] = [:]
 
-  /// Max lessons stored in one language doc before autonomous rewrites stop
-  /// (a rewritten doc must round-trip losslessly; beyond this it goes to a
-  /// human instead of risking a silent truncation by the model).
-  static let maxDocFoldCharacters = 8000
-
   init(
     context: ModelContext,
     project: Project,
@@ -145,6 +140,16 @@ final class PipelineRunContext {
     case .language:
       return languageDoc(for: language ?? "")?.version
     }
+  }
+
+  /// Every EXISTING language-scope document, in identifier order. A language
+  /// doc is global to the store (one per BCP-47 code, not per project), so
+  /// Stage 0's compression pass walks them independently of which project the
+  /// run belongs to — leaving one over the prompt cap would silently truncate
+  /// it for whichever project translates next.
+  func allLanguageDocs() -> [ContextDoc] {
+    docs.filter { $0.scope == .language }
+      .sorted { ($0.identifier ?? "") < ($1.identifier ?? "") }
   }
 
   /// The three versions a translation written NOW should be stamped with.
