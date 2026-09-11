@@ -41,8 +41,11 @@ extension View {
 ///    (opening another file would re-target reconcile away from the
 ///    selected project). ProjectDetailView opens the catalog LAZILY, the
 ///    moment the Localization tool is first opened for the project; while
-///    that open is in flight this view shows "Opening catalog…", and when
-///    the file is absent it shows the 'no catalog' state.
+///    that open is in flight this view shows "Opening catalog…"; and when the
+///    file is absent it shows the 'no catalog' state, which offers to GENERATE
+///    one (see `noCatalogState`) — the bound project's own folder is the scan
+///    root, so the keys come from its Swift packages and Xcode targets exactly
+///    as the "Scan Strings" toolbar button finds them.
 struct LocalizationView: View {
   @Environment(LocalizationStore.self) private var store
 
@@ -50,6 +53,22 @@ struct LocalizationView: View {
   /// for the projectless tool. Read from the shared sidebar view-model's
   /// row snapshot by the caller — never tracked here.
   var projectCatalogURL: URL?
+
+  /// The bound project's root folder (nil for the projectless tool, and for
+  /// legacy catalog-file rows). The folder a generated catalog scans for
+  /// localizable strings.
+  var projectRootURL: URL?
+
+  /// Called after this pane generates a catalog, so the sidebar can rebuild
+  /// its row — the file the row derived 'no catalog' from now exists.
+  var onCatalogCreated: (() -> Void)?
+
+  /// The generate confirmation (the one flow here that creates a file in the
+  /// user's project without an Open panel).
+  @State private var isConfirmingGenerate = false
+  /// True while the generate flow is mid-flight (file write + scan start), so
+  /// the button cannot be double-fired.
+  @State private var isGenerating = false
 
   var body: some View {
     Group {
@@ -81,6 +100,14 @@ struct LocalizationView: View {
     } message: {
       Text(store.errorMessage ?? "")
     }
+    // Generating writes a file into the project, so it asks first and names
+    // the exact path and source language it will use.
+    .alert(generateTitle, isPresented: $isConfirmingGenerate) {
+      Button("Cancel", role: .cancel) {}
+      Button("Generate") { Task { await generate() } }
+    } message: {
+      Text(generateMessage)
+    }
     // Single-row diagnostic overlay (row menu "Inspect Row…").
     .sheet(isPresented: Binding(
       get: { store.inspectedKey != nil },
@@ -88,7 +115,7 @@ struct LocalizationView: View {
     )) {
       RowInspectorView(store: store)
     }
-    // Scan Strings report (toolbar "Scan Strings").
+    // Scan Strings report (toolbar "Scan Strings", and the tail of Generate).
     .sheet(isPresented: Binding(
       get: { store.scan.isPresented },
       set: { if !$0 { store.scan.dismiss() } }
@@ -109,6 +136,55 @@ struct LocalizationView: View {
     )) {
       ContextDocsView(store: store)
     }
+  }
+
+  // MARK: - generate
+
+  /// Where a generated catalog would be written: the bound project's catalog,
+  /// else the projectless test catalog.
+  private var generateTarget: URL? {
+    projectCatalogURL ?? LocalizationStore.defaultFixtureURL
+  }
+
+  /// The folder the generate flow scans: the bound project's root when known,
+  /// else the target's own folder.
+  private var generateScanRoot: URL? {
+    guard let target = generateTarget else { return nil }
+    return projectRootURL ?? target.deletingLastPathComponent()
+  }
+
+  /// The source language the generated catalog would be authored in — the
+  /// project's own development region when it declares one.
+  private var generateSourceLanguage: String {
+    guard let root = generateScanRoot else { return "en" }
+    return ScanXcodeProject.developmentRegion(under: root) ?? "en"
+  }
+
+  private var generateTitle: String {
+    "Create \(generateTarget?.lastPathComponent ?? "a catalog")?"
+  }
+
+  private var generateMessage: String {
+    let path = generateTarget?.path ?? ""
+    return """
+    An empty String Catalog (\(generateSourceLanguage) source) is written to:
+    \(path)
+
+    The project's Swift packages and Xcode targets are then scanned for localizable strings, exactly like "Scan Strings" — you review the report and merge the keys it found. Nothing is overwritten: this is only offered while no catalog exists there.
+    """
+  }
+
+  private func generate() async {
+    guard !isGenerating else { return }
+    isGenerating = true
+    defer { isGenerating = false }
+    let created: Bool
+    if let projectCatalogURL {
+      created = await store.generateCatalog(at: projectCatalogURL, root: generateScanRoot)
+    } else {
+      created = await store.generateDefaultFixture()
+    }
+    if created { onCatalogCreated?() }
   }
 
   private var errorBinding: Binding<Bool> {
@@ -139,8 +215,9 @@ struct LocalizationView: View {
   }
 
   /// 'No catalog' for a bound project without a Localizable.xcstrings yet:
-  /// nothing to open, so the pane explains instead of offering an arbitrary
-  /// file (which would reconcile into a DIFFERENT project).
+  /// nothing to open, so the pane offers to CREATE one — the folder is right
+  /// there, and the app already knows how to find every key the project's
+  /// Swift packages and Xcode targets hold.
   private func noCatalogState(url: URL) -> some View {
     VStack(spacing: 12) {
       Image(systemName: "doc.text.magnifyingglass")
@@ -157,9 +234,28 @@ struct LocalizationView: View {
           .textSelection(.enabled)
       }
       .multilineTextAlignment(.center)
+      generateButton
+      Text("Scans the project's Swift packages and Xcode targets for localizable strings — the same pass \"Scan Strings\" runs.")
+        .font(.caption2)
+        .foregroundStyle(.tertiary)
+        .multilineTextAlignment(.center)
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .padding(20)
+  }
+
+  /// The generate action: creates the catalog where the project expects it,
+  /// then scans that project for the keys to fill it with.
+  private var generateButton: some View {
+    Button {
+      isConfirmingGenerate = true
+    } label: {
+      Label("Generate Catalog", systemImage: "text.magnifyingglass")
+    }
+    .buttonStyle(.borderedProminent)
+    .disabled(isGenerating)
+    .help("Create an empty String Catalog here and scan this project for localizable strings")
+    .padding(.top, 4)
   }
 
   private func loadedContent(allowsOpenCatalog: Bool) -> some View {
@@ -192,8 +288,14 @@ struct LocalizationView: View {
     }
   }
 
+  /// Projectless empty state: no catalog open. The test catalog is auto-opened
+  /// when it is present, so a missing fixture is the one case that gets the
+  /// generate action instead — the repo's own sources already say what belongs
+  /// in it.
   private var emptyState: some View {
-    VStack(spacing: 12) {
+    let fixtureURL = LocalizationStore.defaultFixtureURL
+    let fixtureExists = FileManager.default.fileExists(atPath: fixtureURL.path)
+    return VStack(spacing: 12) {
       Image(systemName: "globe")
         .font(.system(size: 44))
         .foregroundStyle(.tertiary)
@@ -203,6 +305,13 @@ struct LocalizationView: View {
         .foregroundStyle(.secondary)
       Button("Open Catalog…") { store.openPanelAndLoad() }
         .padding(.top, 4)
+      if !fixtureExists {
+        generateButton
+        Text("Creates the test catalog at \(fixtureURL.path) from this repo's Swift packages and Xcode targets.")
+          .font(.caption2)
+          .foregroundStyle(.tertiary)
+          .multilineTextAlignment(.center)
+      }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
   }

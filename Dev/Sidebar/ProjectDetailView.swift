@@ -59,7 +59,10 @@ struct ProjectDetailView: View {
         case .icon:
           CreateIconView(exportRootURL: row.rootURL)
         case .localization:
-          LocalizationView(projectCatalogURL: row.catalogURL)
+          LocalizationView(
+            projectCatalogURL: row.catalogURL,
+            projectRootURL: row.rootURL,
+            onCatalogCreated: { model.refresh() })
         }
       } else {
         toolPrompt
@@ -90,10 +93,14 @@ struct ProjectDetailView: View {
   /// the store is not already showing it.
   private func openCatalogIfPicked() async {
     guard model.projectTool == .localization else { return }
-    guard row.catalogExists else { return }
+    // A project whose file is missing stays closed ('no catalog' state). The
+    // one exception is a catalog this store already holds: it was generated
+    // (or opened) here, and the row's snapshot has simply not been rebuilt.
+    guard row.catalogExists || localization.catalogURL == row.catalogURL else { return }
     await localization.openIfNeeded(row.catalogURL)
     // The open reconciled records into the project — rebuild the rows so
-    // sidebar badges track what the open just changed.
+    // sidebar badges track what the open just changed. Also how a freshly
+    // GENERATED catalog reaches the row (`onCatalogCreated`).
     model.refresh()
   }
 }

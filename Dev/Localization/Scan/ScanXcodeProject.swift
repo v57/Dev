@@ -65,6 +65,25 @@ nonisolated enum ScanXcodeProject {
     return results.sorted { $0.path < $1.path }
   }
 
+  /// The project's development region (`developmentRegion` on its
+  /// `PBXProject` object), or nil when the tree holds no project that
+  /// declares one. This is the language Xcode treats as the source of a new
+  /// String Catalog, so a generated catalog is authored in the same language
+  /// the project's own `.xcstrings` would be.
+  static func developmentRegion(under root: URL) -> String? {
+    for projectURL in findProjects(under: root) {
+      let pbxURL = projectURL.appendingPathComponent("project.pbxproj")
+      guard let text = try? String(contentsOf: pbxURL, encoding: .utf8) else { continue }
+      let objects = parseObjects(text)
+      guard let project = objects.values.first(where: { $0.isa == "PBXProject" }),
+            let region = project.scalars["developmentRegion"],
+            !region.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      else { continue }
+      return region
+    }
+    return nil
+  }
+
   /// The scannable targets of one project bundle.
   static func targets(inProjectAt projectURL: URL) -> [ScanXcodeTarget] {
     let projectDirectory = projectURL.deletingLastPathComponent()

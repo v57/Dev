@@ -1404,6 +1404,67 @@ final class LocalizationStore {
     await open(url)
   }
 
+  // MARK: - generating a catalog
+
+  /// Creates a catalog for a project that has none, then hands straight over
+  /// to the SAME scan the "Scan Strings" toolbar button runs: the new file is
+  /// empty, so the merge the scan proposes is every key the project's Swift
+  /// packages and Xcode targets hold.
+  ///
+  /// The file is a real artifact the moment it is created (an empty, valid
+  /// `.xcstrings` with the project's own source language — Xcode opens it
+  /// like any other), so a user who generates and then closes the report
+  /// without merging is left with an empty catalog rather than a store that
+  /// believes in a file that does not exist. Keys reach the file by the
+  /// normal path: merge into the open catalog (in memory), then Save.
+  ///
+  /// Refused — never overwritten — when the file already exists, or while the
+  /// open catalog carries unsaved edits: a generated catalog replaces the open
+  /// one, and nothing in this app discards edits implicitly.
+  @discardableResult
+  func generateCatalog(at url: URL, root: URL?) async -> Bool {
+    guard !FileManager.default.fileExists(atPath: url.path) else { return false }
+    guard !hasUnsavedChanges else {
+      saveError = "The open catalog has edits its file does not have yet. Save or discard them, then generate this catalog."
+      return false
+    }
+    let folder = (root ?? url.deletingLastPathComponent()).standardizedFileURL
+    // The project's own development region, so a generated catalog is authored
+    // in the language the project's sources are written in (its own String
+    // Catalog would use the same), not an assumed "en".
+    let sourceLanguage = ScanXcodeProject.developmentRegion(under: folder) ?? "en"
+    let blank = StringCatalog(sourceLanguage: sourceLanguage, version: "1.1", strings: [:])
+    do {
+      try await CatalogFileIO.write(blank, to: url)
+    } catch {
+      saveError = error.localizedDescription
+      return false
+    }
+    // A brand-new catalog: reset the view state exactly like an open, so a
+    // previous catalog's search/filter/columns cannot carry over.
+    searchText = ""
+    filter = .all
+    includeNonTranslatable = false
+    showComments = false
+    showLongest = false
+    sortOrder = [CatalogSort(.source)]
+    selectedLanguages = []
+    run.reset()
+    let project = await mirrorCatalog(blank, url: url)
+    adopt(blank, project: project, url: url)
+    scan.begin(store: self, root: scanRoot)
+    return true
+  }
+
+  /// The projectless counterpart of `generateCatalog(at:root:)`: the repo-root
+  /// test catalog. The pane offers this only when the fixture is absent, so a
+  /// deleted test catalog can be rebuilt from the repo's own sources.
+  @discardableResult
+  func generateDefaultFixture() async -> Bool {
+    let url = Self.defaultFixtureURL
+    return await generateCatalog(at: url, root: url.deletingLastPathComponent())
+  }
+
   /// Toolbar Open…: held on the unsaved-changes prompt first, so the file
   /// panel only appears once leaving has been answered.
   func openPanelAndLoad() {
