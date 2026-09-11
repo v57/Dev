@@ -167,18 +167,38 @@ final class PipelineRunContext {
   }
 
   /// True when a record's stored context-versions are older than the current
-  /// docs for any scope — i.e. its value was produced against stale context.
-  /// A record whose snapshot predates a doc's existence (nil vs 1+) is stale;
-  /// equal or newer versions are fresh.
+  /// versions of the scopes that still auto-enqueue work. A record whose
+  /// snapshot predates a doc's existence (nil vs 1+) is stale; equal or newer
+  /// versions are fresh.
+  ///
+  /// The PROJECT scope is deliberately excluded. A project-doc rule must not
+  /// silently re-enqueue every record of the project — the widest paid sweep
+  /// in the system. Rules reach existing translations through the explicit
+  /// Update Translations pass, whose selection reads the same project version;
+  /// the version stays stamped and meaningful, it just stops being an
+  /// automatic trigger. The LANGUAGE scope stays: a Stage-0 fold bumps the
+  /// language doc, and that bump is what makes the lesson self-apply to the
+  /// rest of that column.
   func isStale(_ record: TranslationRecord) -> Bool {
-    if let v = version(scope: .global), (record.contextVersions.global ?? -1) < v {
+    Self.isStale(
+      record,
+      globalVersion: version(scope: .global),
+      languageVersion: version(scope: .language, language: record.language))
+  }
+
+  /// The shared staleness predicate — ONE implementation, because the run's
+  /// target selection (Dev/Translation/UI/TranslateRunController.swift) must
+  /// agree with the pipeline's `needsTarget` exactly. A scope version this
+  /// does not consult can be bumped without any record ever going stale.
+  static func isStale(
+    _ record: TranslationRecord,
+    globalVersion: Int?,
+    languageVersion: Int?
+  ) -> Bool {
+    if let v = globalVersion, (record.contextVersions.global ?? -1) < v {
       return true
     }
-    if let v = version(scope: .project), (record.contextVersions.project ?? -1) < v {
-      return true
-    }
-    if let v = version(scope: .language, language: record.language),
-       (record.contextVersions.language ?? -1) < v {
+    if let v = languageVersion, (record.contextVersions.language ?? -1) < v {
       return true
     }
     return false

@@ -265,7 +265,6 @@ final class TranslateRunController {
     let context = TranslationStore.shared.context
     let docs = (try? context.fetch(FetchDescriptor<ContextDoc>())) ?? []
     let globalVersion = docs.first { $0.scope == .global }?.version
-    let projectVersion = docs.first { $0.scope == .project && $0.project === project }?.version
     var languageVersions: [String: Int] = [:]
     for doc in docs where doc.scope == .language {
       if let identifier = doc.identifier {
@@ -273,18 +272,15 @@ final class TranslateRunController {
       }
     }
 
+    // Delegates to the pipeline's own predicate so the two can never drift;
+    // the project scope is deliberately not consulted (see
+    // PipelineRunContext.isStale — a project-doc rule reaches existing
+    // translations through the explicit Update Translations pass instead).
     func isStale(_ record: TranslationRecord) -> Bool {
-      if let v = globalVersion, (record.contextVersions.global ?? -1) < v {
-        return true
-      }
-      if let v = projectVersion, (record.contextVersions.project ?? -1) < v {
-        return true
-      }
-      if let v = languageVersions[record.language],
-         (record.contextVersions.language ?? -1) < v {
-        return true
-      }
-      return false
+      PipelineRunContext.isStale(
+        record,
+        globalVersion: globalVersion,
+        languageVersion: languageVersions[record.language])
     }
 
     var ids = Set<PersistentIdentifier>()
