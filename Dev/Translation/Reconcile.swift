@@ -406,11 +406,24 @@ nonisolated enum Reconcile {
   /// merge refuses to write and nothing ever cleans up. The caller varies the
   /// document's forms for that key in the same breath.
   ///
-  /// Records the project already holds for this language are left exactly as
+  /// Records the project already holds for these languages are left exactly as
   /// they are (value, provenance, state), so re-adding a language costs nothing
   /// and can never rewrite a translation.
   static func addLanguage(
     _ language: String,
+    catalog: StringCatalog,
+    projectID: PersistentIdentifier,
+    in container: ModelContainer
+  ) async -> Result<LanguageAddOutcome, Error> {
+    await addLanguages(
+      [language], catalog: catalog, projectID: projectID, in: container)
+  }
+
+  /// Same for a SET of languages — the Add Languages overlay adds everything it
+  /// was given in ONE pass: one background context, one slot set, one save, and
+  /// one walk of the catalog's keys rather than one per language.
+  static func addLanguages(
+    _ languages: [String],
     catalog: StringCatalog,
     projectID: PersistentIdentifier,
     in container: ModelContainer
@@ -438,34 +451,37 @@ nonisolated enum Reconcile {
         // Non-translatable keys are hidden from the workflow entirely.
         guard let entry = catalog.strings[key], entry.shouldTranslate != false else { continue }
         keyCount += 1
-        if catalog.hasPlurals(for: key, language: catalog.sourceLanguage) {
-          for category in PluralRules.categories(for: language) {
-            let slot = SlotKey(key: key, language: language, category: category)
-            if slots.contains(slot) { continue }
-            let record = TranslationRecord(
-              key: key,
-              sourceText: catalog.sourcePluralDisplay(for: key, category: category),
-              language: language,
-              value: nil, provider: nil, state: .empty,
-              contextVersions: persistableVersions(ContextVersions()),
-              category: category)
-            context.insert(record)
-            created.append(record)
-            slots.insert(slot)
+        let pluralSource = catalog.hasPlurals(for: key, language: catalog.sourceLanguage)
+        for language in languages {
+          if pluralSource {
+            for category in PluralRules.categories(for: language) {
+              let slot = SlotKey(key: key, language: language, category: category)
+              if slots.contains(slot) { continue }
+              let record = TranslationRecord(
+                key: key,
+                sourceText: catalog.sourcePluralDisplay(for: key, category: category),
+                language: language,
+                value: nil, provider: nil, state: .empty,
+                contextVersions: persistableVersions(ContextVersions()),
+                category: category)
+              context.insert(record)
+              created.append(record)
+              slots.insert(slot)
+            }
+            continue
           }
-          continue
+          let slot = SlotKey(key: key, language: language, category: "")
+          if slots.contains(slot) { continue }
+          let record = TranslationRecord(
+            key: key,
+            sourceText: catalog.sourceDisplay(for: key),
+            language: language,
+            value: nil, provider: nil, state: .empty,
+            contextVersions: persistableVersions(ContextVersions()))
+          context.insert(record)
+          created.append(record)
+          slots.insert(slot)
         }
-        let slot = SlotKey(key: key, language: language, category: "")
-        if slots.contains(slot) { continue }
-        let record = TranslationRecord(
-          key: key,
-          sourceText: catalog.sourceDisplay(for: key),
-          language: language,
-          value: nil, provider: nil, state: .empty,
-          contextVersions: persistableVersions(ContextVersions()))
-        context.insert(record)
-        created.append(record)
-        slots.insert(slot)
       }
 
       if !created.isEmpty {

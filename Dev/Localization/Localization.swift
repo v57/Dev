@@ -438,36 +438,44 @@ final class LocalizationStore {
     browserLanguages.contains(language) || catalog?.sourceLanguage == language
   }
 
-  /// "Add Language": gives the open catalog the language and seeds the records
-  /// the Translate pipeline fills (`Reconcile.addLanguage`, off the main actor
-  /// — a large catalog's seeding is thousands of inserts).
+  /// The Add Languages overlay is open. Drives the sheet in the localization
+  /// pane; the strip's button only raises it.
+  var languagePickerOpen = false
+
+  func openLanguagePicker() { languagePickerOpen = true }
+  func closeLanguagePicker() { languagePickerOpen = false }
+
+  /// Adds every selected language in ONE pass: the document half here (on the
+  /// CURRENT document, never on a snapshot the seeding pass was given — an
+  /// edit, a Translate run or a reload can land while the pass runs), then the
+  /// records the Translate pipeline fills, off the main actor
+  /// (`Reconcile.addLanguages`).
   ///
   /// Nothing is written to the artifact: adding a language is a DB-side
   /// operation until a translation exists for it, and Save stays the only
-  /// writer. The new column is selected so its missing cells are visible
-  /// straight away.
-  ///
-  /// The document half happens HERE, on the current document rather than on a
-  /// snapshot the seeding pass was given: an edit, a Translate run or a reload
-  /// can land while the pass runs, and adopting the pass's older copy of the
-  /// document would drop it.
-  func addLanguage(_ language: String) {
-    guard !language.isEmpty, let catalog, let project else { return }
-    guard !isLanguagePresent(language) else { return }
-    // The language's nodes (empty — pruned on the way to disk, so the file
-    // only gains the language where a translation exists to write) plus the
-    // CLDR form skeleton for every key whose SOURCE is plural-varied, which is
-    // what makes its plural keys read as plural targets instead of flat slots.
+  /// writer. One added language selects its column (the missing cells are the
+  /// point); a batch leaves the selection alone — opening forty columns at once
+  /// is not a view anyone asked for.
+  func addLanguages(_ languages: [String]) {
+    guard let catalog, let project else { return }
+    let codes = languages.filter { !isLanguagePresent($0) }
+    guard !codes.isEmpty else { return }
+    // The languages' nodes (empty — pruned on the way to disk, so the file
+    // only gains a language where a translation exists to write) plus the CLDR
+    // form skeleton for every key whose SOURCE is plural-varied, which is what
+    // makes those keys read as plural targets instead of flat slots.
     var updated = catalog
-    updated.addLanguage(language)
+    for code in codes {
+      updated.addLanguage(code)
+    }
     for key in Array(updated.strings.keys)
     where updated.hasPlurals(for: key, language: updated.sourceLanguage) {
-      updated.varyByPlural(key: key, languages: [language])
+      updated.varyByPlural(key: key, languages: codes)
     }
     self.catalog = updated
-    addedLanguages.append(language)
-    if !selectedLanguages.contains(language) {
-      selectedLanguages.append(language)
+    addedLanguages.append(contentsOf: codes)
+    if codes.count == 1, !selectedLanguages.contains(codes[0]) {
+      selectedLanguages.append(codes[0])
     }
     buildRows()
     let projectID = project.persistentModelID
@@ -475,21 +483,37 @@ final class LocalizationStore {
     isAddingLanguage = true
     languageChain = Task {
       await previous.value
-      let result = await Reconcile.addLanguage(
-        language, catalog: catalog, projectID: projectID,
+      let result = await Reconcile.addLanguages(
+        codes, catalog: catalog, projectID: projectID,
         in: TranslationStore.container)
       isAddingLanguage = false
       switch result {
-      case .success:
-        // Another catalog may have been opened while the pass ran: its rows
-        // are not this project's. The records it seeded are durable either
-        // way, and the next open/adopt picks them up.
+      case .success(let outcome):
+        note("Added \(codes.count) language(s): \(outcome.inserted) slot(s) ready to translate")
+        // Another catalog may have been opened while the pass ran: its rows are
+        // not this project's. The records it seeded are durable either way, and
+        // the next open/adopt picks them up.
         guard self.project?.persistentModelID == projectID else { return }
         rebuildRecordIndex()
         buildRows()
       case .failure(let error):
-        saveError = "Couldn't add \(language): \(error.localizedDescription)"
+        saveError = "Couldn't add \(codes.count) language(s): \(error.localizedDescription)"
       }
+    }
+  }
+
+  /// A short line for the footer, so an add that changes nothing visible (a
+  /// catalog with no keys yet) still reports what happened.
+  private(set) var statusNote: String?
+  private var noteTask: Task<Void, Never>?
+
+  private func note(_ text: String) {
+    statusNote = text
+    noteTask?.cancel()
+    noteTask = Task {
+      try? await Task.sleep(for: .seconds(6))
+      guard !Task.isCancelled else { return }
+      statusNote = nil
     }
   }
 

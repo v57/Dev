@@ -136,6 +136,13 @@ struct LocalizationView: View {
     )) {
       ContextDocsView(store: store)
     }
+    // Add Languages overlay (language strip's "Add Languages").
+    .sheet(isPresented: Binding(
+      get: { store.languagePickerOpen },
+      set: { if !$0 { store.closeLanguagePicker() } }
+    )) {
+      AddLanguagesView(store: store)
+    }
   }
 
   // MARK: - generate
@@ -322,9 +329,9 @@ struct LocalizationView: View {
 
 /// Horizontal strip of language buttons on the second row; selected ones are
 /// highlighted. Tapping toggles the language column. The trailing "Add
-/// Language" menu offers the codes this tool supports — the ones the catalog
-/// already carries are checked and inert, so the menu doubles as the answer to
-/// "which languages does this project have?".
+/// Languages" button raises the overlay that picks languages to add — a menu
+/// stopped being enough at ~95 codes, and the overlay shows the catalog's own
+/// state per language.
 private struct LanguageButtonsRow: View {
   let store: LocalizationStore
 
@@ -349,7 +356,7 @@ private struct LanguageButtonsRow: View {
         if !store.pickerLanguages.isEmpty {
           Divider().frame(height: 18)
         }
-        addLanguageMenu
+        addLanguagesButton
       }
       .padding(.horizontal, 12)
       .padding(.vertical, 6)
@@ -357,36 +364,146 @@ private struct LanguageButtonsRow: View {
     .frame(maxWidth: .infinity, alignment: .leading)
   }
 
-  /// Adds a language the catalog does not carry yet: its column appears here
-  /// and Translate fills it. Nothing is written to the catalog file until a
+  /// Raises the Add Languages overlay: every language Apple ships as a keyboard
+  /// or UI language, as toggles. Nothing is written to the catalog file until a
   /// translation exists to save.
-  private var addLanguageMenu: some View {
-    Menu {
-      ForEach(LocalizationStore.offeredLanguages, id: \.self) { language in
-        let present = store.isLanguagePresent(language)
-        Button {
-          store.addLanguage(language)
-        } label: {
-          if present {
-            Label(language, systemImage: "checkmark")
-          } else {
-            Text(language)
+  private var addLanguagesButton: some View {
+    Button {
+      store.openLanguagePicker()
+    } label: {
+      HStack(spacing: 5) {
+        if store.isAddingLanguage {
+          ProgressView()
+            .controlSize(.small)
+        } else {
+          Image(systemName: "plus")
+        }
+        Text(store.isAddingLanguage ? "Adding…" : "Add Languages")
+      }
+      .font(.callout)
+      .padding(.horizontal, 10)
+      .padding(.vertical, 4)
+      .background(Color.secondary.opacity(0.12), in: Capsule())
+    }
+    .buttonStyle(.plain)
+    .disabled(!store.isLoaded || store.isAddingLanguage)
+    .help("Pick languages this catalog does not carry yet — their columns appear here and Translate fills them. The catalog file only gains a language where a translation exists to save")
+  }
+}
+
+// MARK: - Add Languages overlay
+
+/// The Add Languages sheet: one toggle per language Apple ships, the catalog's
+/// own languages toggled ON and inert (this overlay only adds — removing a
+/// language would have to take its records and file nodes with it, which is a
+/// different decision), Select All for the bulk case, and a confirming Add
+/// button that names the count.
+private struct AddLanguagesView: View {
+  let store: LocalizationStore
+  @Environment(\.dismiss) private var dismiss
+
+  @State private var selection: Set<String> = []
+
+  /// Everything the tool offers, in its order.
+  private var offered: [String] { LocalizationStore.offeredLanguages }
+
+  /// The ones this catalog does not carry yet — what Select All selects.
+  private var addable: [String] {
+    offered.filter { !store.isLanguagePresent($0) }
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      HStack(spacing: 8) {
+        Image(systemName: "globe")
+        Text("Add Languages")
+          .font(.headline)
+        Spacer(minLength: 0)
+        Text("\(store.browserLanguages.count) in this catalog · \(addable.count) to add")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+      Text("Every language Apple ships as a keyboard or UI language. Picked ones get a column now and are ready for Translate; the catalog file only gains a language where a translation exists to save.")
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+
+      ScrollView {
+        LazyVGrid(
+          columns: [GridItem(.adaptive(minimum: 140), spacing: 12, alignment: .leading)],
+          alignment: .leading,
+          spacing: 7
+        ) {
+          ForEach(offered, id: \.self) { code in
+            toggle(code)
           }
         }
-        .disabled(present || store.isAddingLanguage)
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
       }
-    } label: {
-      Label("Add Language", systemImage: "plus")
-        .font(.callout)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 4)
-        .background(Color.secondary.opacity(0.12), in: Capsule())
+      .frame(maxHeight: .infinity)
+      .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.07)))
+
+      HStack(spacing: 8) {
+        Button("Select All") { selection = Set(addable) }
+          .disabled(addable.isEmpty)
+        Button("Clear") { selection.removeAll() }
+          .disabled(selection.isEmpty)
+        Spacer()
+        Button("Cancel") {
+          store.closeLanguagePicker()
+          dismiss()
+        }
+        Button(addTitle) { add() }
+          .buttonStyle(.borderedProminent)
+          .keyboardShortcut(.defaultAction)
+          .disabled(selection.isEmpty)
+      }
     }
-    .menuStyle(.button)
-    .buttonStyle(.plain)
-    .fixedSize()
-    .disabled(!store.isLoaded || store.isAddingLanguage)
-    .help("Add a language this catalog does not carry yet — its column appears here and Translate fills it. The catalog file only gains the language where a translation exists to save")
+    .padding(18)
+    .frame(width: 680, height: 540)
+    .onAppear { selection = [] }
+  }
+
+  @ViewBuilder
+  private func toggle(_ code: String) -> some View {
+    let present = store.isLanguagePresent(code)
+    Toggle(code, isOn: binding(for: code, present: present))
+      .toggleStyle(.checkbox)
+      .disabled(present)
+      .foregroundStyle(present ? .secondary : .primary)
+      .help(present
+        ? "Already in this catalog"
+        : (Self.name(for: code).map { "\(code) — \($0)" } ?? code))
+  }
+
+  /// In this catalog -> always on and inert. Otherwise a normal toggle over
+  /// `selection`.
+  private func binding(for code: String, present: Bool) -> Binding<Bool> {
+    guard !present else { return .constant(true) }
+    return Binding(
+      get: { selection.contains(code) },
+      set: { isOn in
+        if isOn { selection.insert(code) } else { selection.remove(code) }
+      })
+  }
+
+  private func add() {
+    // Offer order, not click order: the added columns line up with the menu.
+    store.addLanguages(offered.filter { selection.contains($0) })
+    store.closeLanguagePicker()
+    dismiss()
+  }
+
+  private var addTitle: String {
+    selection.isEmpty
+      ? "Add Languages"
+      : "Add \(selection.count) Language\(selection.count == 1 ? "" : "s")"
+  }
+
+  /// English name of a code, for the tooltip ("brx" alone says little).
+  private static func name(for code: String) -> String? {
+    Locale(identifier: "en").localizedString(forIdentifier: code)
   }
 }
 
@@ -1206,6 +1323,12 @@ private struct FooterBar: View {
           Text("\(language): \(store.missingCount(for: language)) missing")
             .foregroundStyle(.secondary)
         }
+      }
+      // A bulk add shows its result here: the columns it would need are not
+      // opened for it (see LocalizationStore.addLanguages).
+      if let statusNote = store.statusNote {
+        Text("·").foregroundStyle(.tertiary)
+        Text(statusNote).foregroundStyle(.secondary)
       }
       Spacer()
       TranslateRunStatus(controller: store.run)
