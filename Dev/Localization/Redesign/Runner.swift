@@ -210,10 +210,10 @@ extension Translation {
 
     var isFinished: Bool { state == .finished || state == .cancelled }
 
-    /// The rule of the write set, and its ONLY rule: a slot the run may write is one
-    /// whose OWN status allows it. `.verified` and `.imported` are never overwritten —
-    /// a value this project has already committed to is context, not a target (4.6) —
-    /// and an ignored key is out of scope for every stage.
+    /// The rule of the write set for a write of the VALUE, and its ONLY rule: a slot the
+    /// run may write is one whose OWN status allows it. `.verified` and `.imported` are
+    /// never overwritten — a value this project has already committed to is context, not a
+    /// target (4.6) — and an ignored key is out of scope for every stage.
     ///
     /// Both the validator and the write-back ask this, and they ask it of the SLOT,
     /// at the moment they ask: a slot the human confirms while a batch is in flight
@@ -224,6 +224,33 @@ extension Translation {
       case .needsTranslate, .stale, .translated: true
       case .verified, .imported, .ignore: false
       }
+    }
+
+    /// Which rule this run's write-back asks of a slot, for the shape the batch is.
+    ///
+    /// A translate batch writes a VALUE and asks the slot's status. A prelearn batch writes
+    /// the machine RECORD and no value at all (4.1), and the value rule refuses exactly the
+    /// slots that operation exists for: its slots are `.verified` by construction. Measured
+    /// before this pair existed — a prelearn batch spent its request, wrote nothing, and
+    /// reported no failure, because the write set was empty and nobody asked for an answer.
+    ///
+    /// One place answers for both, so the scan's own preview, the validator's "ids that must
+    /// be answered" and the write-back cannot drift apart (5.3, 5.5).
+    static func writable(_ slot: LocalizationString, for stage: Stage) -> Bool {
+      stage == .prelearn ? machineWritable(slot) : writable(slot.status)
+    }
+
+    /// The write set of a machine-record write: the slot is one a HUMAN settled whose
+    /// machine record is still missing — the two halves of the prelearn predicate (2.4),
+    /// asked here so the scan and the write-back cannot disagree.
+    ///
+    /// It protects something narrower than the value rule does, and deliberately: the field
+    /// it fills, `machine`, is one no human owns (a human edit never touches it), so a
+    /// `.verified` slot is not a reason to refuse the write. What it does refuse is a slot
+    /// that already HAS a machine record: the operation only ever asks for one while it is
+    /// empty, so filling it again would spend the request on a record nobody asked for.
+    static func machineWritable(_ slot: LocalizationString) -> Bool {
+      slot.status == .verified && slot.machine.isEmpty
     }
   }
 
@@ -825,10 +852,12 @@ extension Translation {
     /// the version stamp of the documents the request was built against, the
     /// producing model's name, and one journal row — then the checkpoint.
     ///
-    /// The write set is decided HERE, per slot, and its only rule is the slot's own
-    /// status: `.verified` and `.imported` are not editable, whatever the request
-    /// asked for. That is also why the check is here rather than in a scan — a slot
-    /// the human confirms while the batch is in flight still survives it (4.6).
+    /// The write set is decided HERE, per slot, and its rule is the slot's own status for a
+    /// write of the value — and, for a write that only records what the machine produced,
+    /// the narrower rule a machine record asks (`Run.writable(_:for:)`, 4.1/2.4).
+    /// `.verified` and `.imported` are not editable as VALUES, whatever the request asked
+    /// for. That is also why the check is here rather than in a scan — a slot the human
+    /// confirms while the batch is in flight still survives it (4.6).
     ///
     /// The batch applies as ONE unit: what to write is resolved for every item first,
     /// so a slot that stopped being writable between validation and here cannot leave
@@ -844,7 +873,7 @@ extension Translation {
         let language = language(of: item, in: batch)
         guard let row = rowPositions[item.key], project.data.indices.contains(row),
           let slot = project.data[row].targets.firstIndex(where: { $0.language == language }),
-          Run.writable(project.data[row].targets[slot].status)
+          Run.writable(project.data[row].targets[slot], for: batch.stage)
         else { continue }
         let body = Validator.decode(answer, for: item, language: language)
         guard !body.isEmpty else { continue }
@@ -1136,14 +1165,16 @@ extension Translation {
 
     /// The positions whose slot this run may write, resolved from each slot's OWN
     /// status NOW — the same check the write-back makes, which is why an answer for a
-    /// settled slot is never a defect and never a repair (5.3, 4.6).
+    /// settled slot is never a defect and never a repair (5.3, 4.6). For a prelearn
+    /// batch it is the machine-record rule instead, so the machine record the operation
+    /// exists for is an answer somebody asks for rather than one nobody requires.
     private func writablePositions(of batch: Run.Batch) -> IndexSet {
       var positions = IndexSet()
       for (position, item) in batch.items.enumerated() {
         let language = language(of: item, in: batch)
         guard let row = rowPositions[item.key], project.data.indices.contains(row),
           let slot = project.data[row].target(language),
-          Run.writable(slot.status)
+          Run.writable(slot, for: batch.stage)
         else { continue }
         positions.insert(position)
       }
