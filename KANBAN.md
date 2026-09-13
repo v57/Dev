@@ -3,20 +3,23 @@ Date: 2026-09-14   Board: dev-translation-redesign   Workdir: /Users/v57/Project
 
 STATUS   (updated 2026-09-14 01:52 — this doc is a narrative; the BOARD is the state:
           `hermes kanban --board dev-translation-redesign list --json`)
-  NOT DONE. 5 done, 1 BLOCKED on the user, 9 todo, 0 running — the board is STALLED on
-  the Store card's `needs_input` gate. The store itself is committed and passes the gate,
-  but the card asks two decisions (10.16: do the new stages write the same SwiftData
-  records the old browser reads; where the run cursor lives — it used UserDefaults) and
-  reports a schema collision it found: Project.contextDoc is the to-one INVERSE of
-  ContextDoc.project, so a project document and its per-project language documents cannot
-  share that property, which is exactly what the old browser reads for project rules.
-  The contexts card and every stage card are gated on it, so nothing else dispatches until
-  it clears.
+  NOT DONE. 5 done, 1 ready to resume, 9 todo, 0 running. The board WAS stalled on the
+  Store card's `needs_input` gate; the user answered all three questions on 2026-09-14 and
+  the card is unblocked with the verdict in its comments:
+    · 10.16 SHARE — the new stages write the same SwiftData records the old browser reads
+    · the run cursor becomes a `RunCursor` @Model in the shared schema, not UserDefaults,
+      with the card explicitly authorised to add it additively to the Schema list
+    · the collision it found (Project.contextDoc is the to-one INVERSE of ContextDoc.project,
+      so a project document and its per-project language documents cannot share it) is fixed
+      by MAPPING: a language document carries the full scope id
+      "project/<id>/language/<code>" in `identifier` and does not set `project` at all.
+  The contexts card and all four stage cards are gated on it, so they resume when it does.
 
   DONE     t_db2260b2 prompt assembly (66fa010)   t_931a3ec5 Muse client (d457ec7)
            t_9caad4dc Router.values deletion (9d60f3d)   t_7baea299 run executor (a14a0fc)
            t_34b75066 workspace: Start, overlay, status bar (cf4ad6a)
-  BLOCKED  t_4e5d3608 Store — committed f958f75, passes the gate, needs_input
+  RESUME   t_4e5d3608 Store — committed f958f75, passes the gate; verdict in its comments
+                              (share · RunCursor row · full-scope-id mapping)
   TODO     t_e5686522 contexts · t_517bbe62 memory (a worker filed this one itself) ·
            the four stage cards · review/edit · row page · cutover
   HEAD is the committed tree and builds BUILD SUCCEEDED with zero warnings — verified on a
@@ -118,7 +121,6 @@ OPEN DECISIONS (notes section 10) — a worker who meets one asks instead of cho
   10.11 how a CHANGED project rule reaches already machine-translated slots
   10.12 the row pass's cost, and what the run control should say about it
   10.13 Xcode's plural table or current CLDR as the authority (27 locales differ)
-  10.16 whether the new stages write the same SwiftData records the old browser reads
   Unanswered by the user, and therefore also askable: does prelearn's request carry
   maxWidth (today only the column translate does)? Does the row pass's per-item field set
   differ from the column pass's?

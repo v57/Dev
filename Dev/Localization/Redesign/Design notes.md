@@ -201,9 +201,14 @@ Constraints on the whole redesign, not gaps in it. Everything below assumes them
     resolved (reader, 2026-09-13): PER PROJECT. The stub's intent was right and
     only the interpolation was wrong: `Context.Scope.language` takes the project id
     and the code, the id is `"project/<id>/language/<code>"`, and the document is
-    keyed by that pair in the store — `ContextDoc.identifier` holds the code and its
-    `project` relationship holds the owner. A lesson never leaks between projects,
-    and each project's 1 000 characters are spent on its own vocabulary.
+    keyed by that pair in the store — `ContextDoc.identifier` holds the FULL scope id
+    (`"project/<id>/language/<code>"`) and a language document does NOT set its
+    `project` relationship (reader, 2026-09-14). That relationship is the to-one
+    inverse of `Project.contextDoc`, so a project document and its language documents
+    cannot share it — and it is exactly the property the old browser reads for project
+    rules. The full scope id keeps the documents apart instead. A lesson never leaks
+    between projects, and each project's 1 000 characters are spent on its own
+    vocabulary.
 
 3.2 Caps. `Context.limit` is the PROMPT budget, not a storage budget:
 
@@ -463,9 +468,9 @@ The operation classes know what to send, nothing knows how to send it.
     asked for (4.6). A failed batch leaves nothing half-written: the batch's results
     are applied as one unit.
 
-5.6 Control. Start / pause / cancel, with the batch cursor persisted so a
-    paused or interrupted run resumes at the next unstarted batch instead of
-    re-billing the finished ones. Cancel keeps everything already applied.
+5.6 Control. Start / pause / cancel, with the batch cursor persisted as a `RunCursor`
+    row (7.2) so a paused or interrupted run resumes at the next unstarted batch instead
+    of re-billing the finished ones. Cancel keeps everything already applied.
 
 5.7 Progress and cost. The UI needs, per stage: batches done / total, items done
     / total, characters translated, requests sent, and the cached-token share
@@ -526,10 +531,22 @@ The operation classes know what to send, nothing knows how to send it.
     It uses the models the app already has, additively:
 
       ContextDoc              context documents. `identifier` is the project id for
-                              a project document and the BCP-47 code for a language
-                              document, which ALSO sets its `project` relationship,
-                              because language documents are per project (10.1).
-                              Uniqueness is (scope, identifier, project).
+                              a project document and the FULL scope id,
+                              `"project/<id>/language/<code>"`, for a language document
+                              — which is what keeps per-project language documents
+                              apart (10.1). A language document does NOT set its
+                              `project` relationship: that is the to-one inverse of
+                              `Project.contextDoc`, the property the old browser reads
+                              for project rules, so only the project document owns it.
+                              Uniqueness is (scope, identifier, project). A to-many
+                              `documents` on `Project` was the alternative and was
+                              rejected: it means re-reading a model the old pipeline
+                              depends on, and the full id costs nothing.
+      RunCursor               the redesign's only addition to the schema (10.16): one row
+                              per (project, scope) holding the batch cursor a paused or
+                              relaunched run resumes at. Durability and size are why it
+                              is not three keys in UserDefaults (5.6). The tally stays
+                              on the Run.
       TranslationRecord       one slot per (key, language). The redesign needs three
                               bodies where the model has one value: `value` IS
                               `target`; `machine` and `reviewed` are additive
@@ -748,12 +765,12 @@ The operation classes know what to send, nothing knows how to send it.
       design: the echo ids are batch positions rather than keys, and "row has no
       source" is no longer a reason to skip a row anywhere (a row with nothing
       authored sends its key as the content).
-- [ ] 10.16 Do the new stages write to the SAME SwiftData records the old pipeline
-      reads? Sharing them makes the two implementations one store with two writers:
-      the old browser shows what a new run wrote, and a new run sees what the old one
-      left. Recommendation: share — they describe the same slots, and a second store
-      would need a reconciliation nobody asked for — with new logic writing only
-      through `Store`, and the old pipeline left exactly as it is until it is deleted.
+- [x] 10.16 The new stages write to the SAME SwiftData records the old pipeline reads
+      (reader, 2026-09-14): one store with two writers, so the old browser shows what a
+      new run wrote and a new run sees what the old one left. New logic writes only
+      through `Store`, and the old pipeline stays exactly as it is until it is deleted.
+      The price is the two mappings settled with it: the `RunCursor` row above (the one
+      schema addition) and the full-scope-id rule for language documents (§3.1, §7.2).
 - [x] 10.17 The row pass runs AFTER the vertical translation pass and is ALWAYS
       enabled (reader, 2026-09-14): it is the last step of the main flow's plan, not a
       setting and not a separate control. The consequence is on purpose — the
@@ -802,4 +819,5 @@ authored), 10.17/10.18 (the row pass is the LAST and ALWAYS-ON step of a run), a
 row pass's shape: no selection, the whole row travels, the write-back refuses settled
 slots. Also settled since the first draft: Muse is the only model, the new logic runs
 beside the old one, and the UI is a closable overlay with a bottom status bar. `FullRow`
-is deleted (10.4). Still open: 10.2, 10.6, 10.8, 10.9, 10.10, 10.11, 10.12, 10.13, 10.16.
+is deleted (10.4), the records are shared with the old browser (10.16) and the cursor
+lives in a `RunCursor` row. Still open: 10.2, 10.6, 10.8, 10.9, 10.10, 10.11, 10.12, 10.13.
