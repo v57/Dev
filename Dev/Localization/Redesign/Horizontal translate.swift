@@ -20,20 +20,26 @@ extension Translation {
   ///
   /// A translate shape, not a rules sweep: there is no selection here. Every
   /// translatable row becomes one operation — a row with nothing authored sends its
-  /// key as the content — and the payload is
-  /// the whole row — settled (verified / imported) columns included, because a value
-  /// this project has already committed to is the best evidence of the register and
-  /// terminology it uses, and asking for it as well keeps the row's answer consistent
-  /// across languages.
+  /// key as the content — and the payload is the whole row, settled (verified /
+  /// imported) columns included, because a value this project has already committed
+  /// to is the best evidence of the register and terminology it uses, and asking for
+  /// it as well keeps the row's answer consistent across languages.
   ///
   /// What gets WRITTEN is decided when the reply is applied, not here: a slot whose
   /// status is `.verified` or `.imported` is never overwritten. Verified values are
   /// not editable in this pass.
   ///
-  /// It is still a run of its own, separate from the vertical stages, because it
-  /// sweeps the whole project — that makes it the expensive shape, and a
-  /// project-document bump deliberately enqueues nothing, so a sweep is always
-  /// something the user asked for.
+  /// Every declaration here is the pass's contract, not the write-back: a stage
+  /// says WHAT to send, `Runner` is the only thing that writes a slot (5.5).
+  ///
+  /// It is the LAST step of a translate run and always on (4.2): the rows with
+  /// something settled in them are exactly where it has work to do, so after a
+  /// verification session pressing the one button again is how the corrections
+  /// reach the rest of the project — the columns have nothing left to redo
+  /// (verified slots are not work), and this step carries them across. A run of
+  /// this stage alone (`Stage.horizontal`) is the paid sweep a changed project
+  /// rule asks for, because a project-document bump deliberately enqueues nothing
+  /// (2.3) and a sweep is therefore always something the user asked for.
   @Observable @MainActor class HorizontalTranslate {
     var index: Int = 0
     var operations = [Operations]()
@@ -42,10 +48,15 @@ extension Translation {
       self.project = project
       scan()
     }
-    /// One pass over the rows: translatable, and with a source. Nothing else is
-    /// asked — no version test, no per-language selection. The whole row travels,
-    /// and the write-back is the only place a slot can be refused.
-    /// Split by characters like every other stage: `Operations.split()`.
+    /// One pass over the rows: `translatable`, NOTHING ELSE (4.6). No version test,
+    /// no per-language filter, no "the row has no source" case either — a row with
+    /// nothing authored sends its KEY as the content (4.3). A row with a settled
+    /// column and columns that need work is sent exactly like any other.
+    ///
+    /// Nothing here decides what may be written, and nothing here writes: the
+    /// settled columns travel because their values are the reference this request
+    /// exists for, and what a reply may touch is decided per slot when it is
+    /// applied. Split by characters like every other stage: `Operations.split()`.
     private func scan() {
       var operations = Operations()
       for index in 0..<project.data.count {
@@ -69,6 +80,8 @@ extension Translation {
         let maxSize = Limits.batch
         for item in self.items {
           let chars = item.characters
+          // A batch always takes at least one item, so a source that is over the budget
+          // by itself gets a request of its own and NO row is ever skipped (4.4).
           if chars >= maxSize {
             if !current.items.isEmpty {
               operations.append(current)
@@ -77,8 +90,11 @@ extension Translation {
             }
             operations.append(Operations(items: [item]))
           } else if size + chars > maxSize {
+            // The item that did not fit STARTS the next batch: `size` is only ever
+            // non-zero with a non-empty `current`, so the batch closed here has at least
+            // one item, and the item that overflowed is carried over rather than dropped.
             operations.append(current)
-            current = Operations()
+            current = Operations(items: [item])
             size = chars
           } else {
             current.items.append(item)
@@ -104,11 +120,18 @@ extension Translation {
       /// consistent; it is context, not a target.
       var targets: [LocalizationString]
       var stage: Stage { .horizontal }
-      /// The write-back, as a value the design preview can watch: only slots that
-      /// NEED work are written. A `.verified` or `.imported` value is context and is
-      /// left exactly as it was found, whatever the reply said about it.
+      /// The write-back, as a value the design preview can watch — the app's own
+      /// write-back is `Runner.apply`, which is the only writer of a slot (5.5).
+      ///
+      /// The set it may touch is the slot's OWN status and nothing else, so a
+      /// `.verified` or `.imported` column is left exactly as it was found,
+      /// whatever the reply said about it (4.6). `.translated` IS in that set:
+      /// adapting machine output this run produced earlier to what the row's
+      /// settled columns say is the pass's whole purpose, and a `.translated`
+      /// column is exactly that output — a work predicate that excludes it would
+      /// leave the one column the pass exists to adjust untouched.
       consuming func resolve(_ value: StringBody) -> Self {
-        for index in targets.indices where targets[index].needsMachineTranslate {
+        for index in targets.indices where Run.writable(targets[index].status) {
           targets[index].target = value
           targets[index].status = .translated
         }
