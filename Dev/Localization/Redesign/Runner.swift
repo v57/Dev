@@ -855,6 +855,11 @@ extension Translation {
             language: language,
             row: row,
             slot: slot,
+            // The text the value was produced FROM, which is what memory is keyed
+            // by. Taken from the ITEM rather than re-read off the row: it is what
+            // the request was built against, and it is the same body the fold's
+            // gold write records.
+            source: item.payloadSource.catalogValue,
             target: batch.stage == .prelearn ? nil : body,
             machine: body,
             // Prelearn writes the machine record ONLY: the human owns the value, so
@@ -881,6 +886,10 @@ extension Translation {
       let language: String
       let row: Int
       let slot: Int
+      /// The source text the value answers, as the request was shown it. `Memory`
+      /// is addressed by (source text, language) within the project (6.2), so the
+      /// hint write needs it beside the slot it belongs to.
+      let source: String
       let target: StringBody?
       let machine: StringBody?
       let status: LocalizationString.Status?
@@ -890,7 +899,8 @@ extension Translation {
       let reason: String
     }
 
-    /// One gathered write: the working copy first, then the app's session.
+    /// One gathered write: the working copy first, then the app's session, then the
+    /// machine hint the value leaves in translation memory.
     ///
     /// The in-memory row goes first because the next batch's register sample is read
     /// off it (4.5). The store is the app's own records — the redesign writes the
@@ -934,6 +944,37 @@ extension Translation {
       } catch {
         fail(run, key: write.key, language: write.language,
              message: error.localizedDescription, retryable: true)
+      }
+      // What a translate stage produced is kept as a HINT in translation memory
+      // (6.1/6.2): provenance for the value, so a later run — and the browser — can
+      // show where it came from, with the document versions it was produced
+      // against.
+      //
+      // A hint is PROVENANCE, NEVER A DECISION (6.2): it may be shown and it may
+      // seed a repair, but it never overrides a value a human or a machine wrote —
+      // the store refuses to let a hint touch gold — and nothing here reads a hint
+      // back as an answer to a slot.
+      //
+      // Only a translate stage's own output is a hint: prelearn writes the machine
+      // record of a slot a HUMAN owns (`target` stays nil), which is not a value
+      // this run produced, and learn writes gold.
+      if let produced = write.target {
+        do {
+          try Memory(project: project).upsert(
+            Memory.Entry(
+              key: write.key,
+              source: write.source,
+              language: write.language,
+              // The form the artifact itself shows for a plural (`catalogValue`),
+              // exactly as the fold's gold write records it: memory is addressed by
+              // (source text, language) and carries no category.
+              value: produced.catalogValue,
+              grade: .hint,
+              versions: write.versions ?? .none))
+        } catch {
+          fail(run, key: write.key, language: write.language,
+               message: error.localizedDescription, retryable: true)
+        }
       }
       run.tally.itemsDone += 1
       run.tally.byStage[batch.stage, default: 0] += 1
