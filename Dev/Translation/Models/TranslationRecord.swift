@@ -76,6 +76,22 @@ import SwiftData
   /// that exceeds it, and the paid verification gate may shorten one).
   var maxWidth: Int?
 
+  /// What the MACHINE produced for this slot. The record carries three bodies:
+  /// `value` IS the slot's target, this is the model's own output beside it, and
+  /// `reviewed` is the human's value at the moment they confirmed it. `machine`
+  /// exists so learning has something to compare a human's edit with: a
+  /// human-verified slot with no machine output on record is what `prelearn`
+  /// fills. Written by machine stages only — a human edit never touches it.
+  /// Additive with an inline default, like `autoReviewed`/`note`/`maxWidth`, so
+  /// the existing store migrates without a custom stage.
+  var machine: String? = nil
+
+  /// The value at the moment a human confirmed the slot — a SNAPSHOT, not a
+  /// second copy of the target. A later human edit makes `value != reviewed`,
+  /// which re-arms learning for this slot; equal values mean there is nothing
+  /// new to learn. nil until a human confirms. Additive with an inline default.
+  var reviewed: String? = nil
+
   // MARK: - relationships
 
   /// The project whose catalog this record was reconciled from.
@@ -92,7 +108,8 @@ import SwiftData
     lastEditor: String? = nil, project: Project? = nil, edits: [TranslationEdit] = [],
     category: String? = nil, autoReviewed: Bool = false,
     note: String? = nil, noteScope: String? = nil, noteFoldedAt: Date? = nil,
-    noteFoldedText: String? = nil, maxWidth: Int? = nil
+    noteFoldedText: String? = nil, maxWidth: Int? = nil,
+    machine: String? = nil, reviewed: String? = nil
   ) {
     self.key = key
     self.sourceText = sourceText
@@ -113,6 +130,8 @@ import SwiftData
     self.noteFoldedAt = noteFoldedAt
     self.noteFoldedText = noteFoldedText
     self.maxWidth = maxWidth
+    self.machine = machine
+    self.reviewed = reviewed
     self.project = project
     self.edits = edits
   }
