@@ -208,45 +208,6 @@ extension Translation {
     }
   }
 
-  /// The one model client. Every call in the redesign goes to Muse: no free tier, no
-  /// fallback ladder, no second opinion. What survives from the current
-  /// implementation's routing work is admission and cooldown — neither was ever
-  /// about model choice, both are about not burning a batch on a provider that is
-  /// known to be down.
-  @Observable @MainActor class Router {
-    /// Muse, the only candidate there is.
-    struct Candidate: Identifiable {
-      let id: String
-      let model: String
-      var cooldownUntil: Date?
-    }
-    let muse: Candidate
-    init(muse: Candidate) {
-      self.muse = muse
-    }
-    /// Muse, unless it is cooling down — in which case a run WAITS. There is nothing
-    /// to fall back to, which is the point.
-    func next() -> Candidate? { nil }
-    /// A quota answer parks Muse until its `Retry-After`; anything else for a fixed
-    /// window. One dead provider then costs one call per window, not one per record.
-    func coolDown(_ candidate: Candidate, retryAfter: TimeInterval?) {
-
-    }
-    /// Admission: suspends while the provider's requests-per-minute budget is full,
-    /// rather than failing the batch.
-    func admit(_ candidate: Candidate) async throws {
-
-    }
-    /// One request. Returns one value per id the model actually answered — a
-    /// missing id is the validator's business, not an error here.
-    func send(_ request: Prompt.Request, using candidate: Candidate) async throws -> [String: String] {
-      [:]
-    }
-    /// Is Muse usable at all (referenced, not cooling down)? Asked before a run
-    /// starts, so an unconfigured app fails at the button and not per batch.
-    var isEligible: Bool { false }
-  }
-
   /// Deterministic, free, and always run before the paid gate: a dropped
   /// placeholder, an echoed source or an empty reply must never cost a review
   /// call.
