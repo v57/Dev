@@ -156,6 +156,10 @@ extension Translation {
     ///
     /// A step with nothing to do has no batch to page through, and says so: the rail
     /// already reads 0 of 0 for it, and an empty pager would say the same thing worse.
+    ///
+    /// The row page is the one page the binding cannot fill from the run's batches —
+    /// they carry what the pass SENT, never what it wrote — so it is handed its
+    /// project's journal on the way past, through the page's own reader (4.6, 7.1).
     @ViewBuilder
     private func page(_ run: Run?, _ binding: RunBinding?) -> some View {
       if let run, let binding, let step = displayed(run) {
@@ -184,7 +188,9 @@ extension Translation {
           if binding.rows.isEmpty {
             Notice(icon: "tablecells", title: "\(step.title) had nothing to do", detail: "No translatable row to sweep.")
           } else {
-            HorizontalTranslate.Content(index: binding.pageIndex(step), operations: binding.rows)
+            HorizontalTranslate.Content(
+              index: binding.pageIndex(step), operations: binding.rows,
+              journal: HorizontalTranslate.journal(of: run.project))
           }
         }
       } else {
