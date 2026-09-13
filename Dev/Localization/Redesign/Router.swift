@@ -5,8 +5,16 @@
 //  Created by Dmitry on 14.09.26.
 //
 //  The Muse client — moved out of Runner.swift, which keeps the run machinery. A
-//  client is not a run: the transport, the two pacing rules and the reply parsing
-//  live together here.
+//  client is not a run: the transport and the two pacing rules live together here.
+//
+//  What this client deliberately does NOT do is parse the reply. A reply's shape is
+//  the payload's shape (10.15), and the party that asked the question is the party
+//  that knows what it asked for, so the answer is read where it is used: `send` leaves
+//  the raw text in `lastRawReply` and `Validator.answers` — the executor's parse, in
+//  Runner.swift — turns it into per-id text. The parse that used to live here keyed on
+//  `text as? String`, which silently dropped a PLURAL answer (an object of categories
+//  nested under `text`) and with it the item's whole answer, so the second parser was
+//  not a convenience, it was a second, quietly wrong answer key.
 //
 //  Real implementation, unlike the rest of this folder's stubs. Semantics are in
 //  "Design notes.md" 5.2 and the rules at the top of that file. The wire details and
@@ -167,10 +175,12 @@ extension Translation {
     /// property of the model.
     private(set) var cachedTokens = 0
 
-    /// The last answer exactly as the provider sent it. The reply travels as text and
-    /// reaches the validator as a dictionary, and truncation is a property of the RAW
-    /// text — the model stopping mid-array — so the runner needs the text
-    /// `Validator.isTruncated` asks about. Nil after a failed call.
+    /// The last answer exactly as the provider sent it, and the only way a reply
+    /// leaves this client: nothing here parses it, and the caller turns the text into
+    /// per-id answers itself (`Validator.answers`). Truncation is a property of the RAW
+    /// text — the model stopping mid-array — so the caller needs the text
+    /// `Validator.isTruncated` asks about, not a dictionary built from it. Nil after a
+    /// failed call.
     private(set) var lastRawReply: String?
 
     /// Zeroes the request and token counts. These are per-run numbers the run's tally
@@ -194,8 +204,10 @@ extension Translation {
 
     // MARK: - the request
 
-    /// One request. Returns one value per id the model actually answered — a missing
-    /// id is the validator's business, not an error here.
+    /// One request, through Muse and nothing else. Parses nothing and answers nothing:
+    /// the reply is left in `lastRawReply` for the caller to read, because only the
+    /// caller knows what it asked for. What the model answered — including the ids it
+    /// never mentioned — is the validator's business, not an error here.
     ///
     /// The park lives on this method's failure path because this is the only place that
     /// sees WHY a call failed: the provider's `Retry-After` for a quota answer, the
@@ -209,7 +221,7 @@ extension Translation {
     func send(
       _ request: Prompt.Request,
       using candidate: Candidate
-    ) async throws -> [String: String] {
+    ) async throws {
       guard let apiKey = CommandCodeKeychain.apiKey() else {
         throw BackendError.notConfigured(
           "Muse is not configured: set \(CommandCodeKeychain.envName) in the login keychain, "
@@ -229,7 +241,6 @@ extension Translation {
           jsonObject: false)
         settle(reply)
         lastRawReply = reply.content
-        return Self.values(in: reply.content)
       } catch {
         lastRawReply = nil
         // A cancelled run is not a provider condition, and a park would outlive the
@@ -250,102 +261,6 @@ extension Translation {
     /// named none, and the fixed window (nil here) for everything else.
     private static func cooldown(for error: BackendError) -> TimeInterval? {
       error.suggestedCooldown ?? (error.isQuotaExhausted ? quotaCooldown : nil)
-    }
-
-    // MARK: - reply parsing
-
-    /// Parses a batch reply into id → value.
-    ///
-    /// The shape is the one the prompts ask for: a JSON array of
-    /// `{"id": <the item's position>, "text": "<translation>"}`. The ids are positions,
-    /// never keys (10.15) — a key never travels, so a position is what can come back.
-    /// Tolerant the same three ways the current validator is: a markdown fence is
-    /// stripped, `translation` is accepted for `text`, and a reply whose array never
-    /// closes still yields the complete rows it holds, so a cut reply keeps the work it
-    /// finished instead of losing all of it.
-    static func values(in raw: String) -> [String: String] {
-      let text = strippingFence(raw)
-      guard let start = text.firstIndex(of: "[") else { return [:] }
-      var rows: [[String: Any]] = []
-      if let end = text.lastIndex(of: "]"), start <= end,
-         let data = String(text[start...end]).data(using: .utf8),
-         let parsed = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
-        rows = parsed
-      } else {
-        rows = completeRows(in: text[start...])
-      }
-
-      var values: [String: String] = [:]
-      for row in rows {
-        guard let id = idValue(row["id"]) else { continue }
-        let answer = (row["text"] as? String) ?? (row["translation"] as? String) ?? ""
-        let trimmed = answer.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { continue }
-        values[id] = trimmed
-      }
-      return values
-    }
-
-    /// Drops a markdown fence around the reply, when the model wrapped it in one.
-    private static func strippingFence(_ raw: String) -> String {
-      let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-      guard text.hasPrefix("```") else { return text }
-      return text.replacingOccurrences(of: "```json", with: "")
-        .replacingOccurrences(of: "```", with: "")
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    /// Decodes as many COMPLETE `{…}` rows as the text holds, in order — the salvage
-    /// path for a reply the model cut off mid-array. String state is tracked so a brace
-    /// inside a translated value cannot end a row early, and the scan stops at the
-    /// unbalanced object where the cut happened.
-    private static func completeRows(in text: Substring) -> [[String: Any]] {
-      var rows: [[String: Any]] = []
-      var depth = 0
-      var objectStart: String.Index?
-      var inString = false
-      var escaped = false
-
-      for index in text.indices {
-        let character = text[index]
-        if inString {
-          if escaped {
-            escaped = false
-          } else if character == "\\" {
-            escaped = true
-          } else if character == "\"" {
-            inString = false
-          }
-          continue
-        }
-        switch character {
-        case "\"":
-          inString = true
-        case "{":
-          if depth == 0 { objectStart = index }
-          depth += 1
-        case "}":
-          depth -= 1
-          guard depth <= 0, let start = objectStart else { continue }
-          if let data = text[start...index].data(using: .utf8),
-             let row = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            rows.append(row)
-          }
-          depth = 0
-          objectStart = nil
-        default:
-          continue
-        }
-      }
-      return rows
-    }
-
-    /// The id a row names, as a string. The model may echo the position as a number or
-    /// as a string; both mean the same row.
-    private static func idValue(_ any: Any?) -> String? {
-      if let string = any as? String { return string }
-      if let number = any as? NSNumber { return number.stringValue }
-      return nil
     }
 
     // MARK: - eligibility
