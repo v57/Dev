@@ -16,14 +16,21 @@ extension Translation {
       self.project = project
       scan()
     }
+    /// These rows teach, they are not translated: the stage writes the language
+    /// document and memory, and never a slot's value or status.
+    ///
+    /// The comparison it feeds on is machine output vs the human's value — that
+    /// delta is the lesson. A slot the model already got right
+    /// (`machine == target`) has nothing to teach and `toLearn` drops it.
     private func scan() {
       var byLanguages = [String: Operations]()
       for index in 0..<project.data.count {
         let row = project.data[index]
+        guard row.translatable else { continue }
         for item in row.targets {
           guard let reviewed = item.toLearn else { continue }
           byLanguages[item.language, default: Operations(language: item.language)].items
-            .append(Operation(index: index, comment: row.comment, source: row.source, machine: item.target, target: reviewed))
+            .append(Operation(key: row.key, index: index, comment: row.comment, source: row.content, machine: item.machine, target: reviewed))
         }
       }
       self.operations = byLanguages.values.flatMap { $0.split() }
@@ -31,11 +38,13 @@ extension Translation {
     struct Operations {
       let language: String
       var items: [Operation] = []
+      var isCompleted = false
+      var isFailed = false
       func split() -> [Operations] {
         var operations = [Operations]()
         var current = Operations(language: language)
         var size = 0
-        let maxSize = 20_000
+        let maxSize = Limits.batch
         for item in self.items {
           let chars = item.characters
           if chars >= maxSize {
@@ -60,12 +69,17 @@ extension Translation {
         return operations
       }
     }
-    struct Operation: VerticalOperation {
+    struct Operation: VerticalOperation, Identifiable, Hashable {
+      var id: String { key }
+      let key: String
       let index: Int
       let comment: String
       let source: StringBody
+      /// What the model produced for this slot.
       let machine: StringBody
-      let target: StringBody // User reviewed
+      /// What the human settled on — the lesson's target.
+      let target: StringBody
+      var stage: Stage { .learn }
     }
   }
 }
