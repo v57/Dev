@@ -8,16 +8,61 @@
 import SwiftUI
 
 extension Translation.HorizontalTranslate {
+  /// One row of the journal, narrowed to what this page reads: what a write to one
+  /// COLUMN said before (`from`) and what it says now (`to`).
+  ///
+  /// The page cannot tell a column the pass FILLED from one it REWROTE by looking at
+  /// the slot: both end the pass `.translated` (4.6), and the row pass's real output
+  /// is the second kind — a column that already held machine output, rewritten to
+  /// agree with the row's settled sibling. What separates them is the value the
+  /// column held BEFORE the write, and that is the journal's own pair
+  /// (`TranslationEdit.fromValue` -> `toValue`). So the distinction is a READ: it is
+  /// not a field on the operation, and not a field on the slot — nothing on the
+  /// stage's side of the wire records it.
+  struct Write: Equatable {
+    /// The catalog key of the column's row. App-side, like everything the journal
+    /// addresses by (4.3).
+    let key: String
+    let language: String
+    /// The value before the write — EMPTY when the column had nothing, which is
+    /// exactly what makes a filled column read as newly written rather than adjusted.
+    let from: String
+    /// The value the write left.
+    let to: String
+  }
+
+  /// One project's journal, oldest first, as this page reads it.
+  ///
+  /// A synchronous main-actor fetch (7.1), and the ONE thing the page reads that the
+  /// run's batches do not carry — which is why the live page is handed it rather
+  /// than fetching per column: a page per batch is one read. Machine writes only
+  /// (`editor == .provider`): what the page reports is what this PASS did, and a
+  /// human's edit is not its work.
+  static func journal(of project: Translation.Project) -> [Write] {
+    let edits = (try? project.global.store.edits(project: project.id, confirmedOnly: false)) ?? []
+    return edits.compactMap { edit in
+      guard edit.editor == .provider,
+        let key = edit.record?.key,
+        let language = edit.record?.language
+      else { return nil }
+      return Write(key: key, language: language, from: edit.fromValue ?? "", to: edit.toValue)
+    }
+  }
+
   struct Content: View {
     let index: Int
     let operations: [Operations]
+    /// The journal this page reads (`Write`): the live page is handed its project's
+    /// (`journal(of:)`), the design preview its sample's. Empty is legal and shows
+    /// the pre-pass reading only — no write is claimed without evidence.
+    var journal: [Write] = []
     @State var scrollPosition: Int?
     var body: some View {
       GeometryReader { view in
         ScrollView(.horizontal) {
           LazyHStack(spacing: 0) {
             ForEach(operations.enumerated(), id: \.offset) { (offset, element) in
-              OperationContent(operation: element).frame(width: view.size.width, height: view.size.height)
+              OperationContent(operation: element, journal: journal).frame(width: view.size.width, height: view.size.height)
             }
           }.scrollTargetLayout()
         }.scrollTargetBehavior(.paging).scrollPosition(id: $scrollPosition, anchor: .center)
@@ -31,9 +76,12 @@ extension Translation.HorizontalTranslate {
   /// A page per ROW, not per language: one request carries every column of the row,
   /// and the settled columns travel with it as context. So the page is a row — the
   /// source on top, then one line per language, showing what each column holds and
-  /// what this pass is allowed to touch.
+  /// what this pass did to it.
   struct OperationContent: View {
     let operation: Operations
+    /// The journal, so the page can tell a column this pass FILLED from one it
+    /// REWROTE (`outcome(_:)`). Empty claims nothing.
+    var journal: [Write] = []
     var color: Color {
       if operation.isFailed {
         .red
@@ -50,6 +98,84 @@ extension Translation.HorizontalTranslate {
         "checkmark.circle.fill"
       } else {
         "tablecells"
+      }
+    }
+    /// What this pass did to ONE column of the row.
+    ///
+    /// The column's STATUS says what the pass is allowed to touch — `.verified` and
+    /// `.imported` are the reference the request carries and are never written (4.6)
+    /// — and the journal says what it DID. Both a column the pass filled from nothing
+    /// and a column it rewrote over machine output end the pass `.translated`, so the
+    /// two are told apart by the value the column held BEFORE the write, which only
+    /// the journal has (`Write`).
+    enum Outcome: Equatable {
+      /// Nothing this pass wrote is on record for the column: it has not been reached,
+      /// or the value on screen is not this write's. No tag.
+      case waiting
+      /// It had NOTHING and now holds machine output.
+      case written
+      /// It HAD machine output and the pass rewrote it — the row pass's whole point
+      /// (4.6): a column adapted to agree with what the row's settled sibling says.
+      /// `previous` is what it said before, and nil when the rewrite landed the same
+      /// text, because "had a value, NOW DIFFERENT" is what this page reports.
+      case adjusted(previous: Translation.StringBody?)
+      /// `.verified` / `.imported`: left alone. It travels as the request's reference.
+      case context
+      /// `.ignore`: out of scope for every stage, and the value it has is kept.
+      case outOfScope
+      /// The batch failed before this column was reached.
+      case failed
+    }
+    func outcome(_ slot: Translation.LocalizationString, of row: Operation) -> Outcome {
+      switch slot.status {
+      case .verified, .imported: return .context
+      case .ignore: return .outOfScope
+      // Work, and nothing landed in it: the pass has not got here yet, or the batch
+      // failed before it did.
+      case .needsTranslate, .stale: return operation.isFailed ? .failed : .waiting
+      case .translated:
+        // Machine output. Read what it said before the write that left it: an empty
+        // `from` is a column this pass FILLED, anything else one it REWROTE.
+        guard let from = previousValue(of: slot, in: row) else {
+          return operation.isFailed ? .failed : .waiting
+        }
+        return from.isEmpty
+          ? .written
+          : .adjusted(previous: from == slot.target.catalogValue ? nil : .value(from))
+      }
+    }
+    /// The value the column held before the write now on screen — the journal's
+    /// `fromValue`, and nil when no write of this pass put what the page shows there.
+    ///
+    /// The journal is append-only, one row per value change, so the row that matters
+    /// is the LATEST one for this column whose `to` is a value the column holds NOW: a
+    /// write that ended on another value belongs to an earlier pass and says nothing
+    /// about this one. (A plural slot journals one row per form, so the form the write
+    /// named is the one compared.)
+    func previousValue(of slot: Translation.LocalizationString, in row: Operation) -> String? {
+      journal
+        .filter { $0.key == row.key && $0.language == slot.language }
+        .last { holds(slot, $0.to) }?
+        .from
+    }
+    /// Whether the column holds `value` now: a flat body is its text, a plural body is
+    /// any of its forms.
+    private func holds(_ slot: Translation.LocalizationString, _ value: String) -> Bool {
+      guard !value.isEmpty else { return false }
+      switch slot.target {
+      case .value(let text): return text == value
+      case .plural(let plurals): return plurals.values.contains { $0.value == value }
+      }
+    }
+    /// The word the column's outcome earns, in the page's one tag style (next to the
+    /// value, caption2, tertiary — the "context" tag was already there, unchanged).
+    func tag(_ outcome: Outcome) -> String? {
+      switch outcome {
+      case .written: "written"
+      case .adjusted: "adjusted"
+      case .context: "context"
+      case .failed: "failed"
+      case .waiting, .outOfScope: nil
       }
     }
     func marker(_ slot: Translation.LocalizationString) -> String {
@@ -93,6 +219,7 @@ extension Translation.HorizontalTranslate {
                 .font(.callout)
                 .foregroundStyle(.secondary)
               ForEach(item.targets.enumerated(), id: \.offset) { (index, slot) in
+                let outcome = outcome(slot, of: item)
                 HStack(alignment: .firstTextBaseline, spacing: 12) {
                   Text(slot.language)
                     .font(.caption.monospaced())
@@ -104,8 +231,16 @@ extension Translation.HorizontalTranslate {
                   } else {
                     Translation.VerticalTranslate.StringView(value: slot.target)
                   }
-                  if slot.status == .verified || slot.status == .imported {
-                    Text("context").font(.caption2).foregroundStyle(.tertiary)
+                  // What the column said BEFORE the write, when this pass rewrote it:
+                  // the adjusted column is the change the row pass exists to make, so
+                  // the page shows the change.
+                  if case .adjusted(let previous) = outcome, let previous {
+                    Text("was").font(.caption2).foregroundStyle(.tertiary)
+                    Translation.VerticalTranslate.StringView(value: previous)
+                      .font(.caption2).foregroundStyle(.tertiary).strikethrough()
+                  }
+                  if let tag = tag(outcome) {
+                    Text(tag).font(.caption2).foregroundStyle(.tertiary)
                   }
                 }.animation(.smooth.delay(Double(index) / 10), value: slot)
               }
@@ -123,6 +258,12 @@ extension Translation.HorizontalTranslate {
   struct Test: View {
     @State var index = 0
     @State var operations: [Operations] = Test.sample
+    /// The journal this page reads, and the preview's second half: it starts as the
+    /// sample's own values imply and GROWS as the preview's write-back lands, exactly
+    /// as the runner's write-back appends one journal row per slot it applies (5.5).
+    /// That is what makes the preview show a column being ADJUSTED rather than merely
+    /// filled — the pass's real output.
+    @State var journal: [Write] = Test.journal
 
     /// Sample batches for the design preview: ten ROWS each, in the three states a
     /// batch can be in.
@@ -131,7 +272,9 @@ extension Translation.HorizontalTranslate {
     /// its settled column as context plus the columns this pass may write:
     ///   `.verified`  the human's own value — never written, always context
     ///   `.imported`  a shipped translation — same deal, shown in its own colour
-    ///   `.translated` what this pass already wrote (machine output, unreviewed)
+    ///   `.translated` machine output this pass wrote, or REWROTE over earlier
+    ///                machine output; which one is the journal's to say, and the two
+    ///                rows built from `Test.journal` below are the rewritten kind
     ///   `.needsTranslate` / `.stale`  the work; `.ignore` is out of scope entirely
     static let sample: [Operations] = [
       // Done: every writable column of every row has been written, the settled
@@ -267,8 +410,53 @@ extension Translation.HorizontalTranslate {
       Operation(key: key, index: index, comment: comment, maxWidth: maxWidth, source: source, targets: targets)
     }
 
+    // MARK: - sample journal
+
+    /// The journal the sample's own values imply, plus the two rows that make the
+    /// page's point visible in the preview.
+    ///
+    /// Every `.translated` column of the sample was written by this pass — the
+    /// fixture's own comments say so — and a column the pass FILLED from nothing
+    /// journals an EMPTY `from`. Two columns were ADJUSTED instead: they already held
+    /// machine output when the row pass ran, and it rewrote them to agree with the
+    /// column the human verified (4.6). Those two are the pass's real output, and they
+    /// are the columns the page tags "adjusted" and shows a previous value for. They
+    /// are APPENDED, so they are the latest row for their column and win the read.
+    static let journal: [Write] = {
+      var writes = sample.flatMap { batch in
+        batch.items.flatMap { row in
+          row.targets
+            .filter { $0.status == .translated && !$0.target.isEmpty }
+            .map { Write(key: row.key, language: $0.language, from: "", to: $0.target.catalogValue) }
+        }
+      }
+      writes.append(
+        Write(key: "settings.title", language: "de",
+              from: "Einstellungen (Fenster)", to: "Einstellungen"))
+      writes.append(
+        Write(key: "sidebar.projects", language: "ja",
+              from: "プロジェクト一覧", to: "プロジェクト"))
+      return writes
+    }()
+
+    /// One row per column a write-back just rewrote: the preview's stand-in for the
+    /// journal append in `Runner.persist` (5.5). `from` is what the column said before
+    /// the write — EMPTY when it had nothing, which is what keeps a filled column
+    /// reading as newly written, and what makes a column that already had machine
+    /// output read as adjusted.
+    static func writes(from before: [Operation], to after: [Operation]) -> [Write] {
+      zip(before, after).flatMap { (previous, row) in
+        zip(previous.targets, row.targets).compactMap { (was, now) in
+          guard was.target != now.target else { return nil }
+          return Write(
+            key: row.key, language: now.language,
+            from: was.target.catalogValue, to: now.target.catalogValue)
+        }
+      }
+    }
+
     var body: some View {
-      Content(index: index, operations: operations)
+      Content(index: index, operations: operations, journal: journal)
         .task {
           do {
             for i in 0..<operations.count {
@@ -277,7 +465,9 @@ extension Translation.HorizontalTranslate {
               }
               try await Task.sleep(for: .seconds(2))
               withAnimation {
-                operations[i].items = operations[i].items.map { $0.resolve($0.source.reversed()) }
+                let rewritten = operations[i].items.map { $0.resolve($0.source.reversed()) }
+                journal += Test.writes(from: operations[i].items, to: rewritten)
+                operations[i].items = rewritten
                 operations[i].isCompleted = true
               }
               try await Task.sleep(for: .seconds(1))
