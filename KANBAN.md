@@ -97,7 +97,6 @@ ACCEPTANCE
 
 OPEN DECISIONS (notes section 10) — a worker who meets one asks instead of choosing
   10.2  who may write the global document (recommendation: nobody yet)
-  10.4  delete FullRow
   10.6  does the row pass need its own paid gate
   10.8  version bump gating (must bump only on a real change)
   10.9  cut-over placement and timing
