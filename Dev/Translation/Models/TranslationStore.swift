@@ -8,8 +8,9 @@
 import Foundation
 import SwiftData
 
-/// All SwiftData persistence for the self-improving translator: the six
-/// model types in this directory.
+/// All SwiftData persistence for the self-improving translator: the model types in
+/// this directory, plus `RunCursor` (the redesign's one schema addition, 10.16),
+/// which is declared beside its only reader in `Localization/Redesign/Store.swift`.
 ///
 /// Owns the app's ONE shared ModelContainer — exactly one, ever (a second
 /// container traps on first fetch). The container is created lazily in a
@@ -31,6 +32,7 @@ final class TranslationStore {
       ContextDoc.self,
       ContextEdit.self,
       TranslationMemoryEntry.self,
+      RunCursor.self,
     ])
     // Explicit per-app store: a SwiftData app that omits a URL lands on
     // default.store in whatever Application Support resolves to — for an

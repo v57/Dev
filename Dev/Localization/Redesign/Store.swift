@@ -45,17 +45,60 @@
 import Foundation
 import SwiftData
 
+/// The batch cursor of one run: the batch a paused or interrupted run resumes at,
+/// so it starts where it stopped instead of re-billing the batches already applied
+/// (5.6).
+///
+/// This is the redesign's ONLY addition to the app's schema (7.2, 10.16), and it is
+/// a table rather than three keys in the app's defaults for two reasons: a cursor is
+/// translation state that has to survive the way the records beside it do, and it is
+/// addressed by a PAIR — (project, stage) — which defaults can only hold as one
+/// flattened string. One row per pair; a stage resumes where it left off and two
+/// projects never share a cursor. The run's tally and clock stay on the `Run`, not
+/// here (5.7).
+///
+/// `project` is the redesign's project id (the app's project NAME — see
+/// `Store.projectRow(id:)`) and `stage` the raw value of `Translation.Stage`; both are
+/// strings on purpose, so the row can be written before or without the `Project` row
+/// it describes, and so nothing here points back at the models the old pipeline owns.
+@Model final class RunCursor {
+  /// The project the run belongs to.
+  var project: String
+  /// The run's stage (`Stage.rawValue`).
+  var stage: String
+  /// The batch the run stopped BEFORE: resuming starts here.
+  var batchIndex: Int
+  /// When the cursor last moved.
+  var updatedAt: Date
+
+  init(
+    project: String, stage: String, batchIndex: Int, updatedAt: Date = .now
+  ) {
+    self.project = project
+    self.stage = stage
+    self.batchIndex = batchIndex
+    self.updatedAt = updatedAt
+  }
+}
+
 extension Translation {
   /// The translation store: the app's SwiftData container, seen from the redesign.
   /// One container for the whole app, the main context for translation state.
   ///
-  /// The models are the ones the app already has, used additively:
+  /// The models are the app's own, plus the ONE row the redesign adds:
   ///
   ///   ContextDoc            context documents. `identifier` is the project id for
-  ///                         a project document and the BCP-47 code for a language
-  ///                         document — which ALSO sets its `project` relationship,
-  ///                         because language documents are per project (10.1).
-  ///                         Uniqueness is therefore (scope, identifier, project).
+  ///                         a project document and the FULL scope id,
+  ///                         `"project/<id>/language/<code>"`, for a language
+  ///                         document — which is what keeps per-project language
+  ///                         documents apart (10.1). A language document does NOT
+  ///                         set its `project` relationship: that is the to-one
+  ///                         inverse of `Project.contextDoc`, the property the old
+  ///                         browser reads for project rules, so only the project
+  ///                         document owns it. Uniqueness is (scope, identifier).
+  ///   RunCursor             the redesign's only addition to the schema (10.16): one
+  ///                         row per (project, stage) holding the batch a paused or
+  ///                         interrupted run resumes at (5.6).
   ///   TranslationRecord     one slot per (key, language). The redesign needs three
   ///                         bodies where the model has one value: `value` IS
   ///                         `target`, and `machine` / `reviewed` are additive
@@ -84,9 +127,6 @@ extension Translation {
     typealias ProjectRow = Dev.Project
 
     let context: ModelContext
-    /// The app's defaults, for the one value that is run state rather than
-    /// translation state — the run cursor. See `cursor(for:project:)`.
-    private let defaults = UserDefaults.standard
 
     init(context: ModelContext) {
       self.context = context
@@ -188,7 +228,7 @@ extension Translation {
             content: body,
             createdAt: .now,
             updatedAt: .now,
-            project: try owner(of: scope).flatMap { try projectRow(id: $0) }))
+            project: try relationshipOwner(of: scope).flatMap { try projectRow(id: $0) }))
       }
       try context.save()
     }
@@ -204,9 +244,11 @@ extension Translation {
     /// Ownership: a project document is found through the project RELATIONSHIP (the
     /// current implementation's own test, `$0.scope == .project && $0.project === project`),
     /// with its `identifier` as the fallback for a row whose relationship is unset.
-    /// A language document is found by (code, project) and NEVER by code alone:
-    /// language documents became per project (10.1), so a legacy document with no
-    /// project is not adopted — a lesson must not leak between projects.
+    /// A language document is found by its FULL scope id and never by the language code
+    /// alone: the id carries the project, so only this project's document answers, and a
+    /// legacy row keyed by the bare code (the old implementation shares one document per
+    /// code across projects) is deliberately NOT adopted — a lesson must not leak between
+    /// projects (10.1).
     private func contextDocs(for scope: Context.Scope) throws -> [ContextDoc] {
       let docs = try context.fetch(FetchDescriptor<ContextDoc>())
       switch scope {
@@ -220,11 +262,8 @@ extension Translation {
           return [owned]
         }
         return docs.filter { $0.scope == .project && $0.project == nil && $0.identifier == id }
-      case .language(let project, let code):
-        guard let owner = try projectRow(id: project)?.persistentModelID else { return [] }
-        return docs.filter {
-          $0.scope == .language && $0.identifier == code && $0.project?.persistentModelID == owner
-        }
+      case .language:
+        return docs.filter { $0.scope == .language && $0.identifier == scope.id }
       }
     }
 
@@ -237,23 +276,38 @@ extension Translation {
       }
     }
 
-    /// The `identifier` column of a scope: the project id for a project document,
-    /// the BCP-47 code for a language document, nil for global (7.2).
+    /// The `identifier` column of a scope (7.2): the project id for a project
+    /// document, the FULL scope id for a language document, nil for global.
+    ///
+    /// The two differ on purpose. A project document's identifier is the project id
+    /// because that is what the app already writes there (`Reconcile`:
+    /// `identifier: project.name`) and the old browser reads. A language document's is
+    /// its whole scope id — `"project/<id>/language/<code>"`, the same string
+    /// `Context.Scope.id` builds — because that is what keeps one project's lessons out
+    /// of another's: language documents became per project (10.1), and with the
+    /// relationship deliberately unset (below) the identifier is the only column that
+    /// can say which project a document belongs to.
     private func identifier(of scope: Context.Scope) -> String? {
       switch scope {
       case .global: nil
       case .project(let id): id
-      case .language(_, let code): code
+      case .language: scope.id
       }
     }
 
-    /// The project a scope belongs to: the project id, or nil for the global
-    /// document (which belongs to no project).
-    private func owner(of scope: Context.Scope) -> String? {
+    /// The project whose `contextDoc` relationship a scope sets: the project id for a
+    /// project document, nil for every other scope.
+    ///
+    /// A language document deliberately sets NO relationship. `Project.contextDoc` is
+    /// the to-one inverse of `ContextDoc.project`, so a project document and its
+    /// language documents cannot share it — and that property is exactly what the old
+    /// browser reads for the project's rules. The full scope id keeps the documents
+    /// apart instead (3.1), which costs no new relationship and no compound key. The
+    /// global document belongs to no project at all.
+    private func relationshipOwner(of scope: Context.Scope) -> String? {
       switch scope {
-      case .global: nil
       case .project(let id): id
-      case .language(let project, _): project
+      case .global, .language: nil
       }
     }
 
@@ -308,20 +362,19 @@ extension Translation {
     /// only the ones a human confirmed. Oldest first, which is the order `learn`
     /// folds in.
     ///
-    /// The owner is two relationships away (`edit.record.project`); the fetch asks
-    /// for it first and falls back to filtering in memory when the predicate is not
-    /// supported on this SDK — the same two-step `Reconcile.records(of:in:)` uses.
+    /// The owner is TWO relationships away (`edit.record.project`), and a predicate
+    /// fetch on that path is NOT trustworthy: measured in a probe against these models
+    /// (in-memory store, one record, two journal rows), the qualified
+    /// `#Predicate { $0.record?.project?.persistentModelID == owner }` returned ONE of
+    /// the two rows — it does not throw, so the `try?`/fallback shape
+    /// `Reconcile.records(of:in:)` uses never fires, and which row it drops varies
+    /// between runs. Silent and partial is the worst pair of properties for a table
+    /// `learn` reads lessons out of, so the fetch below is unqualified and the filter
+    /// is the source of truth. The table holds one row per value change, and the filter
+    /// has to read the relationship anyway, so nothing is saved by narrowing the query.
     func edits(project: String, confirmedOnly: Bool = true) throws -> [TranslationEdit] {
       guard let owner = try projectRow(id: project)?.persistentModelID else { return [] }
-      let descriptor = FetchDescriptor<TranslationEdit>(
-        predicate: #Predicate { $0.record?.project?.persistentModelID == owner })
-      let rows: [TranslationEdit]
-      if let owned = try? context.fetch(descriptor) {
-        rows = owned
-      } else {
-        rows = try context.fetch(FetchDescriptor<TranslationEdit>())
-      }
-      return rows
+      return try context.fetch(FetchDescriptor<TranslationEdit>())
         .filter { $0.record?.project?.persistentModelID == owner }
         .filter { !confirmedOnly || $0.isUserConfirmed }
         .sorted { $0.createdAt < $1.createdAt }
@@ -422,25 +475,35 @@ extension Translation {
 
     /// Where a paused or interrupted run left off. Batch granularity, nothing finer.
     ///
-    /// Kept in the app's defaults rather than in the models on purpose: a cursor is
-    /// RUN state, like the run's clock and its per-model tally, which belong on the
-    /// run and not on a translation record (5.7), and the app's schema has no column
-    /// to reuse for it — adding a table for one Int would put a model in front of the
-    /// old pipeline that has nothing to do with translating.
+    /// A `RunCursor` ROW, not a key in the app's defaults (5.6, 7.2): a cursor has to
+    /// survive and be inspectable exactly like the translation state around it, and it
+    /// is addressed by (project, stage) — a pair, which the defaults had to flatten into
+    /// a string key. The tally is the value that stays on the Run, not here (5.7).
     func cursor(for stage: Stage, project: String) throws -> Run.Cursor? {
-      let key = cursorKey(stage, project)
-      guard defaults.object(forKey: key) != nil else { return nil }
-      return Run.Cursor(batchIndex: defaults.integer(forKey: key))
+      try cursorRow(for: stage, project: project).map { Run.Cursor(batchIndex: $0.batchIndex) }
     }
 
     func saveCursor(_ cursor: Run.Cursor, for stage: Stage, project: String) throws {
-      defaults.set(cursor.batchIndex, forKey: cursorKey(stage, project))
+      guard let row = try cursorRow(for: stage, project: project) else {
+        context.insert(
+          RunCursor(project: project, stage: stage.rawValue, batchIndex: cursor.batchIndex))
+        try context.save()
+        return
+      }
+      guard row.batchIndex != cursor.batchIndex else { return }
+      row.batchIndex = cursor.batchIndex
+      row.updatedAt = .now
+      try context.save()
     }
 
-    /// One cursor per (project, stage): a stage resumes where it left off, and two
-    /// projects never share a cursor.
-    private func cursorKey(_ stage: Stage, _ project: String) -> String {
-      "Translation.RunCursor.\(project).\(stage.rawValue)"
+    /// The one cursor row per (project, stage) pair. Same fetch-first upsert the rest of
+    /// this file uses — no unique constraint is added to the schema for it, so resolving
+    /// the row is this function's job.
+    private func cursorRow(for stage: Stage, project: String) throws -> RunCursor? {
+      let rawStage = stage.rawValue
+      let descriptor = FetchDescriptor<RunCursor>(
+        predicate: #Predicate { $0.project == project && $0.stage == rawStage })
+      return try context.fetch(descriptor).first
     }
   }
 }
