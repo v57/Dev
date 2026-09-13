@@ -1,13 +1,26 @@
 Dev — Translation redesign: kanban board
 Date: 2026-09-14   Board: dev-translation-redesign   Workdir: /Users/v57/Projects/Dev
 
-STATUS
-  Design layer committed. 13 implementation cards created, all assigned to profile
-  `default`, all running in the repo directory (workspace kind `dir`). Wave 1 is live:
-  the Store card is RUNNING, the prompt-assembly and Muse-client cards are READY and
-  spawn on the next dispatcher tick (3 concurrent = the cap). Everything else is `todo`,
-  gated by its parents. Nothing on this board had been implemented by hand: the tree
-  holds design stubs and the designed pages only.
+STATUS   (updated 2026-09-14 01:52 — this doc is a narrative; the BOARD is the state:
+          `hermes kanban --board dev-translation-redesign list --json`)
+  NOT DONE. 5 done, 1 BLOCKED on the user, 9 todo, 0 running — the board is STALLED on
+  the Store card's `needs_input` gate. The store itself is committed and passes the gate,
+  but the card asks two decisions (10.16: do the new stages write the same SwiftData
+  records the old browser reads; where the run cursor lives — it used UserDefaults) and
+  reports a schema collision it found: Project.contextDoc is the to-one INVERSE of
+  ContextDoc.project, so a project document and its per-project language documents cannot
+  share that property, which is exactly what the old browser reads for project rules.
+  The contexts card and every stage card are gated on it, so nothing else dispatches until
+  it clears.
+
+  DONE     t_db2260b2 prompt assembly (66fa010)   t_931a3ec5 Muse client (d457ec7)
+           t_9caad4dc Router.values deletion (9d60f3d)   t_7baea299 run executor (a14a0fc)
+           t_34b75066 workspace: Start, overlay, status bar (cf4ad6a)
+  BLOCKED  t_4e5d3608 Store — committed f958f75, passes the gate, needs_input
+  TODO     t_e5686522 contexts · t_517bbe62 memory (a worker filed this one itself) ·
+           the four stage cards · review/edit · row page · cutover
+  HEAD is the committed tree and builds BUILD SUCCEEDED with zero warnings — verified on a
+  clean tree, not quoted from the cards' own summaries.
 
 LANDED COMMITS (local — not pushed)
   ce6ce1b  Redesign: Initial layout
@@ -58,7 +71,8 @@ BASELINE (what is in the tree today)
                       sample fixtures, #Preview per page. Done, bound to sample data only.
   Design notes.md     the spec: rules, the gap analysis, and the open decisions in section 10.
 
-TASK LIST (id, priority, parents)
+TASK LIST (id, priority, parents) — statuses below are from DISPATCH time; the DONE/BLOCKED
+list at the top of this file is the current state.
 
   Phase 1 — foundation
     t_4e5d3608  10  Store: SwiftData mapping                       RUNNING
