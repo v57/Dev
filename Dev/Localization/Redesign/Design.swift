@@ -488,12 +488,6 @@ enum Translation {
     var placeholders: [String] { [] }
   }
 
-  /// Vestigial: nothing uses it, and `LocalizationKey` already is the row. Kept
-  /// only until the reader decides (see "Design notes.md", 10.4).
-  struct FullRow {
-    var languages: [String: Language]
-  }
-
   // MARK: - operations
 
   /// The operations a run is made of.

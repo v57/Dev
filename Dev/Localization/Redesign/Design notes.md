@@ -72,9 +72,9 @@ Constraints on the whole redesign, not gaps in it. Everything below assumes them
     rows that appear mid-run are picked up by the next scan, never patched into
     a batch that is already in flight.
 
-1.3 `FullRow` is vestigial (an unused `[String: Language]`).
-    recommendation: delete it. If a row projection is wanted for the table, it is
-    a view model over `LocalizationKey`, not a second row type.
+1.3 `FullRow` was vestigial (an unused `[String: Language]`) and is DELETED
+    (reader, 2026-09-14). If a row projection is ever wanted for the table it is a
+    view model over `LocalizationKey`, not a second row type.
 
 1.4 Per-form provenance had no home — and turns out not to need one. `Plurals`
     carries values only, `LocalizationString` carries one `machine` / `target` /
@@ -689,7 +689,8 @@ The operation classes know what to send, nothing knows how to send it.
       (`machine`, `reviewed`), so there is nothing to migrate and no importer to
       write. The price is the sentinel rule: an all-nil version row still has to be
       lifted on write, or the store crashes re-faulting it.
-- [ ] 10.4 `FullRow`: delete (recommended) or define as the table's row view model.
+- [x] 10.4 `FullRow` DELETED (reader, 2026-09-14). It was never used and
+      `LocalizationKey` already is the row.
 - [x] 10.5 Per-form status: NONE (reader, 2026-09-13). In Xcode a plural behaves
       like any other string — reviewed / needs-translation applies to the whole
       language row — so the slot's status covers all of its forms. There is no
@@ -800,5 +801,5 @@ maxWidth, source and target — never the key, and the key stands in when no sou
 authored), 10.17/10.18 (the row pass is the LAST and ALWAYS-ON step of a run), and the
 row pass's shape: no selection, the whole row travels, the write-back refuses settled
 slots. Also settled since the first draft: Muse is the only model, the new logic runs
-beside the old one, and the UI is a closable overlay with a bottom status bar. Still
-open: 10.2, 10.4, 10.6, 10.8, 10.9, 10.10, 10.11, 10.12, 10.13, 10.16.
+beside the old one, and the UI is a closable overlay with a bottom status bar. `FullRow`
+is deleted (10.4). Still open: 10.2, 10.6, 10.8, 10.9, 10.10, 10.11, 10.12, 10.13, 10.16.
