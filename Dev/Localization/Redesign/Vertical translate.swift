@@ -37,7 +37,12 @@ extension Translation {
             .append(Operation(key: row.key, index: index, comment: row.comment, maxWidth: row.maxWidth, source: row.content, target: item.target))
         }
       }
-      self.operations = byLanguages.values.flatMap { $0.split() }
+      // ONE group per language, in language order: this scan's order IS the run's
+      // batch order — the runner numbers a batch by its ordinal, its pages page by
+      // that ordinal, and a paused run's cursor counts those batches (5.6) — so it
+      // may not depend on a Dictionary's iteration order. The items INSIDE a group
+      // stay in catalog order, which is the order they were appended in.
+      self.operations = byLanguages.keys.sorted().flatMap { byLanguages[$0]?.split() ?? [] }
     }
     struct Operations {
       let language: String
@@ -48,6 +53,11 @@ extension Translation {
         self.language = language
         self.items = items
       }
+      /// Sized by CHARACTERS, never by count (4.4): items join a batch until the
+      /// next one would cross `Limits.batch`, an item that alone exceeds the budget
+      /// gets a request of its own (a batch always takes at least one item, so
+      /// nothing is ever skipped), and an item that crosses the line starts the NEXT
+      /// batch rather than being dropped between the two.
       func split() -> [Operations] {
         var operations = [Operations]()
         var current = Operations(language: language)
@@ -63,8 +73,10 @@ extension Translation {
             }
             operations.append(Operations(language: language, items: [item]))
           } else if size + chars > maxSize {
+            // `size` is only ever non-zero with a non-empty `current`, so the batch
+            // being closed here has at least one item.
             operations.append(current)
-            current = Operations(language: language)
+            current = Operations(language: language, items: [item])
             size = chars
           } else {
             current.items.append(item)
