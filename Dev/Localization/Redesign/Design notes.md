@@ -612,6 +612,27 @@ The operation classes know what to send, nothing knows how to send it.
         so there is nothing of it to write, and that is not an error to raise at save
         time (10.20).
 
+5.11 Retrying the FAILED batches (reader, 2026-09-14: "On completion add retry button that
+    will run both translation jobs on failed batches (no need to regenerate the list)").
+    When a run has ended, the batches that failed are already known: they are the run's
+    own batch objects, holding their items, their positions and their languages. What the
+    reader wants is the obvious next action instead of a second Start:
+      - the button appears on a FINISHED run that has failed batches, and it covers BOTH
+        translate jobs — the column pass and the row pass. Prelearn and learn are not
+        translations and are not re-run by it; a run with no failures offers nothing.
+      - it re-runs exactly those batches. NO scan, no re-cut, no regeneration of the list:
+        the batches and their items are reused as they stand, so every id stays the
+        position it always was (4.3) and the request is built exactly as before.
+      - a retried batch that succeeds applies its results like any other batch (5.5) and
+        stops reporting a failure; one that fails again stays failed and stays reported.
+        The button re-asks, it does not promise.
+      - every attempt is cost, so each send counts in the tally (5.7): this is a NEW
+        attempt AFTER the automatic retries were exhausted (5.9), never instead of them.
+      - the retry's own completion saves, by 5.10's rule (a run that finished writes, a
+        cancelled one does not). The original completion has already saved, so without
+        this the retried results would sit app-side with only the dirty flag to show for
+        them.
+
 ## 6. Memory and the imported database
 
 6.1 The language doc is 1 000 characters on purpose: per-key knowledge belongs in
