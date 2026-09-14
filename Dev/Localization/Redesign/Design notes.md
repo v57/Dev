@@ -860,6 +860,14 @@ The operation classes know what to send, nothing knows how to send it.
                      The run has to retain the input PER BATCH for this, the way it now
                      retains the reply. A step whose page has no batch keeps its
                      single-pane notice: there is no exchange to show.
+                     PACING (reader, 2026-09-14): a page does not jump the instant a
+                     batch finishes. A change of index scrolls after a short pause —
+                     two seconds — so a finished batch is READ before the next takes the
+                     screen. The delay is PRESENTATION ONLY: it never holds the run back
+                     (the run advances at its own pace and the page catches up), a newer
+                     index restarts the pause rather than queueing behind the old one,
+                     and the first appearance is not delayed at all (a page opened
+                     mid-run goes straight to the batch the run is on).
       language bar   the selected languages as columns (the Add Language overlay
                      and the toggle list already exist in the current UI and are
                      worth carrying over), each with a progress reading
