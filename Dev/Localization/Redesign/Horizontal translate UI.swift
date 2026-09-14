@@ -62,6 +62,10 @@ extension Translation.HorizontalTranslate {
     /// the pre-pass reading only — no write is claimed without evidence.
     var journal: [Write] = []
     @State var scrollPosition: Int?
+    /// When this page last followed the run to a batch. Seeded `.distantPast`, so the FIRST
+    /// appearance never waits: a page opened mid-run goes straight to the batch the run is on,
+    /// and only later CHANGES pause (8.1, "PACING").
+    @State var lastScroll: Date = .distantPast
     var body: some View {
       GeometryReader { view in
         ScrollView(.horizontal) {
@@ -72,8 +76,17 @@ extension Translation.HorizontalTranslate {
           }.scrollTargetLayout()
         }.scrollTargetBehavior(.paging).scrollPosition(id: $scrollPosition, anchor: .center)
       }.task(id: index) {
+        // The pause is a BUDGET since the last scroll, not a fresh timer per change: SwiftUI
+        // cancels this task whenever `index` changes, so a sleep counted from here would share
+        // nothing and a run producing batches faster than the pause would postpone the scroll
+        // forever. Measuring from `lastScroll` keeps the page advancing — and it always lands on
+        // the NEWEST index, because a cancelled task never reaches the scroll below.
+        let target = index
+        let wait = max(0, Translation.pagePacing - Date.now.timeIntervalSince(lastScroll))
+        try? await Task.sleep(for: .seconds(wait))
+        lastScroll = .now
         withAnimation(.smooth) {
-          scrollPosition = index
+          scrollPosition = target
         }
       }
     }
@@ -98,6 +111,15 @@ extension Translation.HorizontalTranslate {
     /// The journal, so the page can tell a column this pass FILLED from one it
     /// REWROTE (`outcome(_:)`). Empty claims nothing.
     var journal: [Write] = []
+    /// The mark THIS row carries (8.1, "stage pages"): the row's own state, never the
+    /// batch's. The page's item is a ROW, so this is the reading the page draws — and the
+    /// batch's own mark, which the heading carries, never reaches a row.
+    func mark(_ row: Operation) -> Translation.RowMark {
+      Translation.RowMark(phase: row.phase, inFlight: "tablecells")
+    }
+    /// The batch's own mark, for the heading only: it reads as the page's summary of the
+    /// request. A batch that wrote anything is applied, so an xmark here appears exactly
+    /// when the batch wrote NOTHING (`Runner.settle`).
     var color: Color {
       if operation.isFailed {
         .red
@@ -107,6 +129,8 @@ extension Translation.HorizontalTranslate {
         .primary
       }
     }
+    /// The same batch mark, as the heading's icon. A row never draws this: every row carries
+    /// its own (`mark(_:)`).
     var icon: String {
       if operation.isFailed {
         "xmark.circle.fill"
@@ -139,21 +163,23 @@ extension Translation.HorizontalTranslate {
       case context
       /// `.ignore`: out of scope for every stage, and the value it has is kept.
       case outOfScope
-      /// The batch failed before this column was reached.
+      /// THIS ROW failed before the column was reached — the row's own state, never the
+      /// batch's: a batch that wrote some of its rows is applied, and the rows it did not
+      /// answer are the ones that carry the failure.
       case failed
     }
     func outcome(_ slot: Translation.LocalizationString, of row: Operation) -> Outcome {
       switch slot.status {
       case .verified, .imported: return .context
       case .ignore: return .outOfScope
-      // Work, and nothing landed in it: the pass has not got here yet, or the batch
+      // Work, and nothing landed in it: the pass has not got here yet, or the row
       // failed before it did.
-      case .needsTranslate, .stale: return operation.isFailed ? .failed : .waiting
+      case .needsTranslate, .stale: return row.phase == .failed ? .failed : .waiting
       case .translated:
         // Machine output. Read what it said before the write that left it: an empty
         // `from` is a column this pass FILLED, anything else one it REWROTE.
         guard let from = previousValue(of: slot, in: row) else {
-          return operation.isFailed ? .failed : .waiting
+          return row.phase == .failed ? .failed : .waiting
         }
         return from.isEmpty
           ? .written
@@ -232,7 +258,14 @@ extension Translation.HorizontalTranslate {
               .padding(.bottom, 8)
             ForEach(operation.items.enumerated(), id: \.offset) { (rowIndex, item) in
               VStack(alignment: .leading, spacing: 4) {
-                Text(item.key).font(.headline.monospaced())
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                  // The ROW's own mark (8.1, "stage pages"): this row's state, never the
+                  // batch's — the heading above carries the batch's own.
+                  Image(systemName: mark(item).icon)
+                    .opacity(mark(item).isWaiting ? 0.4 : 1)
+                    .foregroundStyle(mark(item).color)
+                  Text(item.key).font(.headline.monospaced())
+                }
                 Translation.VerticalTranslate.StringView(value: item.source)
                   .font(.callout)
                   .foregroundStyle(.secondary)
@@ -263,7 +296,9 @@ extension Translation.HorizontalTranslate {
                   }.animation(.smooth.delay(Double(index) / 10), value: slot)
                 }
               }
-              .foregroundStyle(color)
+              // The row's own colour, taken from the row's own mark: the batch's colour is
+              // the heading's, and a row reads red or green for its OWN state.
+              .foregroundStyle(mark(item).color)
               .padding(.vertical, 4)
               if rowIndex < operation.items.count - 1 {
                 Divider().opacity(0.4)
@@ -613,7 +648,16 @@ extension Translation.HorizontalTranslate {
               withAnimation {
                 let rewritten = operations[i].items.map { $0.resolve($0.source.reversed()) }
                 journal += Test.writes(from: operations[i].items, to: rewritten)
-                operations[i].items = rewritten
+                // The ROWS' own state, the way the runner leaves it (`Runner.settle`): a batch
+                // that wrote its rows applied them one by one, and the batch this fixture marks
+                // failed wrote nothing, so its rows carry the failure themselves — which is what
+                // the page marks, and never the batch's own flag.
+                let failed = operations[i].isFailed
+                operations[i].items = rewritten.map { item in
+                  var item = item
+                  item.phase = failed ? .failed : .applied
+                  return item
+                }
                 operations[i].isCompleted = true
                 // The batch went out and was answered: its page's right half fills in the same
                 // way a live run fills it in — the input when the request is built

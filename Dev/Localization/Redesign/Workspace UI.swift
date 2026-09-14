@@ -487,7 +487,9 @@ extension Translation {
               index: position(item.key),
               comment: item.comment,
               source: item.source,
-              machine: machine(item))
+              machine: machine(item),
+              // The row's own state, so the page marks the ROW and not the batch (8.1).
+              phase: item.phase)
           },
           isCompleted: batch.phase == .applied,
           isFailed: batch.phase == .failed)
@@ -507,7 +509,9 @@ extension Translation {
               comment: item.comment,
               source: item.source,
               machine: machine(item),
-              target: target(item))
+              target: target(item),
+              // The row's own state, so the page marks the ROW and not the batch (8.1).
+              phase: item.phase)
           },
           isCompleted: batch.phase == .applied,
           isFailed: batch.phase == .failed)
@@ -526,7 +530,9 @@ extension Translation {
               comment: item.comment,
               maxWidth: item.maxWidth,
               source: item.source,
-              target: target(item))
+              target: target(item),
+              // The row's own state, so the page marks the ROW and not the batch (8.1).
+              phase: item.phase)
           })
         // This stage's group takes only its language and its items, so the batch's own
         // phase — what the page's reveal reads — is set here.
@@ -552,7 +558,10 @@ extension Translation {
               source: first.source,
               targets: row(first.key)?.targets ?? items.map {
                 LocalizationString(language: $0.language ?? "", target: $0.target)
-              })
+              },
+              // A row page's item is a ROW, so its phase is the row's own reading of its
+              // columns (8.1): the narrowest equivalent this page needs.
+              phase: Self.rowPhase(items, of: batch))
           },
           isCompleted: batch.phase == .applied,
           isFailed: batch.phase == .failed)
@@ -577,6 +586,21 @@ extension Translation {
         }
       }
       return rows
+    }
+
+    /// The phase ONE ROW of a row batch carries, read off the row's own items (8.1): failed
+    /// when any column of the row failed, written when any was written — and otherwise the
+    /// batch's own phase, because a row whose every column is context (a settled one that only
+    /// travelled with the request) has nothing of its own to report.
+    ///
+    /// A row is where this page's "row" and the run's item meet: the request carries one item
+    /// per (row, language) and the page draws one line per row, so this is the narrowest
+    /// equivalent the page needs — never the batch's flag, which would mark every row of a
+    /// batch for the one row that went wrong.
+    private static func rowPhase(_ items: [Run.Item], of batch: Run.Batch) -> Run.Phase {
+      if items.contains(where: { $0.phase == .failed }) { return .failed }
+      if items.contains(where: { $0.phase == .applied }) { return .applied }
+      return batch.phase
     }
 
     private func row(_ key: String) -> LocalizationKey? { index[key]?.key }

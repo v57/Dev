@@ -17,6 +17,10 @@ extension Translation.VerticalLearn {
     /// gets the "nothing sent yet" reading on both halves rather than a crash.
     var exchanges: [Translation.Run.Exchange] = []
     @State var scrollPosition: Int?
+    /// When this page last followed the run to a batch. Seeded `.distantPast`, so the FIRST
+    /// appearance never waits: a page opened mid-run goes straight to the batch the run is on,
+    /// and only later CHANGES pause (8.1, "PACING").
+    @State var lastScroll: Date = .distantPast
     var body: some View {
       GeometryReader { view in
         ScrollView(.horizontal) {
@@ -27,8 +31,17 @@ extension Translation.VerticalLearn {
           }.scrollTargetLayout()
         }.scrollTargetBehavior(.paging).scrollPosition(id: $scrollPosition, anchor: .center)
       }.task(id: index) {
+        // The pause is a BUDGET since the last scroll, not a fresh timer per change: SwiftUI
+        // cancels this task whenever `index` changes, so a sleep counted from here would share
+        // nothing and a run producing batches faster than the pause would postpone the scroll
+        // forever. Measuring from `lastScroll` keeps the page advancing — and it always lands on
+        // the NEWEST index, because a cancelled task never reaches the scroll below.
+        let target = index
+        let wait = max(0, Translation.pagePacing - Date.now.timeIntervalSince(lastScroll))
+        try? await Task.sleep(for: .seconds(wait))
+        lastScroll = .now
         withAnimation(.smooth) {
-          scrollPosition = index
+          scrollPosition = target
         }
       }
     }
@@ -51,23 +64,11 @@ extension Translation.VerticalLearn {
     let operation: Operations
     /// Both sides of this batch's exchange — what the right half prints, unread.
     let exchange: Translation.Run.Exchange
-    var color: Color {
-      if operation.isFailed {
-        .red
-      } else if operation.isCompleted {
-        .green
-      } else {
-        .primary
-      }
-    }
-    var icon: String {
-      if operation.isFailed {
-        "xmark.circle.fill"
-      } else if operation.isCompleted {
-        "checkmark.circle.fill"
-      } else {
-        "graduationcap"
-      }
+    /// The mark THIS row carries (8.1, "stage pages"): the row's own state, never the batch's.
+    /// The batch's flags are not read here at all — a batch that wrote some of its rows is
+    /// applied, and the row that went wrong is the only thing that carries the failure.
+    func mark(_ item: Translation.VerticalLearn.Operation) -> Translation.RowMark {
+      Translation.RowMark(phase: item.phase, inFlight: "graduationcap")
     }
     var body: some View {
       HStack(spacing: 0) {
@@ -83,8 +84,8 @@ extension Translation.VerticalLearn {
               .padding(.bottom, 8)
             ForEach(operation.items.enumerated(), id: \.offset) { (index, item) in
               HStack(alignment: .firstTextBaseline) {
-                Image(systemName: icon).font(.title.bold()).frame(width: 32, height: 32)
-                  .opacity(operation.isCompleted || operation.isFailed ? 1 : 0.1)
+                Image(systemName: mark(item).icon).font(.title.bold()).frame(width: 32, height: 32)
+                  .opacity(mark(item).isWaiting ? 0.1 : 1)
                 VStack(alignment: .leading, spacing: 2) {
                   Text(item.key).font(.caption.monospaced()).foregroundStyle(.tertiary)
                   Translation.VerticalTranslate.StringView(value: item.source)
@@ -107,7 +108,7 @@ extension Translation.VerticalLearn {
                       .transition(.opacity)
                   }
                 }
-              }.foregroundStyle(color).animation(.smooth.delay(Double(index) / 10), value: operation.isCompleted)
+              }.foregroundStyle(mark(item).color).animation(.smooth.delay(Double(index) / 10), value: item)
             }
           }.padding(32)
         }.contentTransition(.symbolEffect)
@@ -340,6 +341,16 @@ extension Translation.VerticalLearn {
               // Nothing to resolve: what this stage writes is the document, not a
               // value. Folding the batch is the whole visible effect.
               withAnimation {
+                // The ROWS' own state, the way the runner leaves it (`Runner.settle`): a batch
+                // that wrote its rows applied them one by one, and the batch this fixture marks
+                // failed wrote nothing, so its rows carry the failure themselves — which is what
+                // the page marks, and never the batch's own flag.
+                let failed = operations[i].isFailed
+                operations[i].items = operations[i].items.map { item in
+                  var item = item
+                  item.phase = failed ? .failed : .applied
+                  return item
+                }
                 operations[i].isCompleted = true
                 // The fold went out and was answered: its page's right half fills in the same
                 // way a live run fills it in — the input when the request is built

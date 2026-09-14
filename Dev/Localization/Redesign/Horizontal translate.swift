@@ -134,6 +134,13 @@ extension Translation {
       /// can offer for this string, and asking for it keeps the row's answer
       /// consistent; it is context, not a target.
       var targets: [LocalizationString]
+      /// Where THIS ROW is in the run's life, filled by `RunBinding` from the row's OWN items
+      /// (8.1, "stage pages"): the row page's item is a row, so this is the narrowest reading the
+      /// page needs — failed when any column of it failed, written when any was written, and
+      /// otherwise the batch's own phase, because a row whose every column is context has
+      /// nothing of its own to report. A page marks a row from the ROW's state and never from the
+      /// batch's, because a batch that wrote some of its rows IS applied.
+      var phase: Translation.Run.Phase = .pending
       var stage: Stage { .horizontal }
       /// The write-back, as a value the design preview can watch — the app's own
       /// write-back is `Runner.apply`, which is the only writer of a slot (5.5).

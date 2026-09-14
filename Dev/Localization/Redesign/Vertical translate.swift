@@ -118,6 +118,12 @@ extension Translation {
       let maxWidth: Int
       let source: StringBody
       var target: StringBody
+      /// Where THIS row is in the run's life, filled by `RunBinding` from the batch's own
+      /// `Run.Item` (8.1, "stage pages"). A page marks a row from the ROW's state and never from
+      /// the batch's, because a batch that wrote some of its rows IS applied and the rows that
+      /// went wrong are the only thing that carries the failure. `.pending` is a row nothing has
+      /// been asked about yet.
+      var phase: Translation.Run.Phase = .pending
       var stage: Stage { .vertical }
       consuming func resolve(_ target: StringBody) -> Self {
         self.target = target

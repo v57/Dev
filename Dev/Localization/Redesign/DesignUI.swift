@@ -7,6 +7,60 @@
 
 import SwiftUI
 
+extension Translation {
+  /// The mark ONE ROW carries on a stage page (8.1, "stage pages"): a reading of the ROW's own
+  /// state, never of its batch's.
+  ///
+  /// It exists because the batch's flags cannot answer the question a page is read for: a batch
+  /// is a REQUEST of many rows, and one that wrote 31 of 33 IS applied (`Runner.settle`), so a
+  /// page that marks its rows from the batch turns every row into an xmark the moment a single
+  /// one goes wrong (reader, 2026-09-14). The batch's own mark stays for the page's chrome,
+  /// where it reads as the page's summary, and it never reaches a row.
+  ///
+  /// ONE shape for all four pages: what differs between them is the symbol a row carries while
+  /// nothing has answered it, and that is what the caller passes in.
+  struct RowMark {
+    /// Where the ROW itself is in the run's life.
+    let phase: Translation.Run.Phase
+    /// The stage's own in-flight symbol: `wand.and.stars` on prelearn, `graduationcap` on learn,
+    /// `translate` on the column pass, `tablecells` on the row pass.
+    let inFlight: String
+
+    /// True while nothing has answered this row: it reads as the stage's own symbol, dimmed,
+    /// rather than as a tick or a cross.
+    var isWaiting: Bool {
+      switch phase {
+      case .failed, .applied: false
+      case .pending, .sent, .validated: true
+      }
+    }
+
+    var icon: String {
+      switch phase {
+      case .failed: "xmark.circle.fill"
+      case .applied: "checkmark.circle.fill"
+      case .pending, .sent, .validated: inFlight
+      }
+    }
+
+    var color: Color {
+      switch phase {
+      case .failed: .red
+      case .applied: .green
+      case .pending, .sent, .validated: .primary
+      }
+    }
+  }
+
+  /// How long a stage page waits before it follows the run to a NEWER batch (8.1, "PACING").
+  ///
+  /// The pause belongs to the SCROLL, never to the run: the pipeline never waits for a view. It
+  /// is the budget the page keeps between two scrolls — measured from the last one, so a batch
+  /// arriving half a second after the previous scroll waits the remaining second and a half,
+  /// while a page that has been quiet scrolls at once. ONE value for all four pages.
+  static let pagePacing: TimeInterval = 2
+}
+
 extension Translation.VerticalTranslate {
   struct Content: View {
     let index: Int
@@ -17,6 +71,10 @@ extension Translation.VerticalTranslate {
     /// gets the "nothing sent yet" reading on both halves rather than a crash.
     var exchanges: [Translation.Run.Exchange] = []
     @State var scrollPosition: Int?
+    /// When this page last followed the run to a batch. Seeded `.distantPast`, so the FIRST
+    /// appearance never waits: a page opened mid-run goes straight to the batch the run is on,
+    /// and only later CHANGES pause (8.1, "PACING").
+    @State var lastScroll: Date = .distantPast
     var body: some View {
       GeometryReader { view in
         ScrollView(.horizontal) {
@@ -27,8 +85,17 @@ extension Translation.VerticalTranslate {
           }.scrollTargetLayout()
         }.scrollTargetBehavior(.paging).scrollPosition(id: $scrollPosition, anchor: .center)
       }.task(id: index) {
+        // The pause is a BUDGET since the last scroll, not a fresh timer per change: SwiftUI
+        // cancels this task whenever `index` changes, so a sleep counted from here would share
+        // nothing and a run producing batches faster than the pause would postpone the scroll
+        // forever. Measuring from `lastScroll` keeps the page advancing — and it always lands on
+        // the NEWEST index, because a cancelled task never reaches the scroll below.
+        let target = index
+        let wait = max(0, Translation.pagePacing - Date.now.timeIntervalSince(lastScroll))
+        try? await Task.sleep(for: .seconds(wait))
+        lastScroll = .now
         withAnimation(.smooth) {
-          scrollPosition = index
+          scrollPosition = target
         }
       }
     }
@@ -46,23 +113,11 @@ extension Translation.VerticalTranslate {
     let operation: Operations
     /// Both sides of this batch's exchange — what the right half prints, unread.
     let exchange: Translation.Run.Exchange
-    var color: Color {
-      if operation.isFailed {
-        .red
-      } else if operation.isCompleted {
-        .green
-      } else {
-        .primary
-      }
-    }
-    var icon: String {
-      if operation.isFailed {
-        "xmark.circle.fill"
-      } else if operation.isCompleted {
-        "checkmark.circle.fill"
-      } else {
-        "translate"
-      }
+    /// The mark THIS row carries (8.1, "stage pages"): the row's own state, never the batch's.
+    /// The batch's flags are not read here at all — a batch that wrote some of its rows is
+    /// applied, and the row that went wrong is the only thing that carries the failure.
+    func mark(_ item: Translation.VerticalTranslate.Operation) -> Translation.RowMark {
+      Translation.RowMark(phase: item.phase, inFlight: "translate")
     }
     var body: some View {
       HStack(spacing: 0) {
@@ -74,12 +129,12 @@ extension Translation.VerticalTranslate {
               .frame(maxWidth: .infinity)
             ForEach(operation.items.enumerated(), id: \.offset) { (index, item) in
               HStack {
-                Image(systemName: icon).font(.title.bold()).frame(width: 32, height: 32)
-                  .opacity(operation.isCompleted || operation.isFailed ? 1 : 0.1)
+                Image(systemName: mark(item).icon).font(.title.bold()).frame(width: 32, height: 32)
+                  .opacity(mark(item).isWaiting ? 0.1 : 1)
                 StringView(value: operation.isCompleted ? item.target : item.source)
                   .fontWeight(operation.isCompleted ? .semibold : .regular)
                   .contentTransition(.numericText())
-              }.foregroundStyle(color).animation(.smooth.delay(Double(index) / 10), value: item)
+              }.foregroundStyle(mark(item).color).animation(.smooth.delay(Double(index) / 10), value: item)
             }
           }.padding(32)
         }.contentTransition(.symbolEffect)
@@ -407,6 +462,16 @@ extension Translation.VerticalTranslate {
               try await Task.sleep(for: .seconds(2))
               withAnimation {
                 operations[i].items = operations[i].items.map { $0.resolve($0.source.reversed()) }
+                // The ROWS' own state, the way the runner leaves it (`Runner.settle`): a batch
+                // that wrote its rows applied them one by one, and the batch this fixture marks
+                // failed wrote nothing, so its rows carry the failure themselves — which is what
+                // the page marks, and never the batch's own flag.
+                let failed = operations[i].isFailed
+                operations[i].items = operations[i].items.map { item in
+                  var item = item
+                  item.phase = failed ? .failed : .applied
+                  return item
+                }
                 operations[i].isCompleted = true
                 // The batch went out and was answered: its page's right half fills in the same
                 // way a live run fills it in — the input when the request is built

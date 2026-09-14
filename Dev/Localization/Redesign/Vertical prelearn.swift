@@ -106,6 +106,12 @@ extension Translation {
       /// the evidence `learn` compares the human's value against, and it never
       /// touches `target` or `status`: the human owns the value.
       var machine: StringBody = .empty
+      /// Where THIS row is in the run's life, filled by `RunBinding` from the batch's own
+      /// `Run.Item` (8.1, "stage pages"). A page marks a row from the ROW's state and never from
+      /// the batch's, because a batch that wrote some of its rows IS applied and the rows that
+      /// went wrong are the only thing that carries the failure. `.pending` is a row nothing has
+      /// been asked about yet.
+      var phase: Translation.Run.Phase = .pending
       var stage: Stage { .prelearn }
       consuming func resolve(_ machine: StringBody) -> Self {
         self.machine = machine
