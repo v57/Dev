@@ -303,7 +303,7 @@ final class TranslateRunController {
     }
 
     var ids = Set<PersistentIdentifier>()
-    for record in project.records {
+    for record in project.records ?? [] {
       if let key, record.key != key { continue }
       if let languages, !languages.contains(record.language) { continue }
       guard record.state != .reviewed, record.provider != .manual else { continue }

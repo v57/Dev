@@ -49,8 +49,22 @@ import SwiftData
   var contextDoc: ContextDoc?
 
   /// Every translation record reconciled from this project's catalog.
+  ///
+  /// OPTIONAL (`[TranslationRecord]?`) on purpose — the relationship's shape is
+  /// load-bearing for the store clear, and a non-optional array here is what
+  /// makes the clear cost minutes-to-hours instead of a second (Design notes 7.5,
+  /// measured). SwiftData derives the
+  /// CHILD's to-one `project` from this array's optionality: a non-optional
+  /// inverse generates `TranslationRecord/project` as a MANDATORY to-one, and
+  /// CoreData then REFUSES the store-level form of a delete —
+  /// `context.delete(model: TranslationRecord.self)` throws "Constraint trigger
+  /// violation: Batch delete failed due to mandatory OTO nullify inverse on
+  /// TranslationRecord/project" and deletes nothing — leaving the object form,
+  /// which pays SwiftData's inverse maintenance for every row (N^2 on a table this
+  /// size). Optional, the batch delete is legal and the clear is a store-level
+  /// DELETE. Read it as `project.records ?? []`; empty and nil are the same state.
   @Relationship(deleteRule: .cascade, inverse: \TranslationRecord.project)
-  var records: [TranslationRecord] = []
+  var records: [TranslationRecord]? = []
 
   // MARK: - display conveniences
 

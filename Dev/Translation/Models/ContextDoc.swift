@@ -34,8 +34,14 @@ import SwiftData
   /// The owning project; set only when scope == .project.
   var project: Project?
   /// Audit trail of every change (before -> after + reason + author).
+  ///
+  /// OPTIONAL for the same reason as `Project.records` (read that comment): a
+  /// non-optional array here generates `ContextEdit/contextDoc` as a MANDATORY
+  /// to-one, which is what makes CoreData refuse the store-level
+  /// `context.delete(model: ContextEdit.self)` the clear uses. Read it as
+  /// `doc.edits ?? []`.
   @Relationship(deleteRule: .cascade, inverse: \ContextEdit.contextDoc)
-  var edits: [ContextEdit] = []
+  var edits: [ContextEdit]? = []
 
   init(
     scope: ContextScope, identifier: String? = nil, version: Int = 1,

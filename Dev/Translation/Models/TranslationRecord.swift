@@ -97,8 +97,14 @@ import SwiftData
   /// The project whose catalog this record was reconciled from.
   var project: Project?
   /// Full before->after history — the learning corpus for Stage 0.
+  ///
+  /// OPTIONAL for the same reason as `Project.records` (read that comment): a
+  /// non-optional array here generates `TranslationEdit/record` as a MANDATORY
+  /// to-one, which is what makes CoreData refuse
+  /// `context.delete(model: TranslationEdit.self)` and forces the clear's
+  /// per-row object form. Read it as `record.edits ?? []`.
   @Relationship(deleteRule: .cascade, inverse: \TranslationEdit.record)
-  var edits: [TranslationEdit] = []
+  var edits: [TranslationEdit]? = []
 
   init(
     key: String, sourceText: String, language: String, value: String? = nil,

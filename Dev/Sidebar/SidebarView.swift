@@ -292,8 +292,7 @@ private struct ProjectlessBar: View {
         go with the session.
 
         Open catalogs re-read their files afterwards and read as untranslated work. \
-        The delete itself is row by row, so on a large store it takes a while and \
-        the app is busy until it is done.
+        The rows go in ONE pass, so even a large store is emptied in a second or two.
         """
       case .result(.cleared(let counts)):
         "Removed \(counts.summary). Every project and every .xcstrings is still here."

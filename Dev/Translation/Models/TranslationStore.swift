@@ -131,16 +131,20 @@ final class TranslationStore {
     counts.memory = try context.fetchCount(FetchDescriptor<TranslationMemoryEntry>())
     counts.cursors = try context.fetchCount(FetchDescriptor<RunCursor>())
     guard !counts.isEmpty else { return counts }
-    // One fetch-and-delete per table, the trail before the rows it points at: an edit hangs off the
-    // record it describes.
+    // One store-level DELETE per table, the trail before the rows it points at: an edit hangs off
+    // the record it describes.
     //
-    // NOT `ModelContext.delete(model:)`: the batch form is a store-level DELETE and cannot nullify
-    // `TranslationEdit.record` — a mandatory to-one whose inverse, `TranslationRecord.edits`,
-    // cascades — so it throws
-    // "Constraint trigger violation: Batch delete failed due to mandatory OTO nullify inverse on
-    // TranslationEdit/record" and deletes NOTHING. The object form walks the graph, which is what
-    // the cascade rule is for. (`Project` is deliberately not in this list — the six tables above
-    // are the scope, 7.5.)
+    // `ModelContext.delete(model:)` is a STORE-LEVEL delete, and on a big store it is the difference
+    // between two seconds and an hour: the object form walks the graph and pays SwiftData's
+    // inverse maintenance for EVERY row, which is quadratic in a table whose inverse is a to-many —
+    // measured on this app's models, 5 000 slot records 12.2 s and 10 000 48.7 s (N^2.00), i.e. hours
+    // on the reader's six-figure store. CoreData REFUSES the store-level
+    // form when the model's child to-one is mandatory ("Constraint trigger violation: Batch delete
+    // failed due to mandatory OTO nullify inverse on TranslationRecord/project"), and SwiftData
+    // derives that mandatory flag from the OPTIONALITY OF THE INVERSE ARRAY — which is why
+    // `Project.records`, `TranslationRecord.edits` and `ContextDoc.edits` are declared optional
+    // (see `Project.records`). The fallback below keeps the button working on any store that still
+    // refuses the cheap form; it is the slow path, not the plan.
     try deleteAll(TranslationEdit.self)
     try deleteAll(TranslationRecord.self)
     try deleteAll(ContextEdit.self)
@@ -152,9 +156,18 @@ final class TranslationStore {
     return counts
   }
 
-  /// Deletes every row of one model, one object at a time. See `clear()` for why the batch form of
-  /// a delete is not an option on these models.
+  /// Deletes every row of one model, store-level when the model allows it.
+  ///
+  /// The object form is the fallback, not the default: it is correct and quadratic (see `clear()`).
   private func deleteAll<T: PersistentModel>(_ model: T.Type) throws {
+    do {
+      try context.delete(model: model)
+      return
+    } catch {
+      NSLog(
+        "[TranslationStore] store-level delete of %@ refused (%@); deleting row by row",
+        String(describing: model), error as NSError)
+    }
     for row in try context.fetch(FetchDescriptor<T>()) {
       context.delete(row)
     }

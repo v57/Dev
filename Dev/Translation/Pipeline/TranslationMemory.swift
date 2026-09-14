@@ -227,7 +227,7 @@ enum TranslationMemory {
         contextVersions: hit.contextVersions,
         isUserConfirmed: false
       )
-      record.edits.append(edit)
+      record.edits = (record.edits ?? []) + [edit]
       context.insert(edit)
     }
     return outcome

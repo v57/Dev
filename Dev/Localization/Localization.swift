@@ -531,7 +531,7 @@ final class LocalizationStore {
   var needsReviewKeyCount: Int {
     guard let project else { return 0 }
     var reviewKeys = Set<String>()
-    for record in project.records {
+    for record in project.records ?? [] {
       if let value = record.value,
          !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
          record.state == .needs_review {
@@ -809,7 +809,7 @@ final class LocalizationStore {
 
   private func runInspection(_ key: String) async {
     guard let project else { return }
-    let records = project.records.filter { $0.key == key }
+    let records = (project.records ?? []).filter { $0.key == key }
     // Reviewed slots are tested for what the pipeline LEARNS from them;
     // everything still open is tested by translating it. A row can be both.
     let reviewed = records
@@ -1014,7 +1014,7 @@ final class LocalizationStore {
     guard var catalog, let project else { return }
     catalog.removePlurals(key: key)
     let context = TranslationStore.shared.context
-    for record in project.records where record.key == key && record.category != nil {
+    for record in project.records ?? [] where record.key == key && record.category != nil {
       context.delete(record)
     }
     try? context.save()
@@ -1039,7 +1039,7 @@ final class LocalizationStore {
     catalog.strings[key] = entry
     if !translatable {
       let context = TranslationStore.shared.context
-      for record in project.records where record.key == key {
+      for record in project.records ?? [] where record.key == key {
         context.delete(record)
       }
       try? context.save()
@@ -1177,7 +1177,7 @@ final class LocalizationStore {
   /// one key becomes human-reviewed in one click.
   func confirmAutoReviewedRow(_ key: String) {
     guard let project else { return }
-    for record in project.records where record.key == key && record.autoReviewed {
+    for record in project.records ?? [] where record.key == key && record.autoReviewed {
       confirmAutoReviewed(record)
     }
     saveRow(key)
@@ -1964,7 +1964,7 @@ final class LocalizationStore {
     // The relationship is already materialized here (the open path faulted it
     // in), so passing it beats a fresh 0.6 s fetch — see upsertFromCatalog.
     _ = Reconcile.upsertFromCatalog(
-      catalog, project: project, existing: project.records, context: context)
+      catalog, project: project, existing: project.records ?? [], context: context)
     try? context.save()
     self.project = project
     rebuildRecordIndex()
@@ -2021,7 +2021,7 @@ final class LocalizationStore {
       recordIndex = [:]
       return
     }
-    rebuildRecordIndex(from: project.records)
+    rebuildRecordIndex(from: project.records ?? [])
   }
 
   /// Same, from records the caller already holds. The OPEN path passes ONE

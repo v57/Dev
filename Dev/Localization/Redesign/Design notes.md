@@ -806,6 +806,35 @@ The operation classes know what to send, nothing knows how to send it.
     What that costs, stated because the button must say it too: the context documents
     and the memory are NOT re-derivable from the catalogs. They are what the app learned
     from the reader's own corrections, and this throws the learning away with the cache.
+    What the clear COSTS to run (measured 2026-09-14, through the real
+    `TranslationStore.clear()` compiled against the whole tree, on a copy of the reader's
+    own store — /tmp/dev-clearstore-cost-probe). The first version deleted the rows one
+    OBJECT at a time, and that price is quadratic in the two big tables: SwiftData
+    maintains the to-many inverse on every removal, and `Project.records` /
+    `TranslationRecord.edits` are to-many ARRAYS, so each removal is linear in the
+    children already there. 2 000 slot records took 2.80 s, 5 000 took 13.46 s, 10 000
+    took 49.68 s (N^1.9), which puts the reader's store — 167 174 slot records and 10 569
+    journal rows when this was measured — in the HOURS. Chunked saves, fresh contexts and
+    background contexts change nothing (measured on the parent card). The cheap form was
+    not available because CoreData refuses a store-level delete when a child's to-one is
+    MANDATORY ("Constraint trigger violation: Batch delete failed due to mandatory OTO
+    nullify inverse on TranslationRecord/project") — and that mandatory flag is not what
+    the to-one declares, `TranslationRecord.project` has always been `Project?`: SwiftData
+    derives it from the OPTIONALITY OF THE INVERSE ARRAY.
+    THE FIX, which is the decision this section now carries: the three inverses are
+    declared OPTIONAL (`Project.records`, `TranslationRecord.edits`, `ContextDoc.edits`),
+    which makes the store-level form legal, and `clear()` uses it for every table —
+    falling back to the row-by-row form only for a store that refuses it. Nothing else
+    about the button moves: the same six tables, the same `Project` registry kept, the
+    same in-memory drop first, the same confirmation, except that its last line now says
+    what the delete does instead of warning about a row-by-row cost.
+    MEASURED AFTER THE FIX, same probe and the same store copies: 0.12 s at 5 000 slot
+    records, and 0.82 s at the reader's full size (167 174 slot records, 10 569 journal
+    rows, 8 684 memory entries, 2 run cursors — every table read back at 0 with sqlite3,
+    `Project` still 3 and still named). The model change is a LIGHTWEIGHT migration, and
+    it was run as one: the reader's store opened with every row intact and every record
+    still reachable through its to-one (`Reconcile.records(of:in:)` read 26 156 + 141 018
+    rows, the numbers sqlite3 counts), and a pre-fix build opens the migrated store too.
     Two engineering requirements come with it:
       - a cleared store with a live in-memory cache is worse than no button. The app
         mirrors the store in `LocalizationStore`, and the redesign holds `Shell`/`Store`

@@ -98,7 +98,7 @@ final class PipelineRunContext {
       allDocs = fetched
     }
     docs = allDocs
-    allRecords = project.records.sorted { ($0.language, $0.key, $0.category ?? "") < ($1.language, $1.key, $1.category ?? "") }
+    allRecords = (project.records ?? []).sorted { ($0.language, $0.key, $0.category ?? "") < ($1.language, $1.key, $1.category ?? "") }
   }
 
   // MARK: - context docs

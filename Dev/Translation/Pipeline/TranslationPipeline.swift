@@ -569,7 +569,7 @@ struct TranslationPipeline {
       contextVersions: versions,
       isUserConfirmed: false
     )
-    record.edits.append(edit)
+    record.edits = (record.edits ?? []) + [edit]
     env.context.insert(edit)
   }
 

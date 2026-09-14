@@ -267,7 +267,7 @@ struct Stage0Learner {
     // Collect pending confirmed edits across the project, oldest first.
     var pending: [(edit: TranslationEdit, record: TranslationRecord)] = []
     for record in env.allRecords {
-      for edit in record.edits where edit.isUserConfirmed {
+      for edit in record.edits ?? [] where edit.isUserConfirmed {
         guard record.value == edit.toValue else { continue }  // superseded
         pending.append((edit, record))
       }
@@ -479,7 +479,7 @@ struct Stage0Learner {
 
     // Same "pending" rule as `learn`: the newest user-confirmed edit whose
     // value is still the record's current value.
-    let edit = record.edits
+    let edit = (record.edits ?? [])
       .filter(\.isUserConfirmed)
       .sorted { $0.createdAt < $1.createdAt }
       .last { record.value == $0.toValue }

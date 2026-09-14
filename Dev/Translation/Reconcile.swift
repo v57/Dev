@@ -92,7 +92,7 @@ nonisolated enum Reconcile {
     let descriptor = FetchDescriptor<TranslationRecord>(
       predicate: #Predicate { $0.project?.persistentModelID == id })
     if let fetched = try? context.fetch(descriptor) { return fetched }
-    return project.records
+    return project.records ?? []
   }
 
   /// The project whose catalog lives at `catalogURL`, or nil.
@@ -361,7 +361,7 @@ nonisolated enum Reconcile {
 
       if !created.isEmpty {
         // ONE bulk append instead of a to-one assignment per insert.
-        project.records.append(contentsOf: created)
+        project.records = (project.records ?? []) + created
       }
       do {
         try context.save()
@@ -486,7 +486,7 @@ nonisolated enum Reconcile {
 
       if !created.isEmpty {
         // ONE bulk append instead of a to-one assignment per insert.
-        project.records.append(contentsOf: created)
+        project.records = (project.records ?? []) + created
       }
       do {
         try context.save()
@@ -587,7 +587,7 @@ nonisolated enum Reconcile {
       }
     }
     if !created.isEmpty {
-      project.records.append(contentsOf: created)
+      project.records = (project.records ?? []) + created
     }
     // The CALLER saves: the background mirror reports a failed write to the
     // user, so the save cannot be a swallowed `try?` in here.
@@ -654,7 +654,7 @@ nonisolated enum Reconcile {
       let fileSlot = FileSlot(
         value: value, state: value != nil ? (seedState ?? .needs_review) : .empty,
         sourceText: sourceText)
-      if record.provider != nil || !record.edits.isEmpty {
+      if record.provider != nil || record.edits?.isEmpty == false {
         // DB-OWNED record: keep value/provider/state/versions; refresh the
         // source text only when it actually moved.
         if record.sourceText != sourceText { record.sourceText = sourceText }
@@ -713,7 +713,7 @@ nonisolated enum Reconcile {
       let fileSlot = FileSlot(
         value: value, state: value != nil ? (seedState ?? .needs_review) : .empty,
         sourceText: sourceText)
-      if record.provider != nil || !record.edits.isEmpty {
+      if record.provider != nil || record.edits?.isEmpty == false {
         // DB-OWNED record: keep value/provider/state/versions; the file may
         // only refresh the source text (and even that is skipped when it
         // already matches).
@@ -764,7 +764,7 @@ nonisolated enum Reconcile {
     category: String?,
     in project: Project
   ) -> TranslationRecord? {
-    project.records.first { $0.key == key && $0.language == language && $0.category == category }
+    (project.records ?? []).first { $0.key == key && $0.language == language && $0.category == category }
   }
 
   // MARK: - human edit (DB side)
@@ -809,7 +809,7 @@ nonisolated enum Reconcile {
         contextVersions: persistableVersions(ContextVersions()),
         isUserConfirmed: true
       )
-      record.edits.append(edit)
+      record.edits = (record.edits ?? []) + [edit]
       context.insert(edit)
       record.value = value
       // The human authored this value; the machine is no longer the writer.
@@ -847,7 +847,7 @@ nonisolated enum Reconcile {
   ) -> Int {
     let userName = ProcessInfo.processInfo.fullUserName
     var touched = 0
-    for record in project.records where record.key == key {
+    for record in project.records ?? [] where record.key == key {
       guard let value = record.value,
             !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
         continue
@@ -909,7 +909,7 @@ nonisolated enum Reconcile {
     context: ModelContext
   ) -> Int {
     let trimmed = note.trimmingCharacters(in: .whitespacesAndNewlines)
-    let records = project.records.filter { $0.key == key }
+    let records = (project.records ?? []).filter { $0.key == key }
     // The line folded by a previous save — retracted or replaced, if any.
     let previous = records.compactMap(\.noteFoldedText).first { !$0.isEmpty }
 
@@ -1046,7 +1046,7 @@ nonisolated enum Reconcile {
     context: ModelContext
   ) -> Int {
     var touched = 0
-    for record in project.records where record.key == key {
+    for record in project.records ?? [] where record.key == key {
       record.maxWidth = width
       record.updatedAt = .now
       touched += 1
@@ -1091,8 +1091,8 @@ nonisolated enum Reconcile {
     let sourceLanguage = catalog.sourceLanguage
 
     let records = keys.map { wanted in
-      project.records.filter { wanted.contains($0.key) }
-    } ?? project.records
+      (project.records ?? []).filter { wanted.contains($0.key) }
+    } ?? (project.records ?? [])
     for record in records {
       guard let value = record.value,
             !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -1110,7 +1110,7 @@ nonisolated enum Reconcile {
         if current == value && currentState == fileState {
           continue  // file already carries this form
         }
-        let owned = record.provider != nil || !record.edits.isEmpty
+        let owned = record.provider != nil || record.edits?.isEmpty == false
         if !owned && (current == value || current == nil) {
           continue  // file-origin seed: passive, the artifact wins
         }
@@ -1133,7 +1133,7 @@ nonisolated enum Reconcile {
       if valueMatches && stateMatches {
         continue  // file already carries this row
       }
-      let owned = record.provider != nil || !record.edits.isEmpty
+      let owned = record.provider != nil || record.edits?.isEmpty == false
       if !owned && (valueMatches || current == nil) {
         // File-origin seed: the value already matches (leave the file's raw
         // state alone), or the unit vanished from the file (the artifact
