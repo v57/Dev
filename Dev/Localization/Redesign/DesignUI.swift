@@ -11,17 +11,18 @@ extension Translation.VerticalTranslate {
   struct Content: View {
     let index: Int
     let operations: [Operations]
-    /// The model's RAW reply for each page, PARALLEL to `operations` (8.1, "stage pages").
-    /// The page shows one batch, so its reply is the entry at the page's own offset; a
-    /// caller that supplies none gets the "no reply yet" reading rather than a crash.
-    var replies: [Translation.Run.Reply] = []
+    /// BOTH SIDES of each page's exchange, PARALLEL to `operations` (8.1, "stage pages"): the
+    /// input the batch sent and the reply it got back, one value per batch. The page shows one
+    /// batch, so its exchange is the entry at the page's own offset; a caller that supplies none
+    /// gets the "nothing sent yet" reading on both halves rather than a crash.
+    var exchanges: [Translation.Run.Exchange] = []
     @State var scrollPosition: Int?
     var body: some View {
       GeometryReader { view in
         ScrollView(.horizontal) {
           LazyHStack(spacing: 0) {
             ForEach(operations.enumerated(), id: \.offset) { (offset, element) in
-              OperationContent(operation: element, reply: reply(at: offset)).frame(width: view.size.width, height: view.size.height)
+              OperationContent(operation: element, exchange: exchange(at: offset)).frame(width: view.size.width, height: view.size.height)
             }
           }.scrollTargetLayout()
         }.scrollTargetBehavior(.paging).scrollPosition(id: $scrollPosition, anchor: .center)
@@ -32,18 +33,19 @@ extension Translation.VerticalTranslate {
       }
     }
 
-    /// The reply of the batch this page is showing.
-    private func reply(at offset: Int) -> Translation.Run.Reply {
-      replies.indices.contains(offset) ? replies[offset] : Translation.Run.Reply(raw: nil, phase: .pending)
+    /// The exchange of the batch this page is showing: batch N's input beside batch N's reply,
+    /// because the two are one value (`Run.Exchange`) taken from the batch at this offset.
+    private func exchange(at offset: Int) -> Translation.Run.Exchange {
+      exchanges.indices.contains(offset) ? exchanges[offset] : .unsent
     }
   }
   /// The page, SPLIT IN HALF (8.1, "stage pages"): the batch's own items on the left,
-  /// exactly as this page always showed them, and the model's RAW reply for that batch on
-  /// the right.
+  /// exactly as this page always showed them, and the batch's EXCHANGE on the right — what
+  /// was sent to the model, and what it answered.
   struct OperationContent: View {
     let operation: Operations
-    /// The batch's raw reply — what the right half prints, unread.
-    let reply: Translation.Run.Reply
+    /// Both sides of this batch's exchange — what the right half prints, unread.
+    let exchange: Translation.Run.Exchange
     var color: Color {
       if operation.isFailed {
         .red
@@ -85,8 +87,8 @@ extension Translation.VerticalTranslate {
 
         Divider()
 
-        // The model's RAW reply for this batch, printed as it came back.
-        Translation.RawReplyPane(reply: reply)
+        // BOTH sides of this batch's exchange: the input that was sent, then the reply.
+        Translation.RawExchangePane(exchange: exchange)
           .frame(maxWidth: .infinity)
       }
     }
@@ -110,11 +112,11 @@ extension Translation.VerticalTranslate {
   struct Test: View {
     @State var index = 0
     @State var operations: [Operations] = Test.sample
-    /// The raw replies this sample's batches answered with, PARALLEL to `operations` — the
-    /// right half of every page (8.1). It starts as `Test.replies` and the preview's own
-    /// fake run fills each page in as it lands, exactly as `Runner` sets the batch's reply
-    /// when a call returns.
-    @State var replies: [Translation.Run.Reply] = Test.replies
+    /// Both sides of the exchange each of this sample's batches has with the model, PARALLEL to
+    /// `operations` — the right half of every page (8.1). It starts as `Test.exchanges` and the
+    /// preview's own fake run fills a page in as it lands, exactly as `Runner` sets the batch's
+    /// input when it goes out and its reply when a call returns.
+    @State var exchanges: [Translation.Run.Exchange] = Test.exchanges
 
     /// Sample batches for the design preview: ten items each, one batch of every
     /// shape the view has to lay out — a settled column, a character-budget split
@@ -357,22 +359,45 @@ extension Translation.VerticalTranslate {
       """,
     ]
 
-    /// What each page's right half starts with, aligned with `sample`: the batches that landed
-    /// carry their raw reply, the failed one carries what actually came back (nothing), and the
-    /// last has not been sent yet — so its pane says "no reply yet" instead of showing an
-    /// unexplained empty box.
-    static var replies: [Translation.Run.Reply] {
+    /// The INPUT of every page, aligned with `sample` (8.1): the request the batch sends — a
+    /// system message, the L0 and L1 blocks, and the ITEMS payload last — assembled from the
+    /// batch's OWN items in the order the wire carries them, so a page's input and its reply
+    /// describe the same batch (4.3).
+    static var requests: [Translation.Prompt.Request] {
+      sample.map { batch in
+        Translation.SampleRequest.languageBatch(
+          language: batch.language,
+          items: batch.items.map { item in
+            Translation.SampleRequest.Item(
+              source: Translation.SampleRequest.body(item.source),
+              target: Translation.SampleRequest.body(item.target),
+              comment: item.comment, maxWidth: item.maxWidth)
+          })
+      }
+    }
+
+    /// What each page's right half starts with, aligned with `sample`: the batches that were
+    /// SENT carry their input, the ones that landed carry the reply they got, the failed one
+    /// carries what actually came back (nothing — an empty answer is a defect, 5.3), and the
+    /// last has not been sent yet — so its pane says so on BOTH halves instead of showing two
+    /// unexplained empty boxes.
+    static var exchanges: [Translation.Run.Exchange] {
       [
-        Translation.Run.Reply(raw: answers[0], phase: .applied),
-        Translation.Run.Reply(raw: answers[1], phase: .applied),
-        Translation.Run.Reply(raw: answers[2], phase: .applied),
-        Translation.Run.Reply(raw: answers[3], phase: .failed),
-        Translation.Run.Reply(raw: nil, phase: .pending),
+        Translation.Run.Exchange(
+          request: requests[0], reply: Translation.Run.Reply(raw: answers[0], phase: .applied)),
+        Translation.Run.Exchange(
+          request: requests[1], reply: Translation.Run.Reply(raw: answers[1], phase: .applied)),
+        Translation.Run.Exchange(
+          request: requests[2], reply: Translation.Run.Reply(raw: answers[2], phase: .applied)),
+        Translation.Run.Exchange(
+          request: requests[3], reply: Translation.Run.Reply(raw: answers[3], phase: .failed)),
+        Translation.Run.Exchange(
+          request: nil, reply: Translation.Run.Reply(raw: nil, phase: .pending)),
       ]
     }
 
     var body: some View {
-      Content(index: index, operations: operations, replies: replies)
+      Content(index: index, operations: operations, exchanges: exchanges)
         .task {
           do {
             for i in 0..<operations.count {
@@ -383,10 +408,13 @@ extension Translation.VerticalTranslate {
               withAnimation {
                 operations[i].items = operations[i].items.map { $0.resolve($0.source.reversed()) }
                 operations[i].isCompleted = true
-                // The batch answered: its page's right half fills in the same way a live
-                // run fills it in (`Run.Batch.rawReply`), so the fixture covers both the
-                // open batch and the answered one.
-                replies[i] = Translation.Run.Reply(raw: Test.answers[i], phase: .applied)
+                // The batch went out and was answered: its page's right half fills in the same
+                // way a live run fills it in — the input when the request is built
+                // (`Run.Batch.request`), then the reply when the call returns
+                // (`Run.Batch.rawReply`).
+                exchanges[i] = Translation.Run.Exchange(
+                  request: Test.requests[i],
+                  reply: Translation.Run.Reply(raw: Test.answers[i], phase: .applied))
               }
               try await Task.sleep(for: .seconds(1))
             }
@@ -419,31 +447,117 @@ extension Plurals {
 }
 
 extension Translation {
-  /// The RIGHT half of a stage page: the model's raw reply for the batch the page is
-  /// showing, printed as it came back (8.1, "stage pages").
+  /// The RIGHT half of a stage page: BOTH SIDES of the batch's exchange — the model INPUT that
+  /// went out and the model's RAW reply that came back (8.1, "stage pages").
   ///
-  /// RAW means raw. Nothing here parses, validates, summarises or reformats the text: the
-  /// pane exists so that what the validator accepted, what the repair step fixed and what
-  /// the paid gate was asked about is VISIBLE instead of inferred. It is monospaced (a
-  /// reply is JSON, and JSON is easier to check in a fixed pitch), it scrolls, and it is
-  /// selectable — the reason a human reads it is usually to copy a piece of it out. It is
-  /// a `Text`: read-only by construction.
+  /// RAW means raw, on both sides. Nothing here parses, validates, summarises or reformats: the
+  /// pane exists so that what the model was ASKED and what it ANSWERED is visible instead of
+  /// inferred, and one request is one batch, so a page shows exactly one exchange. Both halves
+  /// are monospaced (a request and a reply are structured text, and structure is easier to check
+  /// in a fixed pitch), they scroll together, and they are selectable — the reason a human reads
+  /// them is usually to copy a piece of one out. They are `Text`: read-only by construction.
   ///
-  /// It lives beside `VerticalTranslate.StringView`, the other component every page
-  /// prints, and it is the ONE pane the four stage pages share, so the split reads the same
-  /// on all of them.
+  /// The INPUT marks where the provider's CACHEABLE PREFIX ends (4.3): that byte-prefix is what
+  /// the tally's cached share is about (5.7), and a flat zero there means the prefix moved
+  /// rather than the provider being unlucky. The boundary is drawn from the request's OWN
+  /// `cacheablePrefix` and asserted against what is sent — never eyeballed.
   ///
-  /// The states are a diagnostic surface's, not a blank box's: a batch with no reply yet
-  /// says so, a batch no request was spent on says THAT (`Runner.resolveMemory` answers a
-  /// slot before a request is built), a request that failed says so, a reply that is empty
-  /// or whitespace is reported as the model answering nothing, and everything else is the
-  /// reply itself. `state(of:)` decides which, so the pane and a probe ask the same
-  /// question.
-  struct RawReplyPane: View {
-    let reply: Run.Reply
+  /// The states are a diagnostic surface's, not a blank box's, and each half carries its OWN
+  /// reading: a batch nobody has sent has no input AND no reply, and says so on BOTH halves
+  /// rather than showing two empty boxes; a batch translation memory answered has no request
+  /// behind it and no reply either; a request that failed still shows what it was about to ask;
+  /// and a reply that came back empty reads as the model answering nothing — never as a missing
+  /// input.
+  ///
+  /// It lives beside `VerticalTranslate.StringView`, the other component every page prints, and
+  /// it is the ONE pane the four stage pages share, so the split reads the same on all of them.
+  struct RawExchangePane: View {
+    let exchange: Run.Exchange
 
-    /// What the right half shows.
-    enum State: Equatable {
+    /// The string `Prompt.request` joins a request's blocks with, repeated here because the pane
+    /// prints the two messages as one text and has to know where the first stops. The copy is
+    /// SAFE: the boundary assertion below compares the request's own `cacheablePrefix` against
+    /// what this separator produces, so a change in `Prompt` fires the assertion instead of
+    /// sliding the marker.
+    static let messageSeparator = "\n\n"
+
+    // MARK: - the input
+
+    /// What the INPUT half shows.
+    enum InputState: Equatable {
+      /// No request has gone out for this batch yet: it is scanned and waiting.
+      case notSent
+      /// No request was ever built: translation memory answered every item of the batch
+      /// (`Run.resolveMemory`), so nothing was asked and there is no call to regret.
+      case noRequest
+      /// The batch failed before a request was built.
+      case failed
+      /// The request, verbatim.
+      case input(Prompt.Request)
+    }
+
+    /// The state a batch's INPUT is in. A request is kept the moment it is BUILT
+    /// (`Run.Batch.request`), so a request that is there is the one that went out — a batch
+    /// whose call then failed included; when it is not there, the phase says which of the three
+    /// reasons it is, because an absent request means three different things.
+    static func inputState(of exchange: Run.Exchange) -> InputState {
+      if let request = exchange.request { return .input(request) }
+      switch exchange.reply.phase {
+      case .applied: return .noRequest
+      case .failed: return .failed
+      case .pending, .sent, .validated, .repaired: return .notSent
+      }
+    }
+
+    /// Where a request's cacheable prefix ends, in the terms the pane draws it: how many
+    /// characters of what is sent the provider may cache, and where that run stops inside the
+    /// USER message (the second of the two messages the pane prints).
+    ///
+    /// `userOffset` may sit at either EDGE — the prefix is the system message alone when the
+    /// project has no context documents to send, and it covers the whole user message when
+    /// nothing but L0 went out — which is why the pane draws a boundary at an edge as readily as
+    /// at an offset.
+    struct Cacheable: Equatable {
+      /// `cacheablePrefix.count`: what the telemetry counts as the cacheable share (5.7).
+      let characters: Int
+      /// The offset into the user message where the prefix ends. Negative and past-the-end are
+      /// legal and mean an EDGE.
+      let userOffset: Int
+      /// The user message's own length, so an edge can be told from a cut.
+      let userCharacters: Int
+
+      /// Whether the boundary falls strictly inside the user message — the ordinary case, since
+      /// L0 is non-empty for a real batch.
+      var isInsideUserMessage: Bool { userOffset > 0 && userOffset < userCharacters }
+    }
+
+    /// A request's cacheable prefix, mapped onto the text this pane prints — or nil when the
+    /// request carries none to mark.
+    ///
+    /// The two assertions are the point of the function: the prefix must be a REAL prefix of
+    /// what is sent, and the offset the pane draws must be exactly where that prefix ends. A
+    /// marker placed by eye would be a claim about the provider cache the pane cannot back up,
+    /// and 5.7 reads that share as evidence.
+    static func cacheable(of request: Prompt.Request) -> Cacheable? {
+      let prefix = request.cacheablePrefix
+      guard !prefix.isEmpty else { return nil }
+      let sent = request.system + messageSeparator + request.user
+      assert(
+        sent.hasPrefix(prefix),
+        "Prompt's cacheable prefix is not a prefix of what this request sends")
+      let offset = prefix.count - request.system.count - messageSeparator.count
+      assert(
+        !(offset > 0 && offset < request.user.count)
+          || prefix == request.system + messageSeparator + request.user.prefix(offset),
+        "the cacheable boundary the pane draws is not where the prefix ends")
+      return Cacheable(
+        characters: prefix.count, userOffset: offset, userCharacters: request.user.count)
+    }
+
+    // MARK: - the reply
+
+    /// What the REPLY half shows.
+    enum ReplyState: Equatable {
       /// Nothing has answered this batch yet: it is scanned and in flight.
       case pending
       /// No request was ever sent: translation memory answered every item of the batch
@@ -461,7 +575,7 @@ extension Translation {
     /// The state a batch's reply is in. The phase is what separates a batch nobody has sent
     /// yet from one no model will ever answer, and it comes off the batch rather than off
     /// the text: an absent reply means four different things.
-    static func state(of reply: Run.Reply) -> State {
+    static func replyState(of reply: Run.Reply) -> ReplyState {
       guard let raw = reply.raw else {
         switch reply.phase {
         case .applied: return .noRequest
@@ -476,7 +590,15 @@ extension Translation {
       VStack(alignment: .leading, spacing: 0) {
         header
         Divider()
-        content
+        ScrollView {
+          VStack(alignment: .leading, spacing: 0) {
+            // The input FIRST: it is the question the reply answers, and a reader checking a
+            // failure needs to see what was asked before what came back.
+            inputHalf
+            Divider()
+            replyHalf
+          }
+        }
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       .background(.thinMaterial)
@@ -484,10 +606,10 @@ extension Translation {
 
     private var header: some View {
       HStack(spacing: 8) {
-        Image(systemName: "curlybraces").foregroundStyle(.secondary)
+        Image(systemName: "arrow.left.arrow.right").foregroundStyle(.secondary)
         VStack(alignment: .leading, spacing: 2) {
-          Text("Model reply").font(.headline)
-          Text("Raw, as it came back for this batch — nothing parsed, nothing summarised.")
+          Text("Model exchange").font(.headline)
+          Text("Both sides of this batch: what was sent, and what came back — nothing parsed, nothing summarised.")
             .font(.caption)
             .foregroundStyle(.secondary)
         }
@@ -496,34 +618,166 @@ extension Translation {
       .padding(12)
     }
 
+    // MARK: - the two halves
+
+    /// The INPUT: the system message, then the user message with the prefix's end marked in it.
     @ViewBuilder
-    private var content: some View {
-      switch Self.state(of: reply) {
-      case .pending:
-        note(
-          icon: "clock.arrow.circlepath", title: "No reply yet",
-          detail: "This batch is in flight — the model's answer appears here when it comes back.")
-      case .noRequest:
-        note(
-          icon: "memorychip", title: "No request was spent",
-          detail: "Translation memory answered every item of this batch, so there is no reply to show (6.2).")
-      case .failed:
-        note(
-          icon: "exclamationmark.triangle", title: "No reply",
-          detail: "The request failed before the model answered. The run's failure report carries the reason.")
-      case .empty:
-        note(
-          icon: "text.badge.xmark", title: "The model answered nothing",
-          detail: "The reply came back empty — whitespace only, which is an empty answer and a defect (5.3).")
-      case .reply(let raw):
-        ScrollView {
-          Text(raw)
-            .font(.system(.callout, design: .monospaced))
-            .textSelection(.enabled)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(12)
+    private var inputHalf: some View {
+      VStack(alignment: .leading, spacing: 0) {
+        halfHeader(
+          icon: "arrow.up.circle", title: "Model input",
+          detail: "Exactly what went out for this batch: the system message, then the user message — L0, L1, the items last (4.3).")
+        switch Self.inputState(of: exchange) {
+        case .notSent:
+          note(
+            icon: "clock.arrow.circlepath", title: "Not sent yet",
+            detail: "This batch has no request on the wire yet, so there is no input to show — it appears here the moment it goes out.")
+        case .noRequest:
+          note(
+            icon: "memorychip", title: "No request was spent",
+            detail: "Translation memory answered every item of this batch, so nothing was asked of the model (6.2).")
+        case .failed:
+          note(
+            icon: "exclamationmark.triangle", title: "No input",
+            detail: "The batch failed before a request was built. The run's failure report carries the reason.")
+        case .input(let request):
+          blocks(request)
         }
       }
+    }
+
+    /// The REPLY: what came back, printed as it came — or why nothing did.
+    @ViewBuilder
+    private var replyHalf: some View {
+      VStack(alignment: .leading, spacing: 0) {
+        halfHeader(
+          icon: "arrow.down.circle", title: "Model reply",
+          detail: "The answer to that request, as it came back — nothing parsed, nothing summarised.")
+        switch Self.replyState(of: exchange.reply) {
+        case .pending:
+          note(
+            icon: "clock.arrow.circlepath", title: "No reply yet",
+            detail: "This batch is in flight — the model's answer appears here when it comes back.")
+        case .noRequest:
+          note(
+            icon: "memorychip", title: "No request was spent",
+            detail: "Translation memory answered every item of this batch, so there is no reply to show (6.2).")
+        case .failed:
+          note(
+            icon: "exclamationmark.triangle", title: "No reply",
+            detail: "The request failed before the model answered. The run's failure report carries the reason.")
+        case .empty:
+          note(
+            icon: "text.badge.xmark", title: "The model answered nothing",
+            detail: "The reply came back empty — whitespace only, which is an empty answer and a defect (5.3).")
+        case .reply(let raw):
+          text(raw).padding(.bottom, 12)
+        }
+      }
+    }
+
+    // MARK: - one request, printed
+
+    /// A request as the wire carried it: the system message, then the user message with the
+    /// cacheable prefix's end marked inside it.
+    private func blocks(_ request: Prompt.Request) -> some View {
+      VStack(alignment: .leading, spacing: 0) {
+        blockLabel("System message")
+        text(request.system)
+        blockLabel("User message")
+        userMessage(request, Self.cacheable(of: request))
+      }
+    }
+
+    /// The user message, SPLIT AT THE PREFIX: what stands above the rule is what the provider may
+    /// cache, and the rule says how much of what was sent that is. The prefix always covers the
+    /// system message, so its end is drawn inside the user message or at one of its edges.
+    @ViewBuilder
+    private func userMessage(_ request: Prompt.Request, _ cacheable: Cacheable?) -> some View {
+      if let cacheable, cacheable.isInsideUserMessage {
+        text(String(request.user.prefix(cacheable.userOffset)))
+        boundary(cacheable, at: .cut)
+        text(String(request.user.dropFirst(cacheable.userOffset)))
+      } else if let cacheable, cacheable.userOffset >= cacheable.userCharacters {
+        text(request.user)
+        boundary(cacheable, at: .end)
+      } else if let cacheable {
+        boundary(cacheable, at: .start)
+        text(request.user)
+      } else {
+        text(request.user)
+      }
+    }
+
+    /// Where the boundary sits, which decides what the caption can say about it.
+    private enum Edge {
+      /// The prefix is the system message alone: the user message is entirely uncached.
+      case start
+      /// The prefix ends part-way through the user message — the ordinary case.
+      case cut
+      /// Everything sent is cacheable.
+      case end
+    }
+
+    /// The prefix's end, drawn as a rule across the input. It is what makes the tally's cached
+    /// share checkable: a prefix that moved is visible here before the share reads zero (5.7).
+    private func boundary(_ cacheable: Cacheable, at edge: Edge) -> some View {
+      HStack(spacing: 8) {
+        Rectangle().fill(.tertiary).frame(height: 1)
+        Text(caption(cacheable, at: edge))
+          .font(.caption2)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+        Rectangle().fill(.tertiary).frame(height: 1)
+      }
+      .padding(.horizontal, 12)
+      .padding(.vertical, 6)
+    }
+
+    private func caption(_ cacheable: Cacheable, at edge: Edge) -> String {
+      switch edge {
+      case .start:
+        "cacheable prefix ends here, with the system message: \(cacheable.characters) characters of what was sent are cacheable, the user message is not"
+      case .cut:
+        "cacheable prefix ends here: \(cacheable.characters) characters of what was sent, system message included"
+      case .end:
+        "cacheable prefix ends here: everything this request sent is cacheable (\(cacheable.characters) characters)"
+      }
+    }
+
+    private func halfHeader(icon: String, title: String, detail: String) -> some View {
+      HStack(alignment: .firstTextBaseline, spacing: 8) {
+        Image(systemName: icon).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 2) {
+          Text(title).font(.subheadline.weight(.semibold))
+          Text(detail).font(.caption).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        Spacer(minLength: 0)
+      }
+      .padding(.horizontal, 12)
+      .padding(.top, 12)
+      .padding(.bottom, 4)
+    }
+
+    /// What a body on the wire IS — a label, not a title: raw text needs no decoration.
+    private func blockLabel(_ label: String) -> some View {
+      Text(label.uppercased())
+        .font(.caption2.weight(.semibold))
+        .foregroundStyle(.tertiary)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+        .padding(.bottom, 3)
+    }
+
+    /// One message or reply body, verbatim and selectable.
+    private func text(_ body: String) -> some View {
+      Text(body)
+        .font(.system(.callout, design: .monospaced))
+        .textSelection(.enabled)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12)
     }
 
     private func note(icon: String, title: String, detail: String) -> some View {
@@ -537,6 +791,243 @@ extension Translation {
       }
       .padding(12)
       .frame(maxWidth: .infinity, alignment: .leading)
+    }
+  }
+
+  /// The four previews' stand-in for the request `Prompt` assembles.
+  ///
+  /// A preview has no project to build a real request from, and the pane draws where the
+  /// provider's CACHEABLE PREFIX ends — an offset that only means something if the blocks are in
+  /// the order the wire carries them (4.3: L0, then L1, then L2, the payload last, each block one
+  /// function). So a fixture assembles its input here, in that order, from the page's OWN items
+  /// and from the CLOSED SET of item fields (`comment`, `maxWidth`, `source`, `target` — plus
+  /// `language` on a row batch, and never the key).
+  ///
+  /// It is a FIXTURE, not a second builder: nothing in the run reads it, nothing here writes
+  /// anything, and it lives beside the pane it feeds rather than beside `Prompt`.
+  enum SampleRequest {
+    /// A body on the wire: a flat value, or an object of plural category -> text (4.3).
+    enum Body: Equatable {
+      case text(String)
+      case forms([String: String])
+    }
+
+    /// One item as the payload carries it.
+    struct Item {
+      let source: Body
+      let target: Body
+      let comment: String
+      var maxWidth: Int = 0
+      /// A row batch names each item's language; a language batch names its own instead.
+      var language: String? = nil
+    }
+
+    /// A `StringBody` as the payload carries it.
+    static func body(_ body: Translation.StringBody) -> Body {
+      switch body {
+      case .value(let text):
+        return .text(text)
+      case .plural(let plural):
+        return .forms(
+          Dictionary(
+            plural.values.map { ($0.rule.rawValue, $0.value) },
+            uniquingKeysWith: { first, _ in first }))
+      }
+    }
+
+    /// A lesson, as the fold's own request carries it (`Prompt.Lesson`).
+    struct Lesson {
+      let key: String
+      let source: String
+      let comment: String
+      let machine: String
+      let value: String
+    }
+
+    /// The system message. The real one is per shape and long, so the fixture carries the shape
+    /// — job, direction, the JSON array asked for — abridged rather than invented, because the
+    /// system text is the outermost part of the cacheable prefix and a fixture that changed the
+    /// shape would mark the boundary in the wrong place.
+    static let system = """
+      You are a careful software-localization translator. The items to translate are in the \
+      "ITEMS" section of the user message; the target language is named in the \
+      "TARGET LANGUAGE" section.
+
+      Rules:
+      1. Output ONLY a JSON array — no prose, no markdown fences. Each element is \
+      {"id": <the item's id>, "text": <the translation>}, one element per input item, in the \
+      same order.
+      2. An item's "id" is its position in this batch: echo it back unchanged.
+      3. Preserve placeholders (%@, %11$@, %lld, {name}), format specifiers and code tokens \
+      exactly as written.
+      4. Context sections in the user message are authoritative.
+      5. When an item's "source" and "target" are OBJECTS of plural categories, answer with the \
+      same object shape, one entry per category.
+      6. A filled "target" is the current value of that slot: produce the better translation for \
+      the same slot, or answer with the same value when it is already right.
+      7. When an item carries "maxWidth", keep the translation within that many characters if \
+      you can do it without losing meaning.
+      """
+
+    /// L0: the same for every target language of a project, which is the whole reason it is the
+    /// cacheable part (4.3). One project, so the fixtures share one L0.
+    static let shared = [
+      """
+      CONTEXT — GLOBAL
+      Hermes is the product name: never translated, never declined.
+      Use the formal register throughout the UI.
+      """,
+      """
+      CONTEXT — PROJECT
+      Buttons read as an imperative ("Save", "Cancel"), never as a noun.
+      Settings tab names are one word.
+      """,
+    ]
+
+    /// The lesson lines the fixtures' language documents carry, by language, in the redesign's own
+    /// format (3.7: KEY<TAB>SOURCE<TAB>VALUE, real tabs) — the L1 block a batch of that language
+    /// travels with.
+    static let documents: [String: [String]] = [
+      "ru": [
+        "button.save\tSave\tСохранить",
+        "sidebar.projects\tProjects\tПроекты",
+        "alert.title\tSomething went wrong\tПроизошла ошибка",
+      ],
+      "de": [
+        "button.save\tSave\tSichern",
+        "tabs.general\tGeneral\tAllgemein",
+        "status.reviewed\tReviewed\tGeprüft",
+      ],
+      "ja": [
+        "button.save\tSave\t保存",
+        "items.count\t%d strings\t%d件",
+        "settings.title\tSettings\t設定",
+      ],
+      "ar": [
+        "settings.title\tSettings\tالإعدادات",
+        "button.delete\tDelete\tحذف",
+        "tabs.advanced\tAdvanced\tمتقدّم",
+      ],
+    ]
+
+    /// The register sample (`EXISTING TRANSLATIONS`): what this project already says in the
+    /// language, as the source = value pairs the block is made of (4.3).
+    static let register: [String: [String]] = [
+      "ru": ["Settings = Настройки", "Cancel = Отмена", "Delete = Удалить"],
+      "de": ["Cancel = Abbrechen", "Delete = Löschen", "Settings = Einstellungen"],
+      "ja": ["Cancel = キャンセル", "Delete = 削除", "General = 一般"],
+      "ar": ["Save = حفظ", "Cancel = إلغاء", "Delete = حذف"],
+    ]
+
+    /// A language batch: L0 (global, project), L1 (target language, its lesson document, the
+    /// register sample), then L2 — the ITEMS payload last (`Prompt.languageBatch`).
+    static func languageBatch(language: String, items: [Item]) -> Prompt.Request {
+      var rest = ["TARGET LANGUAGE\n" + language]
+      if let lines = documents[language], !lines.isEmpty {
+        rest.append("CONTEXT — LANGUAGE (\(language))\n" + lines.joined(separator: "\n"))
+      }
+      if let lines = register[language], !lines.isEmpty {
+        rest.append("EXISTING TRANSLATIONS (\(language))\n" + lines.joined(separator: "\n"))
+      }
+      rest.append("ITEMS\n" + json(items))
+      return request(system: system, l0: shared, rest: rest, ids: positions(count: items.count))
+    }
+
+    /// A row batch: L0 then ITEMS, each item naming its own language — no L1 block at all
+    /// (`Prompt.rowBatch`), because the row's settled columns ARE its reference.
+    static func rowBatch(items: [Item]) -> Prompt.Request {
+      request(
+        system: system, l0: shared, rest: ["ITEMS\n" + json(items)],
+        ids: positions(count: items.count))
+    }
+
+    /// The learn fold: a request of its own shape, with NO L0/L1 blocks and no ids — its reply is
+    /// document TEXT rather than a per-id map (`Prompt.learnFold`), which is exactly why the pane
+    /// marks no cacheable boundary on it.
+    static func learnFold(language: String, lessons: [Lesson], document: [String]) -> Prompt.Request {
+      let lines: [[String: Any]] = lessons.map { lesson in
+        [
+          "key": lesson.key, "source": lesson.source, "comment": lesson.comment,
+          "machine": lesson.machine, "value": lesson.value,
+        ]
+      }
+      let body = document.joined(separator: "\n")
+      let user = """
+        LESSONS — what the machine produced vs what the human settled on
+        \(jsonRows(lines))
+
+        CURRENT \(language.uppercased()) DOCUMENT — \(body.count) characters, budget \(Limits.languageContext)
+        \(body.isEmpty ? "(the document is empty)" : body)
+        """
+      return Prompt.Request(
+        system: """
+          You are the learning engine of a software-localization pipeline. You maintain ONE \
+          plain-text document of accumulated lessons for the target language "\(language)". Your \
+          job is the line (or lines) this fold APPENDS to the document — the fields are KEY, \
+          SOURCE and VALUE, separated by real tab characters, one line per lesson, and nothing \
+          else. Reply with exactly the single line NO_CHANGE when the document already covers \
+          every lesson.
+          """,
+        user: user)
+    }
+
+    // MARK: - assembly
+
+    /// The order `Prompt.request` uses, and the same prefix rule: the system message plus the L0
+    /// blocks, laid out exactly as the two messages are laid out, which is what makes the
+    /// boundary the pane draws a real one.
+    private static func request(
+      system: String, l0: [String], rest: [String], ids: [String]
+    ) -> Prompt.Request {
+      Prompt.Request(
+        system: system,
+        user: (l0 + rest).joined(separator: RawExchangePane.messageSeparator),
+        ids: ids,
+        cacheablePrefix: ([system] + l0).joined(separator: RawExchangePane.messageSeparator))
+    }
+
+    private static func positions(count: Int) -> [String] {
+      (0..<count).map { String($0) }
+    }
+
+    /// The ITEMS payload, deterministic the way `Prompt.json` is (sorted keys, no escaped
+    /// slashes) so a fixture's request reads like the one the wire carries.
+    private static func json(_ items: [Item]) -> String {
+      let rows: [[String: Any]] = items.enumerated().map { index, item in
+        var row: [String: Any] = [
+          "id": index, "source": jsonBody(item.source), "target": jsonBody(item.target),
+        ]
+        if !item.comment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+          row["comment"] = item.comment
+        }
+        if item.maxWidth > 0 {
+          row["maxWidth"] = item.maxWidth
+        }
+        if let language = item.language {
+          row["language"] = language
+        }
+        return row
+      }
+      return jsonRows(rows)
+    }
+
+    /// A body as JSON: a string for a flat value, an object of category -> text for a plural
+    /// one. An empty skeleton therefore travels as the same categories with empty strings, which
+    /// is the "fill these" signal the model is given (4.3).
+    private static func jsonBody(_ body: Body) -> Any {
+      switch body {
+      case .text(let text): return text
+      case .forms(let forms): return forms
+      }
+    }
+
+    private static func jsonRows(_ rows: [[String: Any]]) -> String {
+      guard !rows.isEmpty,
+        let data = try? JSONSerialization.data(
+          withJSONObject: rows, options: [.sortedKeys, .withoutEscapingSlashes]),
+        let text = String(data: data, encoding: .utf8)
+      else { return "[]" }
+      return text
     }
   }
 }

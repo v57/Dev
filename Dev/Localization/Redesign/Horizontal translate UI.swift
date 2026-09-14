@@ -52,10 +52,11 @@ extension Translation.HorizontalTranslate {
   struct Content: View {
     let index: Int
     let operations: [Operations]
-    /// The model's RAW reply for each page, PARALLEL to `operations` (8.1, "stage pages").
-    /// The page shows one batch, so its reply is the entry at the page's own offset; a
-    /// caller that supplies none gets the "no reply yet" reading rather than a crash.
-    var replies: [Translation.Run.Reply] = []
+    /// BOTH SIDES of each page's exchange, PARALLEL to `operations` (8.1, "stage pages"): the
+    /// input the batch sent and the reply it got back, one value per batch. The page shows one
+    /// batch, so its exchange is the entry at the page's own offset; a caller that supplies none
+    /// gets the "nothing sent yet" reading on both halves rather than a crash.
+    var exchanges: [Translation.Run.Exchange] = []
     /// The journal this page reads (`Write`): the live page is handed its project's
     /// (`journal(of:)`), the design preview its sample's. Empty is legal and shows
     /// the pre-pass reading only — no write is claimed without evidence.
@@ -66,7 +67,7 @@ extension Translation.HorizontalTranslate {
         ScrollView(.horizontal) {
           LazyHStack(spacing: 0) {
             ForEach(operations.enumerated(), id: \.offset) { (offset, element) in
-              OperationContent(operation: element, reply: reply(at: offset), journal: journal).frame(width: view.size.width, height: view.size.height)
+              OperationContent(operation: element, exchange: exchange(at: offset), journal: journal).frame(width: view.size.width, height: view.size.height)
             }
           }.scrollTargetLayout()
         }.scrollTargetBehavior(.paging).scrollPosition(id: $scrollPosition, anchor: .center)
@@ -77,9 +78,10 @@ extension Translation.HorizontalTranslate {
       }
     }
 
-    /// The reply of the batch this page is showing.
-    private func reply(at offset: Int) -> Translation.Run.Reply {
-      replies.indices.contains(offset) ? replies[offset] : Translation.Run.Reply(raw: nil, phase: .pending)
+    /// The exchange of the batch this page is showing: batch N's input beside batch N's reply,
+    /// because the two are one value (`Run.Exchange`) taken from the batch at this offset.
+    private func exchange(at offset: Int) -> Translation.Run.Exchange {
+      exchanges.indices.contains(offset) ? exchanges[offset] : .unsent
     }
   }
   /// A page per ROW, not per language: one request carries every column of the row,
@@ -88,11 +90,11 @@ extension Translation.HorizontalTranslate {
   /// what this pass did to it.
   ///
   /// SPLIT IN HALF (8.1, "stage pages"): those rows on the left as they always were and
-  /// the model's RAW reply for the batch on the right.
+  /// the batch's EXCHANGE on the right — what was sent, and what came back.
   struct OperationContent: View {
     let operation: Operations
-    /// The batch's raw reply — what the right half prints, unread.
-    let reply: Translation.Run.Reply
+    /// Both sides of this batch's exchange — what the right half prints, unread.
+    let exchange: Translation.Run.Exchange
     /// The journal, so the page can tell a column this pass FILLED from one it
     /// REWROTE (`outcome(_:)`). Empty claims nothing.
     var journal: [Write] = []
@@ -273,8 +275,8 @@ extension Translation.HorizontalTranslate {
 
         Divider()
 
-        // The model's RAW reply for this batch, printed as it came back.
-        Translation.RawReplyPane(reply: reply)
+        // BOTH sides of this batch's exchange: the input that was sent, then the reply.
+        Translation.RawExchangePane(exchange: exchange)
           .frame(maxWidth: .infinity)
       }
     }
@@ -282,11 +284,11 @@ extension Translation.HorizontalTranslate {
   struct Test: View {
     @State var index = 0
     @State var operations: [Operations] = Test.sample
-    /// The raw replies this sample's batches answered with, PARALLEL to `operations` — the
-    /// right half of every page (8.1). It starts as `Test.replies` and the preview's own
-    /// fake run fills a page in as its batch lands, exactly as `Runner` sets the batch's
-    /// reply when a call returns.
-    @State var replies: [Translation.Run.Reply] = Test.replies
+    /// Both sides of the exchange each of this sample's batches has with the model, PARALLEL to
+    /// `operations` — the right half of every page (8.1). It starts as `Test.exchanges` and the
+    /// preview's own fake run fills a page in as it lands, exactly as `Runner` sets the batch's
+    /// input when it goes out and its reply when a call returns.
+    @State var exchanges: [Translation.Run.Exchange] = Test.exchanges
     /// The journal this page reads, and the preview's second half: it starts as the
     /// sample's own values imply and GROWS as the preview's write-back lands, exactly
     /// as the runner's write-back appends one journal row per slot it applies (5.5).
@@ -564,20 +566,43 @@ extension Translation.HorizontalTranslate {
       return "[" + elements.joined(separator: ",\n ") + "]"
     }
 
-    /// What each page's right half starts with, aligned with `sample`: the finished batch
-    /// carries its reply, the failed one carries the cut-off text that made it fail, and the
-    /// untouched batch has not been sent — so its pane says "no reply yet" instead of showing
-    /// an unexplained empty box.
-    static var replies: [Translation.Run.Reply] {
+    /// The INPUT of every page, aligned with `sample` (8.1): the request the row pass sends — L0,
+    /// then ONE item per (row, language) with each item naming its OWN language and the settled
+    /// columns travelling with it (4.6). There is no L1 block at all, which is why the row page's
+    /// input reads shorter than the column pages' — and why its items carry the language instead.
+    /// It is assembled from the sample's own rows, so a page's input and its reply describe the
+    /// same batch.
+    static var requests: [Translation.Prompt.Request] {
+      sample.map { batch in
+        Translation.SampleRequest.rowBatch(
+          items: batch.items.flatMap { row in
+            row.targets.map { slot in
+              Translation.SampleRequest.Item(
+                source: Translation.SampleRequest.body(row.source),
+                target: Translation.SampleRequest.body(slot.target),
+                comment: row.comment, maxWidth: row.maxWidth, language: slot.language)
+            }
+          })
+      }
+    }
+
+    /// What each page's right half starts with, aligned with `sample`: the batches that were SENT
+    /// carry their input, the finished batch carries its reply, the failed one carries the
+    /// cut-off text that made it fail, and the untouched batch has not been sent — so its pane
+    /// says so on BOTH halves instead of showing two unexplained empty boxes.
+    static var exchanges: [Translation.Run.Exchange] {
       [
-        Translation.Run.Reply(raw: answers[0], phase: .applied),
-        Translation.Run.Reply(raw: answers[1], phase: .failed),
-        Translation.Run.Reply(raw: nil, phase: .pending),
+        Translation.Run.Exchange(
+          request: requests[0], reply: Translation.Run.Reply(raw: answers[0], phase: .applied)),
+        Translation.Run.Exchange(
+          request: requests[1], reply: Translation.Run.Reply(raw: answers[1], phase: .failed)),
+        Translation.Run.Exchange(
+          request: nil, reply: Translation.Run.Reply(raw: nil, phase: .pending)),
       ]
     }
 
     var body: some View {
-      Content(index: index, operations: operations, replies: replies, journal: journal)
+      Content(index: index, operations: operations, exchanges: exchanges, journal: journal)
         .task {
           do {
             for i in 0..<operations.count {
@@ -590,9 +615,13 @@ extension Translation.HorizontalTranslate {
                 journal += Test.writes(from: operations[i].items, to: rewritten)
                 operations[i].items = rewritten
                 operations[i].isCompleted = true
-                // The batch answered: its page's right half fills in the same way a live
-                // run fills it in (`Run.Batch.rawReply`).
-                replies[i] = Translation.Run.Reply(raw: Test.answers[i], phase: .applied)
+                // The batch went out and was answered: its page's right half fills in the same
+                // way a live run fills it in — the input when the request is built
+                // (`Run.Batch.request`), then the reply when the call returns
+                // (`Run.Batch.rawReply`).
+                exchanges[i] = Translation.Run.Exchange(
+                  request: Test.requests[i],
+                  reply: Translation.Run.Reply(raw: Test.answers[i], phase: .applied))
               }
               try await Task.sleep(for: .seconds(1))
             }

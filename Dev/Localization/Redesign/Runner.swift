@@ -25,6 +25,19 @@ import Foundation
 import Observation
 import SwiftData
 
+/// A request COMPARES by the two bodies and the prefix it carries, so a probe can ask whether
+/// what a page shows is the very request the runner built rather than comparing strings by hand.
+/// Declared at file scope, beside the exchange that hands a request to a page, because equality
+/// is the PANE's need — `Prompt` is assembled as the wire contract and needs none.
+extension Translation.Prompt.Request: Equatable {
+  static func == (left: Self, right: Self) -> Bool {
+    left.system == right.system
+      && left.user == right.user
+      && left.ids == right.ids
+      && left.cacheablePrefix == right.cacheablePrefix
+  }
+}
+
 extension Translation {
   /// The live state of one stage's run. Observable, one per stage, owned by the
   /// workspace — never by the project.
@@ -135,9 +148,29 @@ extension Translation {
       /// nothing decides anything with it: it is printed as it came.
       var rawReply: String?
 
+      /// The request THIS batch sent, exactly as it went out: the two message BODIES
+      /// (`system` + `user`) and the cacheable prefix the telemetry counts (5.7, 8.1,
+      /// "stage pages"). Kept per BATCH for the same reason the reply is — a page shows one
+      /// batch — and kept the moment the request is BUILT, so a batch whose call then failed
+      /// still shows what was asked of the model: an input that vanished on a failure would
+      /// leave the pane explaining a failure nobody can inspect.
+      ///
+      /// The two bodies are the truth and are stored VERBATIM; the ids and the payload are
+      /// reconstructible from the items and are not copied. Nothing parses this, nothing
+      /// decides anything with it, and it is never persisted: a request is up to
+      /// `Limits.batch` characters of payload plus its context, so it lives with the run and
+      /// dies with it (a stage page is the only thing that reads it).
+      var request: Prompt.Request?
+
       /// What a stage page's right half reads: the reply, and the phase that says WHY
       /// there is none yet (still in flight, no request spent, or the call failed).
       var reply: Reply { Reply(raw: rawReply, phase: phase) }
+
+      /// BOTH SIDES of this batch's exchange, as ONE value: what was sent and what came
+      /// back. Both halves are read off THIS batch, so a page holding batch N's exchange can
+      /// never show batch M's input beside its reply — there are no two arrays to keep
+      /// aligned (8.1).
+      var exchange: Exchange { Exchange(request: request, reply: reply) }
     }
 
     /// One batch as a stage page's right half sees it: the model's raw reply and the
@@ -150,6 +183,25 @@ extension Translation {
       /// Where the batch is in its life — the only thing that tells a batch nobody has
       /// sent yet from one no model will ever answer (`Run.resolveMemory`).
       let phase: Phase
+    }
+
+    /// One batch's whole EXCHANGE, as the four stage pages take it: what was SENT and what
+    /// came back, in one value (8.1, "stage pages" — the reader asked for the other side of
+    /// the same pane: "Add model input to that model reply view").
+    ///
+    /// One shape for all four pages, and one value PER BATCH: the pages page by batch, so
+    /// the input and the reply travel together and cannot drift apart. A page that has no
+    /// batch behind it reads `unsent` rather than a pair of nils.
+    struct Exchange: Equatable {
+      /// The request the batch built and sent; nil while nothing has been sent — or when
+      /// nothing ever will be, because translation memory answered every item of it
+      /// (`Run.resolveMemory`).
+      let request: Prompt.Request?
+      /// The reply, and the phase that explains an absent one.
+      let reply: Reply
+
+      /// The exchange of a page with no batch behind it: nothing sent, nothing answered.
+      static let unsent = Exchange(request: nil, reply: Reply(raw: nil, phase: .pending))
     }
 
     /// One slot inside a batch. Its KEY is app-side only: the request's ids are the
@@ -1026,7 +1078,15 @@ extension Translation {
       // multiplies is the SEND, and that is counted where the send happens (`Tally.sends`).
       if batch.attempt == 1 { run.tally.characters += batch.characters }
 
-      let answer = try await send(request(for: batch, in: run), in: run)
+      // The request is BUILT here and kept on the run's own copy before the send: it is what
+      // this batch asked, and a call that then fails — admission, the cooldown, the network —
+      // must still show the reader the input it failed on (8.1). Nothing about sending
+      // changes: the same value goes to `send`.
+      let request = request(for: batch, in: run)
+      batch.request = request
+      retain(request, of: batch, in: run)
+
+      let answer = try await send(request, in: run)
       batch.model = answer.model
       // The reply belongs to the BATCH, and it is kept the moment it arrives rather than
       // when the batch returns: everything after this point — validation, a repair call,
@@ -1166,6 +1226,19 @@ extension Translation {
     private func retain(_ raw: String?, of batch: Run.Batch, in run: Run) {
       guard let index = run.batches.firstIndex(where: { $0.id == batch.id }) else { return }
       run.batches[index].rawReply = raw
+    }
+
+    /// Keeps the batch's own REQUEST on the RUN's copy of it, for the same reason the reply
+    /// is kept there: `performOne` works on a value and only writes it back when it returns,
+    /// and a page reads the run's list — so an input reached only through the returned value
+    /// would be invisible for the whole of a send that then threw.
+    ///
+    /// Only the batch's OWN request: the repair call and the review gate are one-id requests
+    /// of their own and are not what a stage page shows, and a re-ask's half carries an id the
+    /// run's list does not hold (`<batch>.r0`), so nothing is written for it.
+    private func retain(_ request: Prompt.Request, of batch: Run.Batch, in run: Run) {
+      guard let index = run.batches.firstIndex(where: { $0.id == batch.id }) else { return }
+      run.batches[index].request = request
     }
 
     // MARK: - the request

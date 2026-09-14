@@ -11,17 +11,18 @@ extension Translation.VerticalLearn {
   struct Content: View {
     let index: Int
     let operations: [Operations]
-    /// The model's RAW reply for each page, PARALLEL to `operations` (8.1, "stage pages").
-    /// The page shows one batch, so its reply is the entry at the page's own offset; a
-    /// caller that supplies none gets the "no reply yet" reading rather than a crash.
-    var replies: [Translation.Run.Reply] = []
+    /// BOTH SIDES of each page's exchange, PARALLEL to `operations` (8.1, "stage pages"): the
+    /// input the batch sent and the reply it got back, one value per batch. The page shows one
+    /// batch, so its exchange is the entry at the page's own offset; a caller that supplies none
+    /// gets the "nothing sent yet" reading on both halves rather than a crash.
+    var exchanges: [Translation.Run.Exchange] = []
     @State var scrollPosition: Int?
     var body: some View {
       GeometryReader { view in
         ScrollView(.horizontal) {
           LazyHStack(spacing: 0) {
             ForEach(operations.enumerated(), id: \.offset) { (offset, element) in
-              OperationContent(operation: element, reply: reply(at: offset)).frame(width: view.size.width, height: view.size.height)
+              OperationContent(operation: element, exchange: exchange(at: offset)).frame(width: view.size.width, height: view.size.height)
             }
           }.scrollTargetLayout()
         }.scrollTargetBehavior(.paging).scrollPosition(id: $scrollPosition, anchor: .center)
@@ -32,9 +33,10 @@ extension Translation.VerticalLearn {
       }
     }
 
-    /// The reply of the batch this page is showing.
-    private func reply(at offset: Int) -> Translation.Run.Reply {
-      replies.indices.contains(offset) ? replies[offset] : Translation.Run.Reply(raw: nil, phase: .pending)
+    /// The exchange of the batch this page is showing: batch N's input beside batch N's reply,
+    /// because the two are one value (`Run.Exchange`) taken from the batch at this offset.
+    private func exchange(at offset: Int) -> Translation.Run.Exchange {
+      exchanges.indices.contains(offset) ? exchanges[offset] : .unsent
     }
   }
   /// A lesson is a DIFFERENCE: what the model produced against what the human
@@ -43,12 +45,12 @@ extension Translation.VerticalLearn {
   /// line it becomes.
   ///
   /// SPLIT IN HALF (8.1, "stage pages"): those lessons on the left as they always were,
-  /// and the model's RAW reply for the batch on the right — here a DOCUMENT, not a set of
-  /// candidates, which is exactly why the raw text is worth seeing.
+  /// and the batch's EXCHANGE on the right — here a DOCUMENT, not a set of candidates, which is
+  /// exactly why the raw text is worth seeing.
   struct OperationContent: View {
     let operation: Operations
-    /// The batch's raw reply — what the right half prints, unread.
-    let reply: Translation.Run.Reply
+    /// Both sides of this batch's exchange — what the right half prints, unread.
+    let exchange: Translation.Run.Exchange
     var color: Color {
       if operation.isFailed {
         .red
@@ -113,8 +115,8 @@ extension Translation.VerticalLearn {
 
         Divider()
 
-        // The model's RAW reply for this batch, printed as it came back.
-        Translation.RawReplyPane(reply: reply)
+        // BOTH sides of this batch's exchange: the input that was sent, then the reply.
+        Translation.RawExchangePane(exchange: exchange)
           .frame(maxWidth: .infinity)
       }
     }
@@ -122,11 +124,11 @@ extension Translation.VerticalLearn {
   struct Test: View {
     @State var index = 0
     @State var operations: [Operations] = Test.sample
-    /// The raw replies this sample's batches answered with, PARALLEL to `operations` — the
-    /// right half of every page (8.1). It starts as `Test.replies` and the preview's own
-    /// fake run fills a page in as its batch lands, exactly as `Runner` sets the batch's
-    /// reply when a fold returns.
-    @State var replies: [Translation.Run.Reply] = Test.replies
+    /// Both sides of the exchange each of this sample's batches has with the model, PARALLEL to
+    /// `operations` — the right half of every page (8.1). It starts as `Test.exchanges` and the
+    /// preview's own fake run fills a page in as it lands, exactly as `Runner` sets the batch's
+    /// input when it goes out and its reply when the call returns.
+    @State var exchanges: [Translation.Run.Exchange] = Test.exchanges
 
     /// Sample batches for the design preview: ten lessons each, in the three states a
     /// fold can be in.
@@ -295,20 +297,39 @@ extension Translation.VerticalLearn {
       """,
     ]
 
-    /// What each page's right half starts with, aligned with `sample`: the folded batch
-    /// carries the lines it folded, the failed one carries the prose that made it fail, and
-    /// the batch nobody has reached has not been sent — so its pane says "no reply yet"
-    /// instead of showing an unexplained empty box.
-    static var replies: [Translation.Run.Reply] {
+    /// The INPUT of every page, aligned with `sample` (8.1): the request the fold sends — its
+    /// lessons, then the document it is folding into (`Prompt.learnFold`), which is why this page
+    /// carries NO L0/L1 blocks and no cacheable boundary to mark.
+    static var requests: [Translation.Prompt.Request] {
+      sample.map { batch in
+        Translation.SampleRequest.learnFold(
+          language: batch.language,
+          lessons: batch.items.map { item in
+            Translation.SampleRequest.Lesson(
+              key: item.key, source: item.source.catalogValue, comment: item.comment,
+              machine: item.machine.catalogValue, value: item.target.catalogValue)
+          },
+          document: Translation.SampleRequest.documents[batch.language] ?? [])
+      }
+    }
+
+    /// What each page's right half starts with, aligned with `sample`: the batches that were SENT
+    /// carry their input, the folded batch carries the lines it folded, the failed one carries the
+    /// prose that made it fail, and the batch nobody has reached has not been sent — so its pane
+    /// says so on BOTH halves instead of showing two unexplained empty boxes.
+    static var exchanges: [Translation.Run.Exchange] {
       [
-        Translation.Run.Reply(raw: answers[0], phase: .applied),
-        Translation.Run.Reply(raw: answers[1], phase: .failed),
-        Translation.Run.Reply(raw: nil, phase: .pending),
+        Translation.Run.Exchange(
+          request: requests[0], reply: Translation.Run.Reply(raw: answers[0], phase: .applied)),
+        Translation.Run.Exchange(
+          request: requests[1], reply: Translation.Run.Reply(raw: answers[1], phase: .failed)),
+        Translation.Run.Exchange(
+          request: nil, reply: Translation.Run.Reply(raw: nil, phase: .pending)),
       ]
     }
 
     var body: some View {
-      Content(index: index, operations: operations, replies: replies)
+      Content(index: index, operations: operations, exchanges: exchanges)
         .task {
           do {
             for i in 0..<operations.count {
@@ -320,9 +341,13 @@ extension Translation.VerticalLearn {
               // value. Folding the batch is the whole visible effect.
               withAnimation {
                 operations[i].isCompleted = true
-                // The fold answered: its page's right half fills in the same way a live
-                // run fills it in (`Run.Batch.rawReply`).
-                replies[i] = Translation.Run.Reply(raw: Test.answers[i], phase: .applied)
+                // The fold went out and was answered: its page's right half fills in the same
+                // way a live run fills it in — the input when the request is built
+                // (`Run.Batch.request`), then the reply when the call returns
+                // (`Run.Batch.rawReply`).
+                exchanges[i] = Translation.Run.Exchange(
+                  request: Test.requests[i],
+                  reply: Translation.Run.Reply(raw: Test.answers[i], phase: .applied))
               }
               try await Task.sleep(for: .seconds(1))
             }
