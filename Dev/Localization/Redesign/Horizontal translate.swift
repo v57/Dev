@@ -48,15 +48,21 @@ extension Translation {
       self.project = project
       scan()
     }
-    /// One pass over the rows: `translatable` and the 4.7 eligibility test on the
-    /// CONTENT, NOTHING ELSE (4.6). Two rows are not sent — a row with no language
-    /// at all, which has no work to express and would expand to an empty batch, and a
-    /// row whose content holds no English character (4.7): a leaked `%d - %d`, a bare
-    /// number, a bullet, an em dash has no prose to translate, and no column of it
-    /// needs adapting. No version test, no per-language filter, no "the row has no
-    /// source" case either — a row with nothing authored sends its KEY as the content
-    /// (4.3). A row with a settled column and columns that need work is sent exactly
-    /// like any other.
+    /// One pass over the rows: `translatable`, the 4.7 eligibility test on the
+    /// CONTENT, and the 4.8 universe test on the ROW — NOTHING ELSE (4.6). Two rows
+    /// are not sent — a row with no language at all, which has no work to express and
+    /// would expand to an empty batch, and a row whose content holds no English
+    /// character (4.7): a leaked `%d - %d`, a bare number, a bullet, an em dash has no
+    /// prose to translate, and no column of it needs adapting. No version test, no
+    /// per-language filter, no "the row has no source" case either — a row with nothing
+    /// authored sends its KEY as the content (4.3). A row with a settled column and
+    /// columns that need work is sent exactly like any other.
+    ///
+    /// A row that is not a row of the OPEN CATALOG is not work here (4.8), even if it
+    /// reached `project.data` by another path — a hand-built data set, a preview, a
+    /// caller the redesign has not met yet. That answer comes from the row's OWN flag,
+    /// set where the row was built: this scan asks the row, never the store and never
+    /// the file.
     ///
     /// Nothing here decides what may be written, and nothing here writes: the
     /// settled columns travel because their values are the reference this request
@@ -66,7 +72,7 @@ extension Translation {
       var operations = Operations()
       for index in 0..<project.data.count {
         let item = project.data[index]
-        guard item.translatable, item.hasEnglishCharacters else { continue }
+        guard item.isCatalogRow, item.translatable, item.hasEnglishCharacters else { continue }
         // A row with NO language at all is SKIPPED (reader, 2026-09-14): it has
         // nothing to carry and nothing to write, and it would expand to a batch with
         // zero items — a request whose item list is empty.

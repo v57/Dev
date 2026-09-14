@@ -527,6 +527,11 @@ enum Translation {
     /// The catalog is KEPT (`self.catalog`), which is what makes the no-argument
     /// `loadData()` a re-projection of the same artifact rather than a second source of
     /// truth.
+    ///
+    /// Every row this projects is a row of the open catalog BY CONSTRUCTION — its key came
+    /// out of `catalog.strings` — and saying so is the builder's job: the rows carry
+    /// `isCatalogRow`, and `row(key:records:catalog:)` below is that flag's one
+    /// definition (4.8).
     func loadData(catalog: StringCatalog) throws {
       self.catalog = catalog
       try loadData()
@@ -553,6 +558,10 @@ enum Translation {
       rowIndex = positions
     }
     /// One row of the table: a CATALOG key, with what the store knows about it.
+    ///
+    /// It is also the ONE place a row is told it belongs to the open catalog
+    /// (`isCatalogRow`), and the only builder there is: `loadData` calls it once per
+    /// catalog key and nothing else calls it at all (4.8).
     ///
     /// The source is the ARTIFACT's (the file is where source text is authored, and the
     /// store's `sourceText` is a copy the reconcile took from that same file), the comment
@@ -591,6 +600,12 @@ enum Translation {
         comment: catalog.entry(for: key)?.comment ?? "",
         maxWidth: records.compactMap(\.maxWidth).first ?? 0,
         translatable: translatable,
+        // THE definition of the row's own answer to the universe question (4.8): this
+        // builder only ever runs for a CATALOG key, so a row it builds IS a row of the
+        // open catalog, and nothing else in the app sets the flag. A hand-built data
+        // set, a preview and any future caller inherit the default — false — and their
+        // rows are therefore never work for any stage.
+        isCatalogRow: true,
         targets: targets)
     }
     /// The row's source body, read from the ARTIFACT.
@@ -1042,6 +1057,22 @@ enum Translation {
     /// `shouldTranslate != false`. An ignored key is out of scope for every
     /// stage and keeps whatever value it carries.
     var translatable: Bool = true
+    /// True when this row is a row of the OPEN CATALOG (4.8) — the universe rule
+    /// stated on the ROW, so every scan can ask it without reaching into the store
+    /// or the file for the answer.
+    ///
+    /// ONE definition, and it is the builder's: `loadData` is the only builder, and
+    /// the rows it builds ARE catalog keys, so `row(key:records:catalog:)` sets this
+    /// true and nothing else does. The default is therefore FALSE, not true: a
+    /// `LocalizationKey` that came into being any other way — a hand-built data set,
+    /// a preview, a caller the redesign has not met yet — is not a row of the
+    /// catalog, so every scan skips it exactly like an ignored key: no model call,
+    /// no batch, nothing to write, and its slots keep whatever they carry.
+    ///
+    /// It is deliberately NOT derived per stage and not derived from the store: a
+    /// record of a key the open file does not hold is STATE without a row, and what
+    /// makes a row is the catalog key it was built from, which only `loadData` knows.
+    var isCatalogRow: Bool = false
     /// Eligibility (4.7): a string whose CONTENT holds no English character is
     /// never translated.
     ///

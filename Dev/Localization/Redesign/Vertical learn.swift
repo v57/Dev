@@ -18,7 +18,11 @@ extension Translation {
     }
     /// One pass over the rows as they stood when the stage was built: the slots a
     /// human settled that the model has something to answer for (`toLearn`, 2.4)
-    /// and whose row is translatable.
+    /// and whose row is translatable AND a row of the OPEN CATALOG (4.8). A row that
+    /// is not one is not work here even if it reached `project.data` by another path —
+    /// a hand-built data set, a preview, a future caller — and the answer is the row's
+    /// OWN flag, set where the row was built: this scan asks the row, never the store
+    /// and never the file.
     ///
     /// These rows teach, they are not translated: the lesson IS the delta between
     /// the model's attempt and the human's value, so a slot the model already got
@@ -37,7 +41,7 @@ extension Translation {
       var byLanguages = [String: Operations]()
       for index in 0..<project.data.count {
         let row = project.data[index]
-        guard row.translatable else { continue }
+        guard row.isCatalogRow, row.translatable else { continue }
         for item in row.targets {
           // `toLearn` answers the value to fold in — the human's `target` — or nil when
           // the slot has nothing to teach.

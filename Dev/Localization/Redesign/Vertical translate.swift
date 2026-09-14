@@ -31,11 +31,16 @@ extension Translation {
     /// `%d - %d`, a bare number, a bullet, an em dash — there is no prose to
     /// translate, so nothing is batched for it and nothing is written; its slots
     /// keep whatever they carry, exactly like the slots of an ignored key.
+    ///
+    /// On top of those, the row must be a row of the OPEN CATALOG (4.8): a row that
+    /// is not one is not work here even if it reached `project.data` by another path.
+    /// The answer is the row's OWN flag, set where the row was built, so this scan
+    /// asks the row and never the store or the file.
     private func scan() {
       var byLanguages = [String: Operations]()
       for index in 0..<project.data.count {
         let row = project.data[index]
-        guard row.translatable, row.hasEnglishCharacters else { continue }
+        guard row.isCatalogRow, row.translatable, row.hasEnglishCharacters else { continue }
         for item in row.targets {
           guard item.needsMachineTranslate else { continue }
           byLanguages[item.language, default: Operations(language: item.language)].items

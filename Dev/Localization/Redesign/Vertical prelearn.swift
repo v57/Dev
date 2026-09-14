@@ -26,11 +26,17 @@ extension Translation {
     ///
     /// Writes `machine` ONLY. Never `target`, never `status`: the human settled
     /// this slot, so the machine value is evidence for `learn`, not a translation.
+    ///
+    /// The row must be a row of the OPEN CATALOG (4.8) as well as translatable: a row
+    /// that is not one is not work here even if it reached `project.data` by another
+    /// path — this is the stage the reader saw stale keys in. The answer is the row's
+    /// OWN flag, set where the row was built, so this scan asks the row and never the
+    /// store or the file.
     private func scan() {
       var byLanguages = [String: Operations]()
       for index in 0..<project.data.count {
         let row = project.data[index]
-        guard row.translatable else { continue }
+        guard row.isCatalogRow, row.translatable else { continue }
         for item in row.targets {
           guard item.needsPrelearn else { continue }
           byLanguages[item.language, default: Operations(language: item.language)].items
