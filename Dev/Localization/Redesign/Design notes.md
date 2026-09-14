@@ -245,6 +245,12 @@ Constraints on the whole redesign, not gaps in it. Everything below assumes them
       project   10 000
       language   1 000
       batch     20 000   source characters per request, on top of the context
+      row pass   5 000   a QUARTER of it (reader, 2026-09-14, applied in
+                         `Horizontal translate.swift` as `Limits.batch / 4`): the row
+                         payload carries EVERY language of each row, so it is the
+                         expensive shape by construction (4.6) and its requests are cut
+                         smaller on purpose. It is a per-shape budget, which is why it
+                         belongs in this table rather than inline.
 
 3.3 Versioning. `version` starts at 1 and is bumped once per autonomous change;
     a user editing the project doc bumps it once per real change and writes
@@ -370,7 +376,9 @@ Constraints on the whole redesign, not gaps in it. Everything below assumes them
 4.4 Splitting. Batches are sized by CHARACTERS, never by count: 20 000 source
     characters per language batch, plus each item's target/plural overlays. A
     row batch counts its source once per language of the ROW (settled columns
-    included, 4.6). A batch always takes at least one item, so one oversized
+    included, 4.6) and is capped at a QUARTER of the language cap (5 000, 3.2):
+    a row request pays for every language of every row it carries, so its batches
+    are cut smaller on purpose (reader, 2026-09-14). A batch always takes at least one item, so one oversized
     source gets its own request instead of being skipped. The `split()`
     implementations in the four stage files already encode this; the caps move to
     `Translation.Limits` so the runner, the progress model and the prompt builder
