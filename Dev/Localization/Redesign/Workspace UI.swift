@@ -67,7 +67,11 @@ extension Translation {
     var body: some View {
       VStack(spacing: 8) {
         Text(workspace.project.id).font(.title3.bold())
-        Text("The run's edits are in memory until Save — a run never writes the .xcstrings.")
+        // The state, not a claim: what this says is what the app's own dirty flag says (8.3).
+        Text(
+          workspace.isDirty
+            ? "The run's edits are in memory until Save — a run never writes the .xcstrings."
+            : "Nothing is waiting for Save — the catalog carries everything this session produced.")
           .font(.callout)
           .foregroundStyle(.secondary)
           .multilineTextAlignment(.center)
@@ -233,11 +237,27 @@ extension Translation {
           }
         }
         HStack(spacing: 12) {
-          Label(
-            "A run's results are in memory until Save — it never writes the .xcstrings.",
-            systemImage: "square.and.arrow.down")
-            .font(.caption)
-            .foregroundStyle(.secondary)
+          // What the run's results are waiting for, as the state the bar reports rather than a
+          // sentence about the design (8.3): in memory until Save, or nothing owed at all.
+          if workspace.isDirty {
+            Label(
+              "In memory until Save — the .xcstrings is unchanged.",
+              systemImage: "square.and.arrow.down")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+            Button("Save") {
+              Task { await workspace.save() }
+            }
+            .help(
+              "Write this session's results into "
+                + (workspace.fileName ?? "the catalog") + " — Save is the only writer of the file")
+          } else {
+            Label(
+              "Nothing is waiting for Save — the catalog carries everything this session produced.",
+              systemImage: "checkmark.circle")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          }
           if let failure = run?.failure {
             Label(failure.message, systemImage: "exclamationmark.triangle.fill")
               .font(.caption)
@@ -331,6 +351,22 @@ extension Translation {
         .frame(width: 16)
         Text(workspace.status.summary).font(.callout).monospacedDigit()
         Spacer()
+        // A run's edits are in memory until Save (8.3), and the bar is where the user looks
+        // once the run's pages are closed — so the state is a READING here, not a sentence
+        // somewhere in the overlay, and the act is beside it. Save goes through the app's own
+        // writer (5.8), which is the same one ⌘S reaches: the flag behind this reading is the
+        // flag behind ⌘S, so the two can never disagree.
+        if workspace.isDirty {
+          Label("Unsaved", systemImage: "square.and.arrow.down")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+          Button("Save") {
+            Task { await workspace.save() }
+          }
+          .help(
+            "Write this session's results into "
+              + (workspace.fileName ?? "the catalog") + " — Save is the only writer of the file")
+        }
         // The way back into the pages, offered while there IS a run to go back to: the
         // overlay is presented FOR a run, so a bar with none has nothing to reopen.
         if showsReopen {
@@ -642,6 +678,15 @@ extension Translation {
     /// Which project a catalog URL belongs to. A pane holds a FILE URL and nothing else,
     /// so the app's own row — resolved once, here — is what names its workspace.
     private var projects: [String: String] = [:]
+    /// The store a pane handed over, and WHICH catalog it was showing when it did (5.8).
+    ///
+    /// A store belongs to a window and a catalog belongs to a project, so the two travel
+    /// together: a workspace is only ever attached to the store that came with ITS OWN catalog.
+    /// Attaching every workspace to the latest store would, with two windows open, hand project
+    /// A's session to project B's catalog — where the store's own URL guard refuses it, and A's
+    /// results would then never reach a file at all.
+    private weak var handedOver: LocalizationStore?
+    private var handedOverURL: String?
     /// What went wrong on the way IN (a store without that project, a workspace that
     /// could not be built). Carried here because there is no run yet to carry it.
     var error: String?
@@ -660,6 +705,21 @@ extension Translation {
     func workspace(for catalogURL: URL) -> Workspace? {
       guard let project = projects[catalogURL.path] else { return nil }
       return workspaces[project]
+    }
+
+    /// The pane hands over the app's own store, TOGETHER WITH the catalog it is showing: the
+    /// instance the browser displays and Save writes (5.8), and the file whose editing session it
+    /// is. Called every time a bound pane appears, so a window reopened after another one closed
+    /// attaches ITS store.
+    ///
+    /// The workspace of that catalog is attached at once if it already exists — a run's results
+    /// must not wait for a focus — and `focus` attaches it for the workspace it is about to build.
+    func handOver(store: LocalizationStore, catalogURL: URL) {
+      handedOver = store
+      handedOverURL = catalogURL.path
+      if let project = projects[catalogURL.path] {
+        workspaces[project]?.attach(store)
+      }
     }
 
     /// Opens — or re-focuses — the workspace of the project a pane is showing, and hands
@@ -686,6 +746,11 @@ extension Translation {
         if workspace.project.data.isEmpty {
           try? await workspace.open(catalog: catalog, from: catalogURL)
         }
+        // A workspace built before this pane handed its store over learns about it HERE: its
+        // session is published on attach, so a run that landed with no store to publish into
+        // still reaches the catalog a Save writes (5.8). Only the store handed over WITH this
+        // catalog is attached — see `handedOver`.
+        if let handedOver, handedOverURL == catalogURL.path { workspace.attach(handedOver) }
         error = nil
         return workspace
       }
@@ -695,6 +760,7 @@ extension Translation {
         let workspace = Workspace(project: try global.loadProject(id: row.name), store: store)
         workspaces[row.name] = workspace
         try await workspace.open(catalog: catalog, from: catalogURL)
+        if let handedOver, handedOverURL == catalogURL.path { workspace.attach(handedOver) }
         error = nil
         return workspace
       } catch {

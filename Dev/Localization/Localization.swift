@@ -609,6 +609,39 @@ final class LocalizationStore {
     mirrorOpenCatalog(catalog, url: url)
   }
 
+  // MARK: - the redesign's publish step
+
+  /// Publishes the redesign's session onto the OPEN in-memory catalog (5.8).
+  ///
+  /// The redesign's run never writes the `.xcstrings` itself: its results reach
+  /// the file only through THIS catalog and a user Save — so the session's owner
+  /// hands over an edit of the catalog struct, this store owns the instance the
+  /// browser displays, and `markDirty` is what makes ⌘S, the Save button and the
+  /// unsaved-changes prompt see the edit at all. Before this entry point existed
+  /// a run's results were app-side only, and could be lost with no prompt.
+  ///
+  /// Refused — touching nothing — when a DIFFERENT catalog is open (a stale caller:
+  /// the same rule `mirrorOpenCatalog` states) and when the edit changes nothing
+  /// (a re-publish of what the catalog already carries must not raise the flag).
+  /// Returns whether the open catalog really changed.
+  ///
+  /// The RECORDS are the redesign's own to write (a run's write-back, `saveData`),
+  /// so nothing here re-mirrors the file. What this owes the browser is the derived
+  /// half of a catalog change — the record index and the rows — rebuilt exactly as
+  /// a row-scoped edit rebuilds them (`saveRow`).
+  @discardableResult
+  func publish(from url: URL, _ edit: (inout StringCatalog) -> Bool) -> Bool {
+    guard let open = catalog, catalogURL == url else { return false }
+    var updated = open
+    guard edit(&updated) else { return false }
+    catalog = updated
+    saveError = nil
+    rebuildRecordIndex()
+    buildRows()
+    markDirty()
+    return true
+  }
+
   /// True when the Translate button may start a run.
   var canTranslate: Bool { isLoaded && project != nil && !run.isActive && !scan.isRunning }
 

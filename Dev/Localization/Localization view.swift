@@ -330,6 +330,10 @@ struct LocalizationView: View {
       guard let boundCatalogURL, let catalog = store.catalog,
         store.catalogURL == boundCatalogURL
       else { return }
+      // The app's own store goes with the catalog (5.8): this pane's instance is the one the
+      // browser displays and Save writes, so it is what a run's results have to reach — and
+      // handing it over is what makes a run's dirty flag the app's own.
+      shell.handOver(store: store, catalogURL: boundCatalogURL)
       await shell.focus(catalogURL: boundCatalogURL, catalog: catalog)
     }
     .toolbar {

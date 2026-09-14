@@ -10,9 +10,9 @@
 //
 //  Implemented here: the run control (`start` is the one button, with run/pause/resume/
 //  cancel around it), the `open` that reads the rows, the imported-database resolve, the
-//  status the bottom bar reports, the overlay's presentation flags, and the human side of
-//  the write-back contract: the review and editing actions, and the Save path — the one
-//  writer of the `.xcstrings`.
+//  status the bottom bar reports, the overlay's presentation flags, the human side of the
+//  write-back contract (the review and editing actions), and the PUBLISH step — what hands
+//  the session to the app's own open catalog, the ONE instance Save writes (5.8).
 //
 
 import SwiftUI
@@ -35,8 +35,12 @@ extension Translation {
     var shownLanguages: [String] = []
     /// Selected catalog keys — also what a forced horizontal pass runs on.
     var selection: Set<String> = []
-    /// App-side edits that are not in the artifact yet. A run makes this true.
-    var isDirty: Bool = false
+    /// What the session owes the artifact. The APP's flag whenever the pane has handed its
+    /// store over — that is the flag ⌘S, the Save button and the unsaved-changes prompt are
+    /// built from (5.8), and a run that raised only its own reading could be lost with no
+    /// prompt at all — and the session's own reading when there is no store to ask (a
+    /// preview, a probe).
+    var isDirty: Bool { app?.hasUnsavedChanges ?? sessionDirty }
     /// What went wrong, for the alert.
     var error: String?
 
@@ -163,21 +167,39 @@ extension Translation {
     /// `catalog` is the artifact the pane is showing, PARSED by the catalog layer — its async
     /// half, which owns opening the file (7.1) — and handed over as a value: the rows are one
     /// per CATALOG key (4.8), so the parsing is the whole of what an open waits for. The URL
-    /// it came from is adopted with it, because that file is the one a Save writes (5.8) and
-    /// the app's own copy of it is the base state a Save applies the session onto.
+    /// it came from is adopted with it, because that file is the one the app's catalog is
+    /// published into and the one Save writes (5.8); the catalog ITSELF is not kept here, so
+    /// there is no second copy of the artifact to drift from the app's.
     ///
     /// What is left for this side of an open is the app-side half: the session rows projected
     /// onto that catalog, the shipped translations that settle a slot before any model call,
     /// and where the last run of each stage stopped. The languages are loaded by the
     /// project's own initializer.
     func open(catalog: StringCatalog, from url: URL) async throws {
-      self.catalog = catalog
       catalogURL = url
       try project.loadData(catalog: catalog)
       try applyImported()
       cursors = Run.plan(for: .vertical).reduce(into: [:]) { found, stage in
         found[stage] = try? store.cursor(for: stage, project: project.id)
       }
+    }
+
+    /// The file this session's catalog lives in, for the surfaces that have to NAME what a Save
+    /// writes. Nil for a workspace that never went through an open.
+    var fileName: String? { catalogURL?.lastPathComponent }
+
+    /// Hands this workspace the app's own store — the one holding the OPEN catalog the
+    /// browser displays and Save writes (5.8). The pane is the surface that has both halves
+    /// (its store, and the workspace it focused from that store's catalog), so this is where
+    /// the two meet.
+    ///
+    /// Taken WEAKLY: the app owns the store, and a workspace kept for the life of the shell
+    /// must not keep a closed window's store alive. A publish with no store attached is not an
+    /// error — it is a workspace whose pane has not appeared yet — so the session simply stays
+    /// pending (`sessionDirty`) and the attach re-publishes it.
+    func attach(_ store: LocalizationStore) {
+      app = store
+      if sessionDirty { publish() }
     }
 
     /// Where the last run of each stage stopped, read on open.
@@ -240,8 +262,12 @@ extension Translation {
         error = failure.message
       }
       // What a run wrote is in the store, not in the artifact (a run never writes the file
-      // — 5.8), so the session is dirty: the leave prompt has to know the file is behind.
-      if let run = runner.runs[stage], run.tally.itemsDone > 0 { isDirty = true }
+      // — 5.8), so the session is PUBLISHED into the app's own catalog: that is what makes
+      // ⌘S live and what the unsaved-changes prompt is built from. Unconditional, because a
+      // value translation memory answered is a result too (5.7 counts it apart from the
+      // items sent), and a publish that finds nothing to write touches neither the catalog
+      // nor the flag.
+      publish()
     }
 
     /// Stops the batch in flight and keeps everything already applied. The run stays
@@ -260,7 +286,11 @@ extension Translation {
         return
       }
       switch run.state {
-      case .paused, .idle: try await runner.resume(run)
+      case .paused, .idle:
+        try await runner.resume(run)
+        // The batches a resume landed are the run's results like any other: the app's
+        // catalog is what a Save would write, so it learns about them now (5.8).
+        publish()
       case .cancelled, .finished: try await self.run(stage)
       // Already going: a second start is a wait, not a second run (8.1).
       case .scanning, .running: return
@@ -372,7 +402,9 @@ extension Translation {
           project.data[row].targets[slot].status = .ignore
         }
       }
-      isDirty = true
+      // The flag is the artifact's and the statuses moved with it, so the row is published
+      // whole: the app's catalog is what Save writes, and ⌘S has to be live for it.
+      publish(project.data[row])
     }
 
     // MARK: - editing
@@ -489,10 +521,15 @@ extension Translation {
     /// Puts an edited slot back on its row. The session is marked dirty only when the edit
     /// really changed something: a confirmation of a value nobody touched is not an edit of
     /// the artifact, and the leave prompt should not be raised for it.
+    ///
+    /// The edit is PUBLISHED as it lands (5.8): the app's catalog is the object Save writes
+    /// and the object its dirty flag is about, so an edit that only reached the session would
+    /// be one ⌘S could not see. One ROW is published rather than the whole session — an edit
+    /// is one row's work, and a full walk per keystroke is not a price an editor should pay.
     private func settle(_ slot: LocalizationString, at: (row: Int, slot: Int)) {
       guard project.data[at.row].targets[at.slot] != slot else { return }
       project.data[at.row].targets[at.slot] = slot
-      isDirty = true
+      publish(project.data[at.row])
     }
     /// What an edit does to a slot's status.
     ///
@@ -569,13 +606,20 @@ extension Translation {
     private static let memoScope = "memo"
     private static let ruleScope = "project"
 
-    // MARK: - persistence
+    // MARK: - the artifact (5.8)
 
-    /// The open artifact: the catalog this session is saved through, and where it came from.
-    /// Parsed once and kept — the app's copy of the file rather than a per-save re-read —
-    /// because a run never touches the artifact and Save is its only writer (5.8).
-    private var catalog: StringCatalog?
+    /// The app's own store — the instance holding the OPEN catalog the browser displays and
+    /// Save writes. The pane hands it over (`attach`), and it is the only way a run's results
+    /// reach the artifact: the redesign keeps no catalog of its own and writes no file.
+    private weak var app: LocalizationStore?
+    /// Where this session's catalog came from — the file Save writes, and the identity a
+    /// publish is checked against: a publish aimed at another URL is a stale caller and is
+    /// refused, which is the rule `mirrorOpenCatalog` states.
     private var catalogURL: URL?
+    /// The session's own reading of "the artifact is behind", for a workspace with no store to
+    /// ask. The APP's flag is the one that gates the write (`isDirty`); this keeps a preview
+    /// and a probe honest, and `attach` re-publishes whatever it is carrying.
+    private var sessionDirty = false
     /// The keys whose `shouldTranslate` flag this session changed, and what it became. The
     /// artifact is the flag's home (2.1) and the row projection cannot read it, so a Save
     /// writes the flag from here and leaves every other entry's alone.
@@ -590,122 +634,107 @@ extension Translation {
     /// ignored in an earlier session.
     private var ignoredStatuses: [String: [String: LocalizationString.Status]] = [:]
 
-    /// Save is the only writer of the `.xcstrings`, and it writes through the
-    /// catalog model the app already has (format validation, in-memory catalog,
-    /// then the file). The store is written after it — and unlike the store, this
-    /// is async, because the file is.
+    /// The PUBLISH step (5.8): the session's results are handed to the app's own open catalog
+    /// — target, status, and the `shouldTranslate` flag a human toggled — and the artifact is
+    /// still written by Save alone, the app's writer, from that same instance.
     ///
-    /// What it writes is the SESSION, and the mapping is 2.1: the status becomes the file's
-    /// state (`needsTranslate` -> `new`, `translated` -> `needs_review`, `verified` ->
-    /// `translated`), an ignored key becomes `shouldTranslate = false` with its values kept,
-    /// and `.stale` and `.imported` are never written — one is app-side knowledge no file can
-    /// express, the other is the file's own. Everything the session does not model is left
-    /// exactly where the file has it, so an artifact another tool wrote survives a Save.
-    func save() async throws {
+    /// This is the whole of what a run deploys. Before it existed the session could produce
+    /// every value in a project and the app's catalog never heard about any of it: ⌘S stayed
+    /// disabled AND the unsaved-changes prompt saw nothing, so a run's results could be lost
+    /// without even being offered. Publishing at the moment they land is what makes the app's
+    /// one dirty flag true — which is what the prompt, the Save button and ⌘S are built from.
+    ///
+    /// A no-op publish (the catalog already carries the session — a re-publish, a save after
+    /// a save) changes nothing and raises nothing. A publish with no store to publish into (a
+    /// preview, or a pane that has gone away) raises the SESSION's own reading instead, and
+    /// `attach` hands the session over the moment a store appears.
+    func publish() {
+      guard let app, let url = catalogURL else { return markPending() }
+      if app.publish(from: url, apply(to:)) { sessionDirty = true }
+    }
+    /// ONE ROW published — a human edit's shape (5.8): the review and editing actions change
+    /// one row, and an editor must not pay for a walk of the whole session to raise a flag.
+    /// `publish()` is the run's shape, because a run's output is the project.
+    private func publish(_ row: LocalizationKey) {
+      guard let app, let url = catalogURL else { return markPending() }
+      if app.publish(from: url, { catalog in apply(row, to: &catalog) }) { sessionDirty = true }
+    }
+    /// The session owes the artifact and there is no catalog to publish it into yet.
+    private func markPending() { sessionDirty = true }
+
+    /// SAVE, through the app's own writer (5.8): the session is published into the open
+    /// catalog — the instance the browser displays and the one Save writes — and
+    /// `LocalizationStore.save` writes the file from it. The redesign has no writer of its
+    /// own, which is precisely what makes one dirty flag enough: the app's flag is about the
+    /// object that actually reaches the disk.
+    ///
+    /// The store is written after the file (7.4): the session's values, states and stamps land
+    /// together with the ONE journal row a verified value that MOVED earns — the corpus
+    /// `learn` folds, which is why no single edit writes a journal row of its own.
+    ///
+    /// A published session the app could not write leaves `error` set and the flags where they
+    /// are, so nothing is reported as saved that is not.
+    ///
+    /// The three-way leave contract (8.3) is deliberately NOT restated here: a session's edits
+    /// ARE the app's catalog edits once they are published, so the app's own unsaved-changes
+    /// path — save, discard, or stay — is the one the user meets, and a second copy of it on
+    /// this side could only disagree with the flag that gates the write.
+    func save() async {
       guard !project.data.isEmpty else { return }
+      publish()
+      guard let app else {
+        error = "No catalog is open for this project, so there is nothing to save into."
+        return
+      }
+      await app.save()
+      guard !app.hasUnsavedChanges else {
+        error = app.saveError ?? "The catalog's file was not written, so nothing was saved."
+        return
+      }
       do {
-        let (parsed, url) = try await artifact()
-        var outgoing = parsed
-        apply(to: &outgoing)
-        try await file(outgoing, to: url)
-        catalog = outgoing
-        catalogURL = url
-        // The artifact holds the session now, so the edits are no longer pending on disk —
-        // even if the store write below is the thing that fails. A failed store write is its
-        // own problem: `saveData`'s change gate finds whatever it missed on the next Save.
-        isDirty = false
-        // After the file (7.4). The session's values, states and stamps land in the store
-        // together with the ONE journal row a verified value that MOVED earns — the corpus
-        // `learn` folds, which is why no single edit writes a journal row of its own.
         try project.saveData()
-        error = nil
       } catch {
         self.error = error.localizedDescription
-        throw error
+        return
       }
-    }
-    /// Closing with unsaved edits owes the user the same three-way contract as
-    /// today: save, discard, or stay.
-    ///
-    /// A Save that fails keeps the session where it is — `error` is showing and the caller
-    /// stays — instead of dropping edits the app could not write. `discard` is the answer
-    /// that drops them.
-    func resolveLeave(_ choice: LeaveChoice) async {
-      switch choice {
-      case .save: try? await save()
-      case .discard: discard()
-      // The caller keeps its workspace open; the session is untouched.
-      case .stay: return
-      }
-    }
-    /// Drops what no Save wrote: the rows are re-projected from the artifact the open handed
-    /// over and from the store, which is where everything a run wrote already is
-    /// (`Runner.persist`) and where the last Save put the human's values. A run's results
-    /// therefore survive a discard; an unconfirmed edit does not, which is the whole point of
-    /// asking.
-    private func discard() {
-      project.data.removeAll()
-      project.rowIndex.removeAll()
-      translatableEdits.removeAll()
-      ignoredStatuses.removeAll()
-      try? project.loadData()
-      isDirty = false
+      sessionDirty = false
       error = nil
     }
-    enum LeaveChoice {
-      case save
-      case discard
-      case stay
-    }
-    /// What a Save reports when it cannot write: which project has no catalog file, and what
-    /// the file itself said. The artifact is the only file the app writes, so both halves carry
-    /// a message a human can act on.
-    enum SaveError: LocalizedError {
-      /// The store holds no project row for this workspace, so there is no file to write.
-      case noArtifact(project: String)
-      /// The file could not be read (or parsed) on the way in.
-      case unreadable(reason: String)
-      var errorDescription: String? {
-        switch self {
-        case .noArtifact(let project): "No .xcstrings file is recorded for \(project)."
-        case .unreadable(let reason): "Couldn't read the catalog: \(reason)"
-        }
-      }
-    }
-    /// The artifact this session is saved through: the catalog an OPEN was handed, and the URL
-    /// it came from (4.8) — parsed once by the catalog layer and KEPT, so a Save applies the
-    /// session onto the copy the APP holds rather than onto a second read of the file.
+
+    /// The session as the artifact holds it (2.1), as a MIRROR of it: every row of the session
+    /// is visited and nothing outside those rows is touched — the shape `mirrorOpenCatalog`
+    /// has, and the reason a catalog another tool wrote (a scan merge, a generated comment,
+    /// a hand edit in the old browser) survives a publish. Returns whether anything really
+    /// changed.
     ///
-    /// The fallback is for a workspace that never went through an open (a preview, a probe):
-    /// WHERE the file is then comes from the app's own project row (`Store.projectRow(id:)`
-    /// then `catalogURL`), because the redesign's `Project` holds no handle on the artifact —
-    /// opening and parsing the `.xcstrings` is the catalog layer's async work (7.1).
-    private func artifact() async throws -> (StringCatalog, URL) {
-      if let open = catalog, let url = catalogURL { return (open, url) }
-      guard let row = try store.projectRow(id: project.id) else {
-        throw SaveError.noArtifact(project: project.id)
-      }
-      switch await StringCatalog.loadOffMainActor(row.catalogURL) {
-      case .success(let parsed):
-        catalog = parsed
-        catalogURL = row.catalogURL
-        return (parsed, row.catalogURL)
-      case .failure(let error):
-        throw SaveError.unreadable(reason: error.localizedDescription)
-      }
-    }
-    /// The session as the artifact holds it (2.1). Every row of the session is visited, and
-    /// nothing outside them is touched.
-    private func apply(to catalog: inout StringCatalog) {
+    /// What it carries is what a Save writes: the values and their states, and the
+    /// `shouldTranslate` flag this session toggled. What it deliberately does NOT carry is a
+    /// COMMENT: the format owns that field and no session state backs it (2.8 — the on-device
+    /// pass writes into this same catalog), so every entry keeps the comment the catalog has.
+    private func apply(to catalog: inout StringCatalog) -> Bool {
+      var changed = false
       for row in project.data {
-        if let translatable = translatableEdits[row.key], var entry = catalog.strings[row.key] {
-          entry.shouldTranslate = translatable ? nil : false
-          catalog.strings[row.key] = entry
-        }
-        for slot in row.targets { apply(slot, of: row, to: &catalog) }
+        if apply(row, to: &catalog) { changed = true }
       }
+      return changed
     }
-    /// One slot as the file carries it.
+    /// One row published: the flag this session changed, and every slot the row carries.
+    private func apply(_ row: LocalizationKey, to catalog: inout StringCatalog) -> Bool {
+      var changed = false
+      if let translatable = translatableEdits[row.key], var entry = catalog.strings[row.key] {
+        let flag: Bool? = translatable ? nil : false
+        if entry.shouldTranslate != flag {
+          entry.shouldTranslate = flag
+          catalog.strings[row.key] = entry
+          changed = true
+        }
+      }
+      for slot in row.targets {
+        if apply(slot, of: row, to: &catalog) { changed = true }
+      }
+      return changed
+    }
+    /// One slot as the file carries it. Returns whether the slot really moved.
     ///
     /// Three statuses write nothing at all: `.stale` (app-side knowledge, never written),
     /// `.imported` (the shipped database is not a writer — the file keeps what it carried) and
@@ -719,28 +748,31 @@ extension Translation {
     /// merge's shadowing rule, restated here because the redesign calls nothing in that file.
     private func apply(
       _ slot: LocalizationString, of row: LocalizationKey, to catalog: inout StringCatalog
-    ) {
+    ) -> Bool {
       // The source language is AUTHORED text, not a translation: the artifact owns it and the
       // store seeds no slot for it.
-      guard slot.language != catalog.sourceLanguage else { return }
+      guard slot.language != catalog.sourceLanguage else { return false }
       let state: String
       switch slot.status {
       case .needsTranslate: state = "new"
       case .translated: state = "needs_review"
       case .verified: state = "translated"
-      case .stale, .imported, .ignore: return
+      case .stale, .imported, .ignore: return false
       }
       switch slot.target {
       case .value(let text):
-        guard !text.isEmpty else { return }
+        guard !text.isEmpty else { return false }
         guard !catalog.hasPlurals(for: row.key, language: slot.language),
           !catalog.hasDeviceVariations(for: row.key, language: slot.language)
-        else { return }
-        setUnit(text, state: state, key: row.key, language: slot.language, in: &catalog)
+        else { return false }
+        return setUnit(text, state: state, key: row.key, language: slot.language, in: &catalog)
       case .plural(let forms):
-        guard !forms.isEmpty else { return }
+        guard !forms.isEmpty else { return false }
         // A flat unit the file carried becomes the plural set — the move `varyByPlural` makes,
-        // and the reason it is cleared rather than left beside the forms.
+        // and the reason it is cleared rather than left beside the forms. The forms are
+        // compared as a SET before and after, which is also what makes the flat unit's
+        // removal part of the change.
+        let before = Self.signature(of: catalog, key: row.key, language: slot.language)
         clearUnit(key: row.key, language: slot.language, in: &catalog)
         for form in forms.values {
           // An empty form is absent: `setPluralValue` drops its unit, which is how a cleared
@@ -749,39 +781,62 @@ extension Translation {
             form.value, state: form.value.isEmpty ? nil : state,
             key: row.key, language: slot.language, category: form.rule.rawValue)
         }
+        return Self.signature(of: catalog, key: row.key, language: slot.language) != before
       }
     }
+    /// One (key, language) node as it COMPARES: its flat unit and its plural forms, each with
+    /// the state it carries. An empty value reads as ABSENCE — the artifact says "cleared" by
+    /// dropping a unit, so a node carrying an empty `stringUnit` is no more written than one
+    /// carrying none — and the plural forms are compared as a set, so their order cannot make
+    /// a difference out of nothing.
+    ///
+    /// Device variations and substitutions are deliberately NOT in the signature: the mapping
+    /// above never touches either, so they can never be the thing that changed.
+    private static func signature(
+      of catalog: StringCatalog, key: String, language: String
+    ) -> [String: String] {
+      var signature: [String: String] = [:]
+      if let unit = catalog.strings[key]?.localizations?[language]?.stringUnit,
+        let value = unit.value, !value.isEmpty {
+        signature[""] = "\(unit.state ?? "")\u{1}\(value)"
+      }
+      for (category, unit) in catalog.pluralUnits(for: key, language: language) ?? [:] {
+        guard let value = unit.value, !value.isEmpty else { continue }
+        signature[category] = "\(unit.state ?? "")\u{1}\(value)"
+      }
+      return signature
+    }
     /// One flat unit written into a node, leaving the node's variations and substitutions where
-    /// they are: the flat unit is the session's to write and nothing else there is.
+    /// they are: the flat unit is the session's to write and nothing else there is. Returns
+    /// whether the unit really moved.
     private func setUnit(
       _ text: String, state: String, key: String, language: String, in catalog: inout StringCatalog
-    ) {
-      guard var entry = catalog.strings[key] else { return }
+    ) -> Bool {
+      guard var entry = catalog.strings[key] else { return false }
       var localizations = entry.localizations ?? [:]
       var node = localizations[language] ?? StringCatalog.Language()
-      node.stringUnit = StringCatalog.StringUnit(state: state, value: text)
+      let unit = StringCatalog.StringUnit(state: state, value: text)
+      guard node.stringUnit?.state != unit.state || node.stringUnit?.value != unit.value else {
+        return false
+      }
+      node.stringUnit = unit
       localizations[language] = node
       entry.localizations = localizations
       catalog.strings[key] = entry
+      return true
     }
     /// The flat unit of a node dropped, so a plural set can take its place (`nil` is absence,
     /// and normalization drops a node left with nothing).
     private func clearUnit(key: String, language: String, in catalog: inout StringCatalog) {
       guard var entry = catalog.strings[key],
         var localizations = entry.localizations,
-        var node = localizations[language]
+        var node = localizations[language],
+        node.stringUnit != nil
       else { return }
       node.stringUnit = nil
       localizations[language] = node
       entry.localizations = localizations
       catalog.strings[key] = entry
-    }
-    /// The artifact written off the main actor: the encode and the write are the one part of a
-    /// Save that is genuinely async (7.1). The writer is the catalog model's own — it normalizes
-    /// the shapes Xcode's compiler rejects and writes atomically — so none of the file-format
-    /// work is redone here (7.4).
-    private func file(_ catalog: StringCatalog, to url: URL) async throws {
-      try await Task.detached { try catalog.save(to: url) }.value
     }
   }
 }
