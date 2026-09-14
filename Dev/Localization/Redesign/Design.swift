@@ -37,6 +37,14 @@ enum Translation {
     static let languageContext = 1_000
     /// Source characters per translate request (vertical and horizontal).
     static let batch = 20_000
+    /// Model-response RETRIES after a batch's first attempt (5.9): a retryable failure
+    /// re-asks the same request, so one batch costs at most `retries + 1` sends.
+    ///
+    /// It is a floor, not a chain: retries exist so one flaky answer does not cost a
+    /// batch, and they END — the batch fails after them exactly as it did before the
+    /// loop existed. Only a failure the run already calls `retryable` is re-asked; a
+    /// non-retryable one is not retried into the ground.
+    static let retries = 3
     /// Reference material carried into a language batch.
     static let neighbors = 10
     static let neighborCharacters = 400

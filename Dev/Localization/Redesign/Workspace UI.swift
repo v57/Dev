@@ -229,7 +229,7 @@ extension Translation {
           controls(run)
           Spacer()
           if let run {
-            Text(tally(run)).font(.callout).foregroundStyle(.secondary).monospacedDigit()
+            Text(Self.tally(run)).font(.callout).foregroundStyle(.secondary).monospacedDigit()
           }
         }
         HStack(spacing: 12) {
@@ -275,13 +275,24 @@ extension Translation {
     /// means the prompt stopped being a cacheable prefix, not that the provider was
     /// unlucky — and the per-model table, whose single entry is the cheapest proof that
     /// nothing else answered.
-    private func tally(_ run: Run) -> String {
+    ///
+    /// A retry shows up here twice, because attempts are COST: the request count reads the
+    /// SENDS while a re-ask is going on (a batch answered on its fourth attempt says four),
+    /// and the batch being re-asked names the attempt it is on — so a batch waiting out a
+    /// park reads as slow rather than as stuck (5.9). Static, so the line is a value a probe
+    /// can read instead of a sentence only a window can produce.
+    static func tally(_ run: Run) -> String {
       var parts = [
         "\(run.tally.batchesDone)/\(run.tally.batches) batches",
         "\(run.tally.itemsDone)/\(run.tally.items) strings",
-        "\(run.tally.requests) requests",
+        run.tally.sends == run.tally.requests
+          ? "\(run.tally.requests) requests"
+          : "\(run.tally.sends) requests (\(run.tally.requests) answered)",
         "cache \(run.tally.cachedShare.formatted(.percent.precision(.fractionLength(0))))",
       ]
+      if let reask = run.reasking {
+        parts.insert("attempt \(reask.attempt) of \(Limits.retries + 1) on \(reask.id)", at: 3)
+      }
       let models = run.tally.byModel
         .sorted { $0.key < $1.key }
         .map { "\($0.key) × \($0.value)" }

@@ -115,6 +115,11 @@ extension Translation {
       /// The model that answered — the write-back stamps the slot with it (5.5).
       var model: String = ""
       var phase: Phase = .pending
+      /// Which ATTEMPT this batch is on: 1 while its first request is out, 2 to
+      /// `Limits.retries + 1` after a retryable failure sent it back for another answer
+      /// (5.9). Kept on the batch, on the run's own copy, because that is what a progress
+      /// line reads WHILE a re-ask is in flight — a retry nobody can see reads as a hang.
+      var attempt: Int = 1
       /// The model's RAW reply for THIS batch, exactly as the provider sent it: what the
       /// right half of a stage page prints, unread (8.1, "stage pages").
       ///
@@ -201,6 +206,12 @@ extension Translation {
       var itemsDone = 0
       var characters = 0
       var requests = 0
+      /// Every send that went OUT, the attempts that FAILED included: a retry is a send, and
+      /// attempts are what a retry costs (5.7, 5.9). `requests` is the client's own count of
+      /// calls that came BACK, so the two numbers differ by exactly the attempts that failed
+      /// — which is the whole point of keeping both, because a batch that was answered on its
+      /// fourth attempt has to read as four sends and one answer.
+      var sends = 0
       var promptTokens = 0
       var completionTokens = 0
       /// A flat zero means the provider cache is NOT being hit, which is a bug in
@@ -247,6 +258,21 @@ extension Translation {
 
     /// The failure the status bar shows. The list keeps the rest.
     var failure: Failure? { failures.last }
+
+    /// The batch this run is on WHILE IT IS BEING RE-ASKED (5.9), i.e. the batch whose
+    /// attempt failed retryably and whose next request is on its way. Nil the rest of the
+    /// time: a batch that is on its first attempt, and one that has landed — applied or
+    /// failed — is not a batch anybody is retrying.
+    ///
+    /// Attempts are COST (5.7) and they are the one part of a retry the user pays for, so
+    /// the progress line reads this and says which attempt is in flight rather than letting
+    /// a slow batch read as a stuck one.
+    var reasking: Batch? {
+      guard batches.indices.contains(batchIndex) else { return nil }
+      let batch = batches[batchIndex]
+      guard batch.attempt > 1, batch.phase != .applied, batch.phase != .failed else { return nil }
+      return batch
+    }
 
     var isFinished: Bool { state == .finished || state == .cancelled }
 
@@ -784,9 +810,42 @@ extension Translation {
     /// validation -> repair -> the paid gate -> write-back -> checkpoint ->
     /// telemetry (5.1). The checkpoint is the caller's, so the cursor never claims a
     /// batch whose write-back failed.
+    ///
+    /// A model response that FAILS retryably is RE-ASKED here, before the batch is given up
+    /// on (5.9): the same request again, up to `Limits.retries` times after the first attempt,
+    /// so one batch costs at most `Limits.retries + 1` sends. It is the batch's OWN request
+    /// because the ids are batch positions — a second answer is another attempt at the same
+    /// unit of work, never a second unit — and it goes through admission and the cooldown
+    /// again, so a parked or rate-limited Muse WAITS instead of the re-ask burning nothing
+    /// and failing for the same reason (5.2).
+    ///
+    /// A NON-retryable failure is thrown by its FIRST send: the flags the failure sites
+    /// already compute decide, and a batch that has used its retries is thrown too, so it
+    /// fails exactly as it did before this loop existed. Nothing is applied on the way —
+    /// `performOne` works on a value and applies as one unit — so a re-asked batch starts
+    /// from the batch the run still holds, and a batch that runs out of attempts leaves
+    /// nothing half-applied (5.5).
     private func perform(_ batch: Run.Batch, in run: Run) async throws {
       guard let index = run.batches.firstIndex(where: { $0.id == batch.id }) else { return }
-      run.batches[index] = try await performOne(run.batches[index], in: run)
+      var attempt = 1
+      while true {
+        do {
+          run.batches[index] = try await performOne(run.batches[index], in: run)
+          return
+        } catch is CancellationError {
+          throw CancellationError()
+        } catch {
+          guard Self.retryable(error), attempt <= Limits.retries else { throw error }
+          // The attempt is over and the batch is NOT failed: it is being re-asked. The
+          // failure is recorded anyway, because the list is where the history lives — one
+          // entry per attempt, so a retry does not erase what it took to get there.
+          fail(run, error, on: batch)
+          attempt += 1
+          // Which attempt the batch is on, on the RUN's copy, so a progress line can read it
+          // while the re-ask is in flight (5.9, `Run.reasking`).
+          run.batches[index].attempt = attempt
+        }
+      }
     }
 
     /// One request's whole life, from the prompt to the row. A re-ask of a cut reply
@@ -812,7 +871,10 @@ extension Translation {
         batch.items[index].phase = .sent
       }
       batch.phase = .sent
-      run.tally.characters += batch.characters
+      // Counted ONCE per unit of work, however many attempts it takes: a re-ask carries the
+      // same items, so it is the same characters and not more work (5.7). What a retry
+      // multiplies is the SEND, and that is counted where the send happens (`Tally.sends`).
+      if batch.attempt == 1 { run.tally.characters += batch.characters }
 
       let answer = try await send(request(for: batch, in: run), in: run)
       batch.model = answer.model
@@ -1022,6 +1084,11 @@ extension Translation {
     private func send(_ request: Prompt.Request, in run: Run) async throws -> Answer {
       let candidate = try await candidate()
       try await router.admit(candidate)
+      // The send is counted BEFORE the call and whatever becomes of it: an attempt that fails
+      // is an attempt the provider was asked for, and a retry only exists because of them
+      // (5.7, 5.9). `readTelemetry`'s `requests` is the client's count of calls that came
+      // back, so the two numbers differ by exactly the attempts that failed.
+      run.tally.sends += 1
       _ = try await router.send(request, using: candidate)
       run.tally.byModel[candidate.model, default: 0] += 1
       readTelemetry(run)
@@ -1482,18 +1549,26 @@ extension Translation {
         Run.Failure(key: key, language: language, message: message, retryable: retryable))
     }
 
+    /// One failed ATTEMPT of a batch's own request, recorded while the batch is still going:
+    /// the same reading `markFailed` reports, without failing the batch.
+    ///
+    /// It exists so the failures list is the retry's HISTORY — one entry per attempt, in
+    /// order — instead of only what the batch finally died of (5.9). The last entry is the
+    /// one the status bar shows (`Run.failure`), which is right: it is the attempt the run
+    /// actually gave up on.
+    private func fail(_ run: Run, _ error: Error, on batch: Run.Batch) {
+      fail(
+        run, key: batch.items.first?.key, language: batch.language,
+        message: error.localizedDescription, retryable: Self.retryable(error))
+    }
+
     /// Marks a batch and its items failed, and reports it once.
     private func markFailed(_ batch: Run.Batch, error: Error, in run: Run) {
       if let index = run.batches.firstIndex(where: { $0.id == batch.id }) {
         run.batches[index].phase = .failed
         for item in run.batches[index].items.indices { run.batches[index].items[item].phase = .failed }
       }
-      fail(
-        run,
-        key: batch.items.first?.key,
-        language: batch.language,
-        message: error.localizedDescription,
-        retryable: Self.retryable(error))
+      fail(run, error, on: batch)
     }
 
     /// Whether retrying a failed request could help. A missing credential and a reply
