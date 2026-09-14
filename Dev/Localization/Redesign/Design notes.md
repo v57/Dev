@@ -603,10 +603,14 @@ The operation classes know what to send, nothing knows how to send it.
         publish step (5.8) has already put them in the open catalog. The consequence:
         the unsaved-changes prompt is then about HUMAN edits and about a run that did not
         finish, never about a run that did.
-      - Any other ending is deliberately NOT automatic. A cancelled run keeps what it
-        applied (5.6) and a failed batch leaves nothing half-applied (5.5), so the
-        ordinary Save is the way for those; whether they should also write on their own
-        is an open question (10.20), not something to decide here.
+      - A CANCELLED run is the one ending that does NOT write on its own (reader,
+        2026-09-14): the user stopped it deliberately, so nothing reaches the file until
+        they ask for it — the ordinary Save is the way, and what it applied (5.6) stays
+        app-side until then. A run that ENDED WITH FAILED BATCHES is NOT that case: it
+        COMPLETED, so it saves like any other completion, and the failed batches are
+        simply SKIPPED on the way out — a failed batch left nothing half-applied (5.5),
+        so there is nothing of it to write, and that is not an error to raise at save
+        time (10.20).
 
 ## 6. Memory and the imported database
 
@@ -939,12 +943,12 @@ The operation classes know what to send, nothing knows how to send it.
           Together with (a): gold replaces machine text, a hint only fills
           emptiness.
       Resolution is global (6.2), so all three apply across projects.
-- [ ] 10.20 Does a run that does NOT finish still write? 5.10 saves on completion and
-      on a pause the user asks for, and leaves a cancelled run (which keeps what it
-      applied, 5.6) and a run that ended with failed batches (which leave nothing
-      half-applied, 5.5) to the ordinary Save. The question is whether those should
-      write on their own as well: a cancel is a decision to stop, but the results that
-      already landed are real, and the user may close the pane expecting them.
+- [x] 10.20 Does a run that does NOT finish still write? ANSWERED (reader, 2026-09-14):
+      a CANCELLED run skips saving — the user stopped it, so the write waits for an
+      explicit Save, and what it applied stays app-side until then (5.6). A run whose
+      batches FAILED is not that case: it completed, so it saves, and the failed batches
+      are skipped on the way out — they left nothing half-applied (5.5), so there is
+      nothing to write for them and nothing to report as an error.
 - [x] 10.14 `maxWidth` TRAVELS with a vertical request (reader, 2026-09-14), which
       departs from the current pipeline: it keeps the width guideline out of every
       prompt on the grounds that a width constraint degrades a translation, and
