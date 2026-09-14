@@ -4,16 +4,19 @@
 //
 //  Created by Dmitry on 14.09.26.
 //
-//  The workspace's two surfaces (Design notes 8.1): the CLOSABLE OVERLAY that holds the
-//  stage pages, and the bottom status bar that keeps reporting a run after the overlay
-//  is closed. Neither is a stage's layout — the four designed pages (`*UI.swift`) are
-//  used exactly as they are, with their samples left where they belong (their own
-//  #Previews), and everything here is the BINDING that hands them the run's own batches
-//  instead of the fixture.
+//  The workspace's surfaces (Design notes 8.1): the CLOSABLE OVERLAY that holds the
+//  stage pages, the bottom status bar that keeps reporting a run after the overlay is
+//  closed, and the SHELL that reaches them — the toolbar's Start, the pane's overlay and
+//  the pane's bar are three surfaces of ONE run, and `Shell` is what they share. Neither
+//  surface is a stage's layout — the four designed pages (`*UI.swift`) are used exactly
+//  as they are, with their samples left where they belong (their own #Previews), and
+//  everything here is the BINDING that hands them the run's own batches instead of the
+//  fixture.
 //
 //  Nothing here starts a run except the one button, and nothing here stops one: closing
 //  the overlay is a presentation change, and a run is not presentation.
 
+import Foundation
 import SwiftUI
 
 extension Translation {
@@ -80,6 +83,14 @@ extension Translation {
   /// bar is where it keeps reporting.
   struct WorkspaceOverlay: View {
     let workspace: Workspace
+
+    /// Whether the run's pages are UP for a workspace: there is a run to page through, and
+    /// the user has not closed them. The pane presents the overlay on exactly this, so a
+    /// pane with no run shows the catalog itself and closing the pages is a presentation
+    /// change that stops nothing (8.1).
+    static func isPresented(_ workspace: Workspace) -> Bool {
+      workspace.isOverlayPresented && workspace.run != nil
+    }
 
     var body: some View {
       let run = workspace.run
@@ -279,8 +290,16 @@ extension Translation {
   /// the run — running or not, the step it is on, how far it got, how many failures it
   /// carries — and it reopens the overlay WHEREVER THE RUN IS NOW, because the overlay
   /// derives its rail and its page from the run rather than from where it was left.
+  ///
+  /// It is shown for a project whose workspace exists, run or not: before the first run
+  /// its line is the honest "No run yet", and the reopen button is offered only once
+  /// there is a run to reopen.
   struct WorkspaceStatusBar: View {
     let workspace: Workspace
+
+    /// Whether the bar offers the way back into the run's pages: there IS a run, and its
+    /// pages are not already up. A run that was never started has nothing to reopen.
+    var showsReopen: Bool { !workspace.isOverlayPresented && workspace.run != nil }
 
     var body: some View {
       HStack(spacing: 10) {
@@ -294,7 +313,9 @@ extension Translation {
         .frame(width: 16)
         Text(workspace.status.summary).font(.callout).monospacedDigit()
         Spacer()
-        if !workspace.isOverlayPresented {
+        // The way back into the pages, offered while there IS a run to go back to: the
+        // overlay is presented FOR a run, so a bar with none has nothing to reopen.
+        if showsReopen {
           Button {
             workspace.reopenOverlay()
           } label: {
@@ -306,6 +327,19 @@ extension Translation {
       .padding(.horizontal, 12)
       .frame(height: 28)
       .background(.bar)
+      // The shell's own failure channel: a run that could not start (no credential, 5.2)
+      // has nothing on screen to report from, and the bar is the one surface that
+      // outlives a closed overlay (8.1).
+      .alert(
+        "Translation",
+        isPresented: Binding(
+          get: { workspace.error != nil },
+          set: { if !$0 { workspace.error = nil } })
+      ) {
+        Button("OK") { workspace.error = nil }
+      } message: {
+        Text(workspace.error ?? "")
+      }
     }
   }
 
@@ -543,6 +577,117 @@ extension Translation {
       }
       .padding(32)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+  }
+
+  // MARK: - the shell
+
+  /// The bridge between the app's shell and a project's run (8.1, "entry").
+  ///
+  /// The redesign's run has to be REACHABLE before it can be judged, and the three
+  /// surfaces around it have to speak about ONE run: the toolbar's `Start`, the pane's
+  /// overlay and the pane's status bar. This is what they share — it owns the redesign's
+  /// `Store` handle over the app's ONE SwiftData container (10.16: the same records the
+  /// browser reads, never a copy) and one `Workspace` per project, built exactly the way
+  /// the design builds one: a `Global`, then `loadProject`, then the project's own
+  /// `open`.
+  ///
+  /// A workspace is kept for the life of the shell, not the life of a pane: a pane that
+  /// appears for another project focuses another workspace, and a run already going is
+  /// never stopped by that — it keeps its own state and keeps reporting through its own
+  /// bar. Nothing here writes the `.xcstrings` (Save is the only writer, 5.8) and nothing
+  /// here touches the old pipeline: both runs are reachable (10.9).
+  @Observable @MainActor final class Shell {
+    /// The app's one SwiftData context, seen from the redesign.
+    private let store: Store
+    /// The registry every workspace is built through: the cross-project document and the
+    /// resident projects.
+    private var global: Global?
+    /// One workspace per project, keyed by the redesign's project id.
+    private var workspaces: [String: Workspace] = [:]
+    /// Which project a catalog URL belongs to. A pane holds a FILE URL and nothing else,
+    /// so the app's own row — resolved once, here — is what names its workspace.
+    private var projects: [String: String] = [:]
+    /// What went wrong on the way IN (a store without that project, a workspace that
+    /// could not be built). Carried here because there is no run yet to carry it.
+    var error: String?
+
+    init() {
+      store = Store(context: TranslationStore.shared.context)
+    }
+
+    /// A shell over a store the caller already holds. The app's own shell is `init()`;
+    /// this is for a caller that owns its own container handle.
+    init(store: Store) {
+      self.store = store
+    }
+
+    /// The workspace a pane is showing, once this shell has built one.
+    func workspace(for catalogURL: URL) -> Workspace? {
+      guard let project = projects[catalogURL.path] else { return nil }
+      return workspaces[project]
+    }
+
+    /// Opens — or re-focuses — the workspace of the project a pane is showing, and hands
+    /// it back. Building one is a store read plus the project's own open: its rows, the
+    /// imported database (6.3) and where the last run of each stage stopped.
+    ///
+    /// Called by the pane when it appears and by `start` before a run, so a Start always
+    /// acts on the workspace the pane is showing.
+    ///
+    /// A workspace whose rows are still empty is opened AGAIN: a pane appears while the
+    /// app's own open is still reconciling the catalog, and the redesign projects its
+    /// rows from THAT reconcile (7.2), so the first focus that finds the records is the
+    /// one that fills them.
+    @discardableResult
+    func focus(catalogURL: URL) async -> Workspace? {
+      guard let row = try? store.projectRow(id: catalogURL.path) else { return nil }
+      projects[catalogURL.path] = row.name
+      if let workspace = workspaces[row.name] {
+        if workspace.project.data.isEmpty { try? await workspace.open() }
+        error = nil
+        return workspace
+      }
+      do {
+        if global == nil { global = try Global(store: store) }
+        guard let global = self.global else { return nil }
+        let workspace = Workspace(project: try global.loadProject(id: row.name), store: store)
+        workspaces[row.name] = workspace
+        try await workspace.open()
+        error = nil
+        return workspace
+      } catch {
+        self.error = error.localizedDescription
+        return nil
+      }
+    }
+
+    /// Whether the toolbar's Start can do anything for a pane: its workspace exists, Muse
+    /// has a credential (5.2), and no run of it is in flight — a run already going is
+    /// paused or cancelled from its own pages rather than started twice (8.1).
+    func canStart(_ catalogURL: URL) -> Bool {
+      guard let workspace = workspace(for: catalogURL) else { return false }
+      return workspace.canStart && !workspace.status.isRunning
+    }
+
+    /// The toolbar's Start: the run's pages come back up — a run the user just asked for
+    /// is a run they can watch — and then the run itself starts, or the one already in
+    /// flight is resumed. What a run reports about itself is the workspace's own.
+    func start(_ catalogURL: URL) async {
+      guard let workspace = await focus(catalogURL: catalogURL) else { return }
+      workspace.reopenOverlay()
+      try? await workspace.start()
+    }
+
+    /// The Start button's help: why it is not available, or what it runs. A run in flight
+    /// is the nearer reason of the two — the button is offering a WAIT, not a broken app.
+    func startHelp(_ catalogURL: URL) -> String {
+      guard let workspace = workspace(for: catalogURL) else {
+        return "The redesign's run starts once this project's catalog is open"
+      }
+      if workspace.status.isRunning { return "A run is in flight — pause or cancel it on its pages" }
+      if let note = workspace.museNote { return note }
+      return "Run prepare, prelearn, learn, translate, then the row pass (8.1)"
     }
   }
 }

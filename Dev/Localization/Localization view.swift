@@ -49,6 +49,14 @@ extension View {
 struct LocalizationView: View {
   @Environment(LocalizationStore.self) private var store
 
+  /// The redesign's shell (Design notes 8.1): the bridge that builds this
+  /// project's `Translation.Workspace`, whose run this pane presents — its
+  /// overlay over the catalog, and its status bar at the pane's foot. It is
+  /// what the toolbar's Start (ContentView) and this pane share, so the two
+  /// are always talking about the same run. The old pipeline's own run is a
+  /// different one and is untouched (10.9).
+  @Environment(Translation.Shell.self) private var shell
+
   /// The catalog of the selected project this instance is bound to, or nil
   /// for the projectless tool. Read from the shared sidebar view-model's
   /// row snapshot by the caller — never tracked here.
@@ -206,7 +214,7 @@ struct LocalizationView: View {
   @ViewBuilder
   private func boundContent(url: URL) -> some View {
     if store.isLoaded, store.catalogURL == url {
-      loadedContent(allowsOpenCatalog: false)
+      loadedContent(allowsOpenCatalog: false, boundCatalogURL: url)
     } else if FileManager.default.fileExists(atPath: url.path) {
       if store.hasError {
         ContentUnavailableView(
@@ -265,8 +273,12 @@ struct LocalizationView: View {
     .padding(.top, 4)
   }
 
-  private func loadedContent(allowsOpenCatalog: Bool) -> some View {
+  private func loadedContent(allowsOpenCatalog: Bool, boundCatalogURL: URL? = nil) -> some View {
     @Bindable var store = store
+    // The redesign's run for THIS pane's project, once the shell has built it
+    // (the projectless pane has no project, so it has no redesign run either).
+    let workspace = boundCatalogURL.flatMap { shell.workspace(for: $0) }
+    let isOverlayPresented = workspace?.isOverlayPresented ?? false
     return VStack(spacing: 0) {
       CatalogTable(store: store)
         .searchable(text: $store.searchText,
@@ -277,6 +289,46 @@ struct LocalizationView: View {
         .safeAreaBar(edge: .bottom) {
           FooterBar(store: store)
         }
+        // The redesign's pages, over the browser they leave exactly where it is:
+        // the overlay is a PRESENTATION of a run, so it is up while the run's
+        // pages are open and a run exists to page through — a pane with no run
+        // shows the catalog itself. Closing it is a presentation change and
+        // nothing more: the run keeps going, and the bar below keeps reporting it
+        // (8.1).
+        .overlay {
+          if let workspace, Translation.WorkspaceOverlay.isPresented(workspace) {
+            Translation.WorkspaceOverlay(workspace: workspace)
+              .transition(.move(edge: .bottom))
+          }
+        }
+      // The run's own bar, at the pane's foot and OUTSIDE the overlay: it is what
+      // reports a run whose pages the user closed, and its button reopens them
+      // wherever the run is now. A workspace the shell could not build says so in
+      // the same slot, so a failed open is never silent.
+      if let workspace {
+        Divider()
+        Translation.WorkspaceStatusBar(workspace: workspace)
+      } else if let failure = shell.error {
+        Divider()
+        Label(failure, systemImage: "exclamationmark.triangle.fill")
+          .font(.caption)
+          .foregroundStyle(.red)
+          .lineLimit(1)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .padding(.horizontal, 12)
+          .frame(height: 28)
+          .background(.bar)
+      }
+    }
+    .animation(.smooth, value: isOverlayPresented)
+    // The redesign's workspace is built once the app holds THIS project's
+    // catalog: its rows are projected from the records that open reconciled
+    // (7.2), so this is the first moment there is anything to build them from.
+    // The shell keeps the workspace (and a run in it) alive after this pane goes
+    // away — looking at another project never stops a run.
+    .task(id: boundCatalogURL) {
+      guard let boundCatalogURL else { return }
+      await shell.focus(catalogURL: boundCatalogURL)
     }
     .toolbar {
       ControlsBar(store: store, allowsOpenCatalog: allowsOpenCatalog)
@@ -1343,5 +1395,8 @@ private struct FooterBar: View {
 #Preview {
   LocalizationView()
     .environment(LocalizationStore())
+    // The redesign's shell the pane reads its run from (a pane without one has no
+    // redesign run, but the environment value is not optional).
+    .environment(Translation.Shell())
     .frame(width: 1100, height: 600)
 }

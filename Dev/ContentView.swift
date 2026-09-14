@@ -16,6 +16,12 @@ struct ContentView: View {
   @State private var model = SidebarViewModel()
   @State private var createIcon = CreateIcon()
   @State private var localizationStore = LocalizationStore()
+  /// The redesign's shell (Design notes 8.1): the bridge that builds a project's
+  /// `Translation.Workspace` over the same SwiftData container the browser reads
+  /// (10.16), so the toolbar's Start, the panes' overlays and the panes' status bars
+  /// all speak about ONE redesign run. The old pipeline is untouched and carries on
+  /// beside it (10.9).
+  @State private var translation = Translation.Shell()
 
   var body: some View {
     @Bindable var model = model
@@ -26,6 +32,7 @@ struct ContentView: View {
     }
     .environment(createIcon)
     .environment(localizationStore)
+    .environment(translation)
     // Unsaved-changes prompt: Reload…, Open…, a sidebar project switch and
     // quitting all hold their request here until it is answered, because
     // Save is the only writer of the .xcstrings. Attached at the root so a
@@ -63,7 +70,37 @@ struct ContentView: View {
           .help("Open a tool for the selected project")
         }
       }
+      // The redesign's Start (Design notes 8.1): the one button that runs the
+      // new plan — prepare, prelearn, learn, translate, then the row pass —
+      // for the project whose Localization pane is showing, because that pane
+      // is where its run reports (its overlay, and its status bar at the
+      // foot). Disabled while a run is in flight: such a run is paused or
+      // cancelled from its own pages, and pressing Start again resumes it.
+      // The old pipeline's Translate button lives in that pane's own toolbar
+      // and is untouched — the app carries both runs, side by side (10.9).
+      if let catalogURL = paneCatalogURL {
+        ToolbarItemGroup(placement: .primaryAction) {
+          Button {
+            Task { await translation.start(catalogURL) }
+          } label: {
+            Label("Start", systemImage: "play.fill")
+          }
+          .disabled(!translation.canStart(catalogURL))
+          .help(translation.startHelp(catalogURL))
+        }
+      }
     }
+  }
+
+  /// The catalog of the project pane the toolbar is bound to, or nil when no
+  /// project-bound translation pane is showing. The redesign's run belongs to
+  /// that pane (8.1): its overlay covers the pane's catalog and its status bar
+  /// sits at the pane's foot, so its Start belongs to the same project.
+  private var paneCatalogURL: URL? {
+    guard model.projectTool == .localization, case .project(let id) = model.selection,
+      let row = model.projectRow(id: id)
+    else { return nil }
+    return row.catalogURL
   }
 
   @ViewBuilder
