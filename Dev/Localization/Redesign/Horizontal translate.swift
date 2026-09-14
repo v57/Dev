@@ -48,12 +48,15 @@ extension Translation {
       self.project = project
       scan()
     }
-    /// One pass over the rows: `translatable`, NOTHING ELSE (4.6). The one row that is
-    /// not sent is a row with no language at all — it has no work to express and would
-    /// expand to an empty batch. No version test,
-    /// no per-language filter, no "the row has no source" case either — a row with
-    /// nothing authored sends its KEY as the content (4.3). A row with a settled
-    /// column and columns that need work is sent exactly like any other.
+    /// One pass over the rows: `translatable` and the 4.7 eligibility test on the
+    /// CONTENT, NOTHING ELSE (4.6). Two rows are not sent — a row with no language
+    /// at all, which has no work to express and would expand to an empty batch, and a
+    /// row whose content holds no English character (4.7): a leaked `%d - %d`, a bare
+    /// number, a bullet, an em dash has no prose to translate, and no column of it
+    /// needs adapting. No version test, no per-language filter, no "the row has no
+    /// source" case either — a row with nothing authored sends its KEY as the content
+    /// (4.3). A row with a settled column and columns that need work is sent exactly
+    /// like any other.
     ///
     /// Nothing here decides what may be written, and nothing here writes: the
     /// settled columns travel because their values are the reference this request
@@ -63,7 +66,7 @@ extension Translation {
       var operations = Operations()
       for index in 0..<project.data.count {
         let item = project.data[index]
-        guard item.translatable else { continue }
+        guard item.translatable, item.hasEnglishCharacters else { continue }
         // A row with NO language at all is SKIPPED (reader, 2026-09-14): it has
         // nothing to carry and nothing to write, and it would expand to a batch with
         // zero items — a request whose item list is empty.

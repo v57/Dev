@@ -906,6 +906,106 @@ enum Translation {
     /// `shouldTranslate != false`. An ignored key is out of scope for every
     /// stage and keeps whatever value it carries.
     var translatable: Bool = true
+    /// Eligibility (4.7): a string whose CONTENT holds no English character is
+    /// never translated.
+    ///
+    /// The test is on the content a request would send — `content`, so a row whose
+    /// source unit is missing is tested on its KEY (4.3) — and never on a slot's
+    /// status: the question is "is there anything here a translator could
+    /// translate". A leaked format string (`%d - %d`), a bare number, a bullet, an
+    /// em dash: there is no prose to translate, so a translate stage SKIPS the row
+    /// rather than sending it. A row skipped this way keeps whatever it carries,
+    /// exactly like an ignored key: no model call, no batch, nothing to write. The
+    /// row pass skips it too (4.6): it is not a row whose columns need adapting.
+    ///
+    /// English means a LATIN LETTER — A–Z / a–z — in the content that is PROSE, so
+    /// `"Hello %@"` is eligible and `"OK"` is, while `"%d - %d"` and `"->"` are
+    /// not. Digits, punctuation, whitespace, symbols and emoji count as ZERO, and so
+    /// do CJK and Cyrillic: a Cyrillic value is skipped unless it also holds a Latin
+    /// letter.
+    ///
+    /// A FORMAT SPECIFIER is not prose, and that is the case this rule exists for:
+    /// `"%d - %d"` holds two `d`s and would otherwise read as English, so the
+    /// content is read with its specifiers stepped over — `%@`, `%d`, `%1$@`, `%lld`
+    /// count as zero, exactly like the punctuation around them. `"%@"` alone is
+    /// therefore skipped and `"%@ items"` is not. (`StringBody.placeholders` is the
+    /// validation side of the same notion and is still a stub; if the two scanners
+    /// ever disagree, one of them has to win — 9.1.)
+    ///
+    /// ONE place on purpose: both translate scans ask THIS row-level predicate
+    /// (`VerticalTranslate.scan`, `HorizontalTranslate.scan`), so the column pass
+    /// and the row pass inherit one rule instead of each carrying a copy of it.
+    ///
+    /// The REPLY side is deliberately NOT here: refusing a model answer that holds
+    /// no letter while its source does is a validation matter (5.3), not
+    /// eligibility.
+    var hasEnglishCharacters: Bool {
+      switch content {
+      case .value(let text): Self.holdsLatinLetter(text)
+      case .plural(let plural): plural.values.contains { Self.holdsLatinLetter($0.value) }
+      }
+    }
+    /// A Latin letter (A–Z / a–z) outside every format specifier — the 4.7 boundary.
+    ///
+    /// Read as UNICODE SCALARS, not as characters: a precomposed `"Á"` is not in A–Z,
+    /// while an `"A"` followed by a combining accent still holds the `A` it is built
+    /// from. Read with specifiers stepped over, so `"%d - %d"` finds none while
+    /// `"Hello %@"` finds `H`.
+    private static func holdsLatinLetter(_ text: String) -> Bool {
+      let scalars = text.unicodeScalars
+      var index = scalars.startIndex
+      while index < scalars.endIndex {
+        let scalar = scalars[index]
+        if scalar == "%", let after = endOfSpecifier(after: index, in: scalars) {
+          index = after
+          continue
+        }
+        if (scalar.value >= 65 && scalar.value <= 90) || (scalar.value >= 97 && scalar.value <= 122) {
+          return true
+        }
+        index = scalars.index(after: index)
+      }
+      return false
+    }
+    /// The scalar just past the format specifier a `%` starts, or nil when that `%`
+    /// starts none — a lone `%` is punctuation and stays in the text.
+    ///
+    /// The shape is the catalog's own: flags (`- + # 0 '`), an optional positional
+    /// index (`1$`), width and precision (`5`, `*`, `.2`), an optional length
+    /// modifier (`hh`, `ll`, `l`, `q`, `z`, `j`, `t`, `L`, `w`) and the conversion
+    /// character (`d i o u x X e E f F g G a A c C s S p n @`, or a literal `%%`).
+    private static func endOfSpecifier(
+      after percent: String.UnicodeScalarView.Index, in text: String.UnicodeScalarView
+    ) -> String.UnicodeScalarView.Index? {
+      var index = text.index(after: percent)
+      while index < text.endIndex, "-+ #0'".unicodeScalars.contains(text[index]) {
+        index = text.index(after: index)
+      }
+      while index < text.endIndex, isDigit(text[index]) || text[index] == "*" {
+        index = text.index(after: index)
+      }
+      if index < text.endIndex, text[index] == "$" { index = text.index(after: index) }
+      if index < text.endIndex, text[index] == "." {
+        index = text.index(after: index)
+        while index < text.endIndex, isDigit(text[index]) || text[index] == "*" {
+          index = text.index(after: index)
+        }
+      }
+      // The two-scalar modifiers first, or `ll` would match as `l` + a conversion
+      // the letter after it does not start.
+      for modifier in ["hh", "ll", "h", "l", "q", "z", "j", "t", "L", "w"]
+      where text[index...].starts(with: modifier.unicodeScalars) {
+        index = text.index(index, offsetBy: modifier.count)
+        break
+      }
+      guard index < text.endIndex,
+            "diouxXeEfgGaAcCsSpn@%".unicodeScalars.contains(text[index])
+      else { return nil }
+      return text.index(after: index)
+    }
+    private static func isDigit(_ scalar: Unicode.Scalar) -> Bool {
+      scalar.value >= 48 && scalar.value <= 57
+    }
     var targets: [LocalizationString]
     var id: String { key }
     func target(_ language: String) -> LocalizationString? {

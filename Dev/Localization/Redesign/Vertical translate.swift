@@ -26,11 +26,16 @@ extension Translation {
     ///
     /// Split per language: one request carries one language's L1 block, and the
     /// item order inside a batch is the catalog's order.
+    ///
+    /// A row whose CONTENT holds no English character is not sent either (4.7):
+    /// `%d - %d`, a bare number, a bullet, an em dash — there is no prose to
+    /// translate, so nothing is batched for it and nothing is written; its slots
+    /// keep whatever they carry, exactly like the slots of an ignored key.
     private func scan() {
       var byLanguages = [String: Operations]()
       for index in 0..<project.data.count {
         let row = project.data[index]
-        guard row.translatable else { continue }
+        guard row.translatable, row.hasEnglishCharacters else { continue }
         for item in row.targets {
           guard item.needsMachineTranslate else { continue }
           byLanguages[item.language, default: Operations(language: item.language)].items
