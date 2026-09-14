@@ -591,6 +591,23 @@ The operation classes know what to send, nothing knows how to send it.
     Retries are a floor, not a chain: they exist so one flaky answer does not cost a
     batch, and they end — after them the batch fails exactly as it does today.
 
+5.10 Where Save appears (reader, 2026-09-14). 5.8 decides WHAT reaches the file;
+    these two decide WHEN the user can ask for it:
+      - PAUSED: the overlay's page carries a SAVE button. A paused run is a stopping
+        point by definition — the results that have landed are app-side, the user is
+        looking straight at them, and the natural action is to write them without
+        hunting for ⌘S. Saving while paused does NOT end the run: it clears the dirty
+        state for what was published and the run carries on from where it was.
+      - COMPLETED: the run SAVES. A finished run's results are written to the
+        `.xcstrings` with no second action — that is what pressing Start is for, and the
+        publish step (5.8) has already put them in the open catalog. The consequence:
+        the unsaved-changes prompt is then about HUMAN edits and about a run that did not
+        finish, never about a run that did.
+      - Any other ending is deliberately NOT automatic. A cancelled run keeps what it
+        applied (5.6) and a failed batch leaves nothing half-applied (5.5), so the
+        ordinary Save is the way for those; whether they should also write on their own
+        is an open question (10.20), not something to decide here.
+
 ## 6. Memory and the imported database
 
 6.1 The language doc is 1 000 characters on purpose: per-key knowledge belongs in
@@ -922,6 +939,12 @@ The operation classes know what to send, nothing knows how to send it.
           Together with (a): gold replaces machine text, a hint only fills
           emptiness.
       Resolution is global (6.2), so all three apply across projects.
+- [ ] 10.20 Does a run that does NOT finish still write? 5.10 saves on completion and
+      on a pause the user asks for, and leaves a cancelled run (which keeps what it
+      applied, 5.6) and a run that ended with failed batches (which leave nothing
+      half-applied, 5.5) to the ordinary Save. The question is whether those should
+      write on their own as well: a cancel is a decision to stop, but the results that
+      already landed are real, and the user may close the pane expecting them.
 - [x] 10.14 `maxWidth` TRAVELS with a vertical request (reader, 2026-09-14), which
       departs from the current pipeline: it keeps the width guideline out of every
       prompt on the grounds that a width constraint degrades a translation, and
