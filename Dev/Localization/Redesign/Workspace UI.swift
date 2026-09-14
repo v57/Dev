@@ -830,6 +830,56 @@ extension Translation {
       if let note = workspace.museNote { return note }
       return "Run prepare, prelearn, learn, translate, then the row pass (8.1)"
     }
+
+    // MARK: - clearing the store (Design notes 7.5)
+
+    /// True while ANY project's redesign run is in flight — one of the reasons the
+    /// app-level clear waits (7.5). Every workspace is asked, not just the focused
+    /// one: a run keeps going while its pane is looking at another project.
+    var isRunning: Bool { workspaces.values.contains { $0.runner.isRunning } }
+
+    /// Drops every cache this shell holds OVER the store, before a single row of it
+    /// is deleted.
+    ///
+    /// The workspaces and the `Global` registry under them are what has to go, and
+    /// they cannot be reloaded in place: a workspace's rows carry the slot states
+    /// the store supplied and its runner's batches carry the values a run wrote,
+    /// and a `Project` re-projects nothing once it has rows (its `loadData` is a
+    /// one-shot builder). The parsed CATALOGS stay — they are the artifacts the
+    /// panes handed over, and a clear never touches a file.
+    func dropStoreCaches() {
+      workspaces.removeAll()
+      global = nil
+      error = nil
+    }
+
+    /// Rebuilds every project's workspace from the artifact it was built from, once
+    /// the store has emptied: the rows come from the catalog (4.8), so the project
+    /// reads as untranslated work rather than as a project whose values were taken
+    /// away.
+    ///
+    /// The artifact used is the pane's CURRENT one when the pane is holding it —
+    /// the clear has just re-read that catalog from its file, and the shell's own
+    /// copy is the parse from the last focus, which can still carry values a run
+    /// had published into it. A project whose pane is closed falls back to the
+    /// parse this shell kept.
+    ///
+    /// This is the same build a pane focus does, which is what makes a pane reopen
+    /// after a clear a no-op: the workspace the pane asks for is already there and
+    /// already empty of store state. It is done EAGERLY, so an open pane never
+    /// keeps showing the run it had over a store that no longer holds it.
+    func rebuildAfterStoreClear() {
+      var handed = catalogs
+      if let pane = handedOver, let path = handedOverURL, let catalog = pane.catalog {
+        handed[path] = catalog
+      }
+      guard !handed.isEmpty else { return }
+      Task { [weak self] in
+        for (path, catalog) in handed {
+          await self?.focus(catalogURL: URL(fileURLWithPath: path), catalog: catalog)
+        }
+      }
+    }
   }
 }
 

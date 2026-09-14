@@ -1724,6 +1724,7 @@ final class LocalizationStore {
   private func performOpen(_ url: URL) async {
     loadGeneration += 1
     let generation = loadGeneration
+    pendingLoad = generation
     CatalogFileIO.flush()
     // Off the main actor: a real detached decode, not the no-op
     // `MainActor.run` hop this used to be (see `loadOffMainActor`).
@@ -1738,6 +1739,8 @@ final class LocalizationStore {
   private func finishOpen(
     _ result: Result<StringCatalog, Error>, url: URL, generation: Int
   ) async {
+    // Either landing — adopted or failed — ends this parse.
+    defer { if pendingLoad == generation { pendingLoad = nil } }
     switch result {
     case .success(let catalog):
       let project = await mirrorCatalog(catalog, url: url)
@@ -1798,8 +1801,77 @@ final class LocalizationStore {
     // Supersede any parse still in flight, so it cannot adopt state over a
     // closed store.
     loadGeneration += 1
+    pendingLoad = nil
     revision += 1
     run.reset()
+  }
+
+  // MARK: - clearing the store (Design notes 7.5)
+
+  /// Drops everything this window holds OVER the translation store, BEFORE a
+  /// single row of it is deleted.
+  ///
+  /// The ORDER is the point: a `CatalogRow`'s cells carry the very
+  /// `TranslationRecord` objects the mirror read (`LangCell.record`,
+  /// `pluralRecords`), and an override is the display half of an edit whose
+  /// record is about to be deleted, so a store emptied under a live mirror would
+  /// leave this window reading objects that no longer exist. Everything the store
+  /// supplied goes; the parsed DOCUMENT stays, because it is the artifact's
+  /// in-memory form and Save is its only writer — `rebuildAfterStoreClear`
+  /// re-derives the rows from it in the same turn.
+  ///
+  /// The old pipeline's last-run summary goes too: it counts values the store no
+  /// longer holds.
+  func dropStoreMirror() {
+    recordIndex = [:]
+    rows = []
+    visibleRows = []
+    valueOverrides = [:]
+    saveError = nil
+    // A parse still in flight must not land its whole-catalog MIRROR over a store
+    // that was just emptied.
+    loadGeneration += 1
+    pendingLoad = nil
+    revision += 1
+    run.reset()
+  }
+
+  /// Re-derives the table from the artifact, once the store has been emptied.
+  ///
+  /// What can be reloaded is reloaded and what cannot is dropped: the ROWS come
+  /// from the open catalog again (with no record index behind them, so every slot
+  /// reads as the file has it), while the record-derived readings — the state
+  /// badges' provenance, the Update Translations counts, the widths and notes the
+  /// records carried — are simply gone.
+  ///
+  /// The document itself is RE-READ from its file rather than kept: the store's
+  /// values reach this window's document too (a run publishes its results into it
+  /// — 5.8), and those are exactly the values the clear deleted, so keeping the
+  /// document would leave the table showing them. What the table shows afterwards
+  /// is what the artifact holds and nothing else, which is also what makes the
+  /// loss the confirmation names true: edits this window had not written to the
+  /// file go with the session.
+  ///
+  /// The parse deliberately does NOT go through the mirror: `mirrorCatalog` is
+  /// what writes a catalog's records into the store, and re-mirroring on the way
+  /// in would put back the rows the clear just deleted.
+  func reloadAfterStoreClear() async {
+    guard let url = catalogURL else { return }
+    loadGeneration += 1
+    let generation = loadGeneration
+    pendingLoad = generation
+    CatalogFileIO.flush()
+    let result = await StringCatalog.loadOffMainActor(url)
+    guard generation == loadGeneration else { return }
+    switch result {
+    case .success(let catalog):
+      // No mirror, and no unsaved-changes prompt: the clear's own confirmation
+      // already answered for the edits this drops (7.5).
+      adopt(catalog, project: project, url: url)
+    case .failure(let error):
+      loadError = error.localizedDescription
+    }
+    if pendingLoad == generation { pendingLoad = nil }
   }
 
   /// Re-read the current file and drop overrides; view state is untouched.
@@ -1818,6 +1890,7 @@ final class LocalizationStore {
     guard let url = catalogURL else { return }
     loadGeneration += 1
     let generation = loadGeneration
+    pendingLoad = generation
     CatalogFileIO.flush()
     let result = await StringCatalog.loadOffMainActor(url)
     guard generation == loadGeneration else { return }
@@ -1830,6 +1903,7 @@ final class LocalizationStore {
     case .failure(let error):
       loadError = error.localizedDescription
     }
+    if pendingLoad == generation { pendingLoad = nil }
   }
 
   /// Opens a catalog that has already been mirrored into the DB: the document,
@@ -1971,6 +2045,19 @@ final class LocalizationStore {
   /// longer matches the latest request is discarded, so rapid open/reload
   /// never stacks or applies stale state over newer work.
   private var loadGeneration = 0
+
+  /// The generation whose parse has not landed yet — a catalog open or reload in
+  /// flight. Keyed by generation rather than held as a bool so a superseded parse
+  /// cannot clear a newer one's flag, and so closing the catalog (which bumps the
+  /// generation) takes it down with the parse it belongs to.
+  private var pendingLoad: Int?
+
+  /// True while a catalog is being opened, parsed or mirrored into the store.
+  ///
+  /// A WRITER, exactly like a run: `mirrorCatalog` writes a whole catalog's
+  /// records into the store the moment the parse lands, so clearing the store
+  /// (7.5) has to wait for one — and says so — instead of racing it.
+  var isLoading: Bool { pendingLoad != nil }
 
   /// Marks the open catalog as carrying edits the file does not have yet.
   /// Every catalog mutation funnels here instead of writing: the artifact is

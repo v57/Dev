@@ -157,10 +157,28 @@ private struct ProjectRow: View {
 // MARK: - Projectless tools (bottom bar)
 
 /// The sidebar's bottom bar: the two PROJECTLESS tools, always reachable
-/// while no project is open. Selecting a row routes the detail pane through
-/// the same shared selection the project rows use.
+/// while no project is open, plus the app-level action that empties the
+/// translation store (Design notes 7.5).
+///
+/// The clear lives HERE rather than in the app's menu because it is the one
+/// action with nothing selected to hang off — it spans every project at once —
+/// and this is where the app already keeps exactly those; the bar is on screen
+/// whatever the detail pane shows, and the prompt it raises is a SwiftUI alert
+/// bound to the state the rows beside it read, with no menu-to-object-graph
+/// bridge to invent. Selecting a row routes the detail pane through the same
+/// shared selection the project rows use.
 private struct ProjectlessBar: View {
   let model: SidebarViewModel
+
+  /// The app's own open catalog: the clear has to reload what it is showing.
+  @Environment(LocalizationStore.self) private var localization
+  /// The redesign's shell: the clear has to drop its workspaces.
+  @Environment(Translation.Shell.self) private var shell
+
+  /// The confirmation first, then what the clear did. ONE prompt at a time, and
+  /// never the model's alert (that one belongs to the project rows and to
+  /// removing a project).
+  @State private var prompt: ClearPrompt?
 
   var body: some View {
     VStack(spacing: 2) {
@@ -169,10 +187,196 @@ private struct ProjectlessBar: View {
           model.selection = .tool(tool)
         }
       }
+      Divider()
+        .padding(.vertical, 3)
+      clearRow
     }
     .padding(.horizontal, 8)
     .padding(.vertical, 5)
+    .alert(
+      prompt?.title ?? "",
+      isPresented: Binding(
+        get: { prompt != nil },
+        set: { if !$0 { prompt = nil } }
+      )
+    ) {
+      if prompt == .confirm {
+        Button("Cancel", role: .cancel) { prompt = nil }
+        Button("Clear Store", role: .destructive) { clear() }
+      } else {
+        Button("OK") { prompt = nil }
+      }
+    } message: {
+      Text(prompt?.message ?? "")
+    }
   }
+
+  /// The one destructive control the app has outside a project.
+  ///
+  /// DISABLED, not stopping anything, while a writer is in flight (see
+  /// `storeClearBlocker`): stopping a run is not a thing that happens instantly —
+  /// a cancel lands at the run's next suspension point — so a clear that stopped
+  /// one could still race the write-back it had in flight. The row says which
+  /// writer it is waiting for instead of failing after the fact.
+  private var clearRow: some View {
+    let blocker = storeClearBlocker(localization: localization, shell: shell)
+    return Button {
+      prompt = .confirm
+    } label: {
+      HStack(spacing: 8) {
+        Image(systemName: "trash")
+          .font(.system(size: 14))
+          .foregroundStyle(.tertiary)
+          .frame(width: 24, height: 24)
+        VStack(alignment: .leading, spacing: 1) {
+          Text("Clear Translation Store")
+            .lineLimit(1)
+          Text(blocker ?? "Slots, journal, context, memory, cursors")
+            .font(.caption)
+            .foregroundStyle(blocker == nil ? Color.secondary : Color.orange)
+            .lineLimit(1)
+        }
+        Spacer(minLength: 0)
+      }
+      .padding(.horizontal, 6)
+      .padding(.vertical, 3)
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .disabled(blocker != nil)
+    .help("Delete every project's slots, journal, context documents, memory and run cursors. "
+      + "The project list and every .xcstrings file stay.")
+  }
+
+  /// One press: the confirmation is answered, so the clear runs (it re-reads the
+  /// open catalog, so it is worth a Task of its own), the sidebar's badges are
+  /// refreshed — they ARE record counts — and the report is what comes back on
+  /// screen.
+  private func clear() {
+    Task {
+      let outcome = await clearTranslationStore(localization: localization, shell: shell)
+      model.refresh()
+      prompt = .result(outcome)
+    }
+  }
+
+  /// What the bar is showing: the confirmation, or the report.
+  private enum ClearPrompt: Equatable {
+    case confirm
+    case result(StoreClearOutcome)
+
+    var title: String {
+      switch self {
+      case .confirm: "Clear the translation store?"
+      case .result(.cleared): "Translation store cleared"
+      case .result(.alreadyEmpty): "Nothing to clear"
+      case .result(.refused): "A writer is in flight"
+      case .result(.failed): "Couldn't clear the translation store"
+      }
+    }
+
+    var message: String {
+      switch self {
+      case .confirm:
+        """
+        This deletes every slot value, the journal of edits, the context documents, \
+        the translation memory and the saved run positions — the app-side session, \
+        for every project at once.
+
+        It stays: the project list, and every .xcstrings file. A catalog keeps the \
+        strings and the translations already written into it.
+
+        What a re-scan cannot rebuild: the context documents and the translation \
+        memory are what the app LEARNED from your corrections, and this deletes \
+        them. Edits a window is still holding — anything not yet written to a file — \
+        go with the session.
+
+        Open catalogs re-read their files afterwards and read as untranslated work. \
+        The delete itself is row by row, so on a large store it takes a while and \
+        the app is busy until it is done.
+        """
+      case .result(.cleared(let counts)):
+        "Removed \(counts.summary). Every project and every .xcstrings is still here."
+      case .result(.alreadyEmpty):
+        "There was nothing to delete: the store held no slot records, journal rows, "
+          + "context documents, memory entries or run cursors. That is not an error."
+      case .result(.refused(let reason)), .result(.failed(let reason)):
+        reason
+      }
+    }
+  }
+}
+
+// MARK: - Clearing the store (Design notes 7.5)
+
+/// What one press of the clear did. Every branch is a state the bar reports, so
+/// the button never fails silently and a second press is never an error.
+enum StoreClearOutcome: Equatable {
+  /// The store held rows: this is what was deleted, per model.
+  case cleared(StoreClearCounts)
+  /// The store was already empty — the second press, which does nothing.
+  case alreadyEmpty
+  /// Nothing was touched: a writer is in flight.
+  case refused(String)
+  /// The delete or its save failed.
+  case failed(String)
+}
+
+/// Why the clear cannot run right now, or nil when it can.
+///
+/// A WRITER in flight is the one hard reason (7.5): a run writes records into the
+/// store as it goes, and an open mirrors a whole catalog into it the moment its
+/// parse lands — so a clear that ran under either would leave a live writer
+/// writing into a store that just emptied. The button is disabled on this AND the
+/// flow refuses on it, so the safety does not depend on the button being the only
+/// caller.
+@MainActor
+func storeClearBlocker(localization: LocalizationStore, shell: Translation.Shell) -> String? {
+  if localization.isReconciling || localization.isLoading {
+    return "A catalog is opening — clear once it has landed"
+  }
+  if localization.run.isActive || localization.scan.isRunning || localization.isAddingLanguage
+    || shell.isRunning {
+    return "A run is in flight — finish or cancel it first"
+  }
+  return nil
+}
+
+/// The clear itself, in the ONE order that is safe.
+///
+/// Everything the app holds OVER the store lets go FIRST, in this same
+/// main-actor turn: an open pane's rows carry the record objects themselves, and
+/// the redesign's workspaces were built from them, so rows deleted under a live
+/// cache leave this window reading values that no longer exist. Then the rows go
+/// — one delete per row, in `TranslationStore.clear()` — and then both halves
+/// rebuild what they can: the browser re-reads its open artifact (no mirror, or
+/// the records would come straight back), the redesign's workspaces are rebuilt
+/// from those artifacts, and the old pipeline's run summary is dropped. What
+/// cannot be rebuilt is what was deleted, and 7.5 says so on screen before the
+/// press.
+@MainActor
+@discardableResult
+func clearTranslationStore(
+  localization: LocalizationStore, shell: Translation.Shell
+) async -> StoreClearOutcome {
+  if let blocker = storeClearBlocker(localization: localization, shell: shell) {
+    return .refused(blocker)
+  }
+  localization.dropStoreMirror()
+  shell.dropStoreCaches()
+  let outcome: StoreClearOutcome
+  do {
+    let counts = try TranslationStore.shared.clear()
+    outcome = counts.isEmpty ? .alreadyEmpty : .cleared(counts)
+  } catch {
+    outcome = .failed(error.localizedDescription)
+  }
+  // Whatever the store did — a save that failed can still have taken the rows out
+  // of the context — the app-side halves come back over it rather than keep the
+  // readings they had.
+  await localization.reloadAfterStoreClear()
+  shell.rebuildAfterStoreClear()
+  return outcome
 }
 
 /// One projectless tool row: live mini-status + selection highlight.
