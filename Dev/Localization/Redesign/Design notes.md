@@ -550,7 +550,30 @@ The operation classes know what to send, nothing knows how to send it.
 5.8 The run never writes the artifact. Results reach the file only through the
     open in-memory catalog and a user Save.
 
-## 6. Memory, and the imported database
+5.9 Retries (reader, 2026-09-14). A model response is re-asked before a batch is given
+    up on: THREE RETRIES after the first attempt — at most four sends for one batch —
+    and only for a failure the run already calls `retryable`. That flag is computed at
+    every failure site (`Runner.retryable(_:)`) and until now nothing acted on it; the
+    retry loop is the thing it was computed for. Concretely:
+      - the retry re-sends the SAME request. The ids are batch positions, so a second
+        answer is another attempt at the same unit of work, never a second unit.
+      - a retry goes through admission and the cooldown again, so a parked or
+        rate-limited Muse WAITS instead of burning an attempt (5.2).
+      - a NON-retryable failure fails the batch immediately and is not retried into the
+        ground. The flags at the failure sites decide; a flag that looks wrong is a
+        question, not a silent edit.
+      - every attempt is COUNTED: attempts are cost, so the tally keeps the sends
+        (5.7), and the batch reports which attempt it is on while it retries — a slow
+        batch must read as slow rather than as a hang.
+      - the batch keeps the LAST attempt's raw reply, which is what the split page
+        shows (8.1); the failures list keeps one entry per attempt, so the history
+        survives the retry.
+      - the BATCH is still the unit that fails, and a failed batch still leaves nothing
+        half-applied (5.5).
+    Retries are a floor, not a chain: they exist so one flaky answer does not cost a
+    batch, and they end — after them the batch fails exactly as it does today.
+
+## 6. Memory and the imported database
 
 6.1 The language doc is 1 000 characters on purpose: per-key knowledge belongs in
     translation memory, which answers an exact (source, key, value) hit with no
