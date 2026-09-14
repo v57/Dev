@@ -424,7 +424,7 @@ Constraints on the whole redesign, not gaps in it. Everything below assumes them
         is in flight still survives it;
       - therefore an answer for a settled slot is DISCARDED, never rejected. A missing
         or different answer for one is not a validation failure (5.3); spending a
-        repair call on a value nobody is allowed to write is paying twice. The ids
+        call on a value nobody is allowed to write is paying twice. The ids
         that must be answered are the writable ones, resolved by the same status
         check at validation time;
       - the batch budget counts the source once per language of the row, settled ones
@@ -496,7 +496,7 @@ The operation classes know what to send, nothing knows how to send it.
 
 5.1 Execution order per batch: admission (per-provider rate budget) -> prompt
     assembly -> send through the model chain -> deterministic validation ->
-    repair -> paid gate -> write-back -> checkpoint -> telemetry.
+    paid gate -> write-back -> checkpoint -> telemetry.
 
 5.2 Model routing. ONE model: Muse, for every call (see the rules above) — with ONE
     named exception, the on-device model that writes comments after a scan (2.8). It
@@ -529,9 +529,16 @@ The operation classes know what to send, nothing knows how to send it.
     An echo is the reply BEING the source; a case difference is a change the target
     language may have required, and whether it is enough is the human's call when they
     review the slot. So: exact comparison, trimming preserved, the length guard (>4)
-    kept, and every form of a plural still has to echo to count. Only
-    ids that survive are repaired, and each rejected id is repaired in its own
-    language, singly. The ids that MUST be answered are the writable slots —
+    kept, and every form of a plural still has to echo to count.
+
+    NO REPAIR (reader, 2026-09-14). A rejected id is marked FAILED, carrying the defect
+    that rejected it, and the run's own RETRY of the failed batches is the recovery path
+    (5.11). What it replaces was a per-item second chance: one model call carrying the
+    full L0 + L1 blocks and the payload for a SINGLE value, run invisibly in the middle
+    of a batch — also the window in which a pause froze an unsettled batch. The retry
+    re-asks the whole batch with that context shared, and the reader can see it and
+    trigger it. Only ids that survive reach the paid gate. The ids that MUST be
+    answered are the writable slots —
     resolved from the slot's status, the same check the write-back makes; a settled
     value that travelled as context (4.6) may come back empty or different, and that
     is not a defect.
@@ -800,9 +807,9 @@ The operation classes know what to send, nothing knows how to send it.
                      the exchange — the model INPUT that was sent (system + user, as the
                      wire carried them) and the model's RAW reply for that batch
                      ("Add model input to that model reply view", reader, same day).
-                     Raw, not parsed, on purpose — what the validator accepted, what
-                     the repair step fixed and what the paid gate was asked about is
-                     then visible instead of inferred. One request is one batch, so a
+                     Raw, not parsed, on purpose — what the validator accepted, what it
+                     rejected and what the paid gate was asked about is then visible
+                     instead of inferred. One request is one batch, so a
                      page shows exactly one exchange: a batch still in flight says so
                      (there is no input to show until it is sent), and a batch that
                      failed shows both sides anyway. The INPUT marks where the provider's
@@ -853,7 +860,7 @@ The operation classes know what to send, nothing knows how to send it.
     translation", and that is why the current `TranslationContext` carries no
     width and the paid gate receives `maxChars` only for a candidate that is
     already over. Two consequences to accept knowingly: the gate's shortener
-    becomes a repair path rather than the only channel, and the browser's width
+    is a fix path of its own rather than the only channel, and the browser's width
     badge stays advisory (it changes no state and never blocks "Verified"). If
     translations start reading terse-but-awkward, the first thing to try is
     dropping this field again — it is one line of the item payload.
@@ -1029,10 +1036,10 @@ The operation classes know what to send, nothing knows how to send it.
                           selection on the shape, the write-back guard, the
                           per-item language, the L0/ITEMS note
       Plurals.swift       + form accessors, the rule-table provenance note
-      Runner.swift        new — run state, batches, routing, validation, repair,
+      Runner.swift        new — run state, batches, routing, validation,
                           paid gate, checkpointing, telemetry
       Prompt.swift        new — L0/L1/L2 and L0/ITEMS assembly, learn fold,
-                          compression, repair and gate prompts
+                          compression and gate prompts
       Store.swift         new — the SwiftData store: the model map (context docs,
                           slots, journal, memory, cursor) and the sentinel /
                           additive-migration rules

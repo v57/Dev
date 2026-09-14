@@ -505,7 +505,7 @@ extension Translation {
       switch exchange.reply.phase {
       case .applied: return .noRequest
       case .failed: return .failed
-      case .pending, .sent, .validated, .repaired: return .notSent
+      case .pending, .sent, .validated: return .notSent
       }
     }
 
@@ -580,7 +580,7 @@ extension Translation {
         switch reply.phase {
         case .applied: return .noRequest
         case .failed: return .failed
-        case .pending, .sent, .validated, .repaired: return .pending
+        case .pending, .sent, .validated: return .pending
         }
       }
       return raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .empty : .reply(raw)

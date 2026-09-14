@@ -52,7 +52,7 @@ extension Translation {
       /// A human confirmed this value: it resolves the slot with NO model call.
       case gold
       /// Machine output kept for reference. It may be shown as a hint and it may
-      /// seed a repair, but it never overrides an existing human value.
+      /// seed a candidate, but it never overrides an existing human value.
       case hint
     }
 

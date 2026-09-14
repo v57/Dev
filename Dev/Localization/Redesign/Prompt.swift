@@ -31,7 +31,7 @@
 //  model is told which forms it is filling instead of guessing which ones exist. A
 //  reply's "text" mirrors the body it answers.
 //
-//  Reply shapes, per request: `translate`/`row`/`repair` answer a JSON array of
+//  Reply shapes, per request: `translate`/`row` answer a JSON array of
 //  `{"id": <position>, "text": <body>}`, `review` answers
 //  `{"id": <position>, "valid": <bool>, "fix": <body>}`, and `learnFold`/`compress`
 //  answer document TEXT rather than a per-id map — their `ids` is therefore empty.
@@ -210,26 +210,6 @@ extension Translation {
         l0: l0,
         rest: l1 + ["CANDIDATES\n" + json(payload)],
         ids: positions(count: items.count))
-    }
-
-    /// One rejected id, repaired in its OWN language — never batched with the
-    /// others, whose languages differ.
-    ///
-    /// The shape is a one-item language batch, so the repair costs the L0 and L1
-    /// blocks it cannot share with anything: that is the price of one language per
-    /// request. The item does not carry the validator's reason — the request has no
-    /// field for it — so the system text names the defects the validator can produce
-    /// (a dropped placeholder, an untranslated echo, an empty reply) and asks for a
-    /// complete, correct answer.
-    static func repair(item: Run.Item, language: String, project: Project) -> Request {
-      let l0 = sharedBlocks(project: project)
-      let l1 = languageBlocks(language: language, project: project)
-      let payload = json(rows([item], batchLanguage: language, namedLanguage: false))
-      return request(
-        system: systemPrompt(.repair),
-        l0: l0,
-        rest: l1 + ["ITEMS\n" + payload],
-        ids: positions(count: 1))
     }
 
     /// A request as the router sends it. `ids` is what the validator matches the
@@ -504,14 +484,13 @@ extension Translation {
     // MARK: - system prompts
 
     /// Which prompt a request is: the translate shapes (a uniform language batch, the
-    /// mixed-language row batch, a one-item repair) are three different system texts
+    /// mixed-language row batch) are different system texts
     /// because the DIRECTION has to be described differently, and the L0 prefix is
     /// per-shape for exactly that reason. It stays stable within a shape, which is
     /// what the cache needs.
     private enum Shape {
       case translate
       case row
-      case repair
       case review
       /// The learn fold and the compression pass name their own language and cap.
       case learn(language: String)
@@ -524,8 +503,6 @@ extension Translation {
         return translateSystem(direction: .targetLanguageSection)
       case .row:
         return translateSystem(direction: .perItemLanguage)
-      case .repair:
-        return repairSystem
       case .review:
         return reviewSystem
       case .learn(let language):
@@ -608,31 +585,6 @@ extension Translation {
       fit is a defect. Never drop or shorten a placeholder to fit.
       When a translation is ambiguous, pick the most natural option and translate \
       it — never ask back, never refuse.
-      """
-    }
-
-    /// The repair text: ONE item, in the language its L1 block names. It names the
-    /// defects the validator can produce but not which one fired — the request
-    /// carries no reason field — so it asks for a complete, correct answer rather
-    /// than a specific correction.
-    private static var repairSystem: String {
-      """
-      You are a careful software-localization translator. ONE item is being re-asked \
-      on its own: the answer given for it was rejected before it could be used. A \
-      rejection is one of three things — a placeholder that was dropped, duplicated \
-      or altered; an answer left in the source language; or an empty answer.
-
-      Rules:
-      1. The item is in the "ITEMS" section of the user message; the target language \
-      is named in the "TARGET LANGUAGE" section.
-      2. Output ONLY a JSON array with ONE element: {"id": <the item's id>, "text": \
-      <the translation>}. No prose, no markdown fences.
-      3. Every placeholder and format specifier of the item's "source" must appear \
-      exactly as many times and in the same form in your answer.
-      4. Translate: an answer that echoes the source is not an answer.
-      5. When the item's "source" and "target" are objects of plural categories, \
-      answer with the same object, filling EVERY category the item lists.
-      6. Follow the context sections, the "COMMENT" and any "maxWidth" guideline.
       """
     }
 

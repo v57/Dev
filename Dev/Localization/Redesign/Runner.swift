@@ -6,7 +6,7 @@
 //
 //  The run executor: the state of one run, the batches it is made of, and the one
 //  thing that knows HOW a batch happens — admission, prompt assembly, the model,
-//  deterministic validation, repair, the paid gate, write-back, checkpoint,
+//  deterministic validation, the paid gate, write-back, checkpoint,
 //  telemetry. Semantics are in "Design notes.md", section 5; section 4 says what
 //  each operation IS, and that half belongs to the stage files.
 //
@@ -248,7 +248,6 @@ extension Translation {
       case pending
       case sent
       case validated
-      case repaired
       case applied
       /// Reported, never retried forever: the run keeps its other results.
       case failed
@@ -369,7 +368,7 @@ extension Translation {
     /// Both the validator and the write-back ask this, and they ask it of the SLOT,
     /// at the moment they ask: a slot the human confirms while a batch is in flight
     /// is settled by the time the reply lands, and the reply is discarded rather than
-    /// spending a repair call on a value nobody may write (5.3, 5.5).
+    /// spending a call on a value nobody may write (5.3, 5.5).
     static func writable(_ status: LocalizationString.Status) -> Bool {
       switch status {
       case .needsTranslate, .stale, .translated: true
@@ -1009,7 +1008,7 @@ extension Translation {
     // MARK: - one batch
 
     /// One batch, start to applied: admission -> prompt -> send -> deterministic
-    /// validation -> repair -> the paid gate -> write-back -> checkpoint ->
+    /// validation -> the paid gate -> write-back -> checkpoint ->
     /// telemetry (5.1). The checkpoint is the caller's, so the cursor never claims a
     /// batch whose write-back failed.
     ///
@@ -1089,14 +1088,14 @@ extension Translation {
       let answer = try await send(request, in: run)
       batch.model = answer.model
       // The reply belongs to the BATCH, and it is kept the moment it arrives rather than
-      // when the batch returns: everything after this point — validation, a repair call,
-      // the paid gate, a cut reply's re-ask — can throw, and a batch whose reply failed
+      // when the batch returns: everything after this point — validation, the paid gate,
+      // a cut reply's re-ask — can throw, and a batch whose reply failed
       // validation is the one a human most wants to read (8.1). `Router.lastRawReply`
       // keeps only the last call's text, which by then is another batch's.
       batch.rawReply = answer.raw
       retain(answer.raw, of: batch, in: run)
 
-      // The fold answers DOCUMENT TEXT: there is nothing per-id to validate, repair
+      // The fold answers DOCUMENT TEXT: there is nothing per-id to validate
       // or gate, because the reply is not a set of candidates (5.3/5.4 are about
       // candidates).
       if batch.stage == .learn {
@@ -1109,7 +1108,7 @@ extension Translation {
       let replies = answer.replies
       // Which slots this run may write, resolved from each slot's OWN status at this
       // moment. An answer for a slot that is already settled is DISCARDED, never
-      // rejected: spending a repair call on a value nobody is allowed to write is
+      // rejected: spending a call on a value nobody is allowed to write is
       // paying twice (4.6).
       let writable = writablePositions(of: batch)
       var report = Validator.validate(replies, for: batch.items, writable: writable)
@@ -1127,7 +1126,7 @@ extension Translation {
       // A reply the model CUT OFF is not a set of bad answers: everything it did
       // complete is real output, and the ids it never reached were lost to the cut.
       // So what arrived is written, and the remainder is re-asked IN HALVES — never
-      // repaired one id at a time, which is what a cut is not (5.3).
+      // re-asked one id at a time, which is what a cut is not (5.3).
       if report.truncated, batch.items.count > 1 {
         let answered = try await gate(report.accepted, of: batch, in: run)
         apply(answered, of: &batch, in: run)
@@ -1144,24 +1143,22 @@ extension Translation {
         return batch
       }
 
-      // Only ids that survive are repaired, and each rejected id is repaired in its
-      // OWN language, singly: batching them would mix the languages whose L1 blocks
-      // are what makes the request work at all (5.3).
+      // A rejected id is NOT repaired any more (reader, 2026-09-14): it is marked failed
+      // here, carrying the defect that rejected it, and the run's own RETRY of the
+      // failed batches is the recovery path (5.11). A per-item repair call cost a whole
+      // request — L0, L1 and the payload — for ONE value, while the retry re-asks the
+      // whole batch with that context shared (5.9/5.11). What the reader gets instead of
+      // an invisible call in the middle of a batch is a failure they can see and re-run.
       var resolved = report.accepted
       for id in report.rejected {
         guard let position = Int(id), batch.items.indices.contains(position) else { continue }
         let item = batch.items[position]
         let language = language(of: item, in: batch)
-        guard let repaired = try await repair(item, in: batch, in: run) else {
-          batch.items[position].phase = .failed
-          fail(
-            run, key: item.key, language: language,
-            message: "no usable translation: \(Validator.describe(replies[id], of: item, language: language))",
-            retryable: false)
-          continue
-        }
-        batch.items[position].phase = .repaired
-        resolved[id] = repaired
+        batch.items[position].phase = .failed
+        fail(
+          run, key: item.key, language: language,
+          message: "no usable translation: \(Validator.describe(replies[id], of: item, language: language))",
+          retryable: false)
       }
 
       // The paid gate, over everything about to be written (5.4).
@@ -1217,10 +1214,10 @@ extension Translation {
     /// arrives.
     ///
     /// `performOne` works on a VALUE of the batch and only writes it back when it returns,
-    /// so a reply that arrived and was then followed by a throw (a repair call, the paid
-    /// gate, a cut reply's re-ask) would be lost with it — and 8.1 wants that reply on the
-    /// page, because it is the one that failed. Only the batch's OWN request is kept: the
-    /// repair call and the gate answer one id each and are not what a page shows, and a
+    /// so a reply that arrived and was then followed by a throw (the paid gate, a cut
+    /// reply's re-ask) would be lost with it — and 8.1 wants that reply on the page,
+    /// because it is the one that failed. Only the batch's OWN request is kept: the gate's
+    /// review answers one id at a time and is not what a page shows, and a
     /// re-ask's half carries an id the run's list does not hold (`<batch>.r0`), so writing
     /// nothing for it is also what keeps the page's reply the batch's own.
     private func retain(_ raw: String?, of batch: Run.Batch, in run: Run) {
@@ -1233,8 +1230,8 @@ extension Translation {
     /// and a page reads the run's list — so an input reached only through the returned value
     /// would be invisible for the whole of a send that then threw.
     ///
-    /// Only the batch's OWN request: the repair call and the review gate are one-id requests
-    /// of their own and are not what a stage page shows, and a re-ask's half carries an id the
+    /// Only the batch's OWN request: the review gate answers one id at a time of its own and is
+    /// not what a stage page shows, and a re-ask's half carries an id the
     /// run's list does not hold (`<batch>.r0`), so nothing is written for it.
     private func retain(_ request: Prompt.Request, of batch: Run.Batch, in run: Run) {
       guard let index = run.batches.firstIndex(where: { $0.id == batch.id }) else { return }
@@ -1331,19 +1328,6 @@ extension Translation {
         let wait = router.cooldownUntil?.timeIntervalSinceNow ?? Router.cooldownWindow
         try await Task.sleep(nanoseconds: UInt64(max(wait, 1) * 1_000_000_000))
       }
-    }
-
-    /// A rejected id, repaired on its own, in its own language. The answer is
-    /// validated like any other: a repair that is itself empty or an echo is not an
-    /// answer (5.3).
-    private func repair(_ item: Run.Item, in batch: Run.Batch, in run: Run) async throws -> String? {
-      let language = language(of: item, in: batch)
-      let answer = try await send(
-        Prompt.repair(item: item, language: language, project: project), in: run)
-      // A repair request is a one-item batch: its ids are exactly ["0"].
-      guard let text = answer.replies["0"] else { return nil }
-      let body = Validator.decode(text, for: item, language: language)
-      return Validator.defects(body, of: item).isEmpty ? text : nil
     }
 
     /// The one paid call (5.4): the candidates that were already in the prompt, plus
@@ -1538,7 +1522,7 @@ extension Translation {
       // against.
       //
       // A hint is PROVENANCE, NEVER A DECISION (6.2): it may be shown and it may
-      // seed a repair, but it never overrides a value a human or a machine wrote —
+      // seed a candidate, but it never overrides a value a human or a machine wrote —
       // the store refuses to let a hint touch gold — and nothing here reads a hint
       // back as an answer to a slot.
       //
@@ -1732,7 +1716,7 @@ extension Translation {
 
     /// The positions whose slot this run may write, resolved from each slot's OWN
     /// status NOW — the same check the write-back makes, which is why an answer for a
-    /// settled slot is never a defect and never a repair (5.3, 4.6). For a prelearn
+    /// settled slot is never a defect and is never re-asked (5.3, 4.6). For a prelearn
     /// batch it is the machine-record rule instead, so the machine record the operation
     /// exists for is an answer somebody asks for rather than one nobody requires.
     private func writablePositions(of batch: Run.Batch) -> IndexSet {
@@ -1828,13 +1812,13 @@ extension Translation {
   enum Validator {
     struct Report {
       var accepted: [String: String] = [:]
-      /// Ids that answered badly: repaired one at a time, in their own language.
+      /// Ids that answered badly: each is marked failed with its own defect, and the
+      /// run's retry of the failed batches is the recovery (5.11).
       var rejected: [String] = []
       /// The reply was CUT OFF. A different failure from a rejected id on
-      /// purpose: a truncated reply is re-asked in halves, never repaired one id
-      /// at a time.
+      /// purpose: a truncated reply is re-asked in halves, never id by id.
       var truncated: Bool = false
-      /// Ids the request never asked for. Reported, never repaired: there is no item
+      /// Ids the request never asked for. Reported, never applied: there is no item
       /// behind them, so there is nothing to re-ask on their behalf.
       var invented: [String] = []
     }
@@ -1926,8 +1910,7 @@ extension Translation {
 
     /// True when the reply holds no complete array at all: the model stopped
     /// mid-answer, or answered something that is not one. Distinguished from a bad id
-    /// because the right response differs — re-ask in halves instead of repairing id
-    /// by id (5.3).
+    /// because the right response differs — re-ask in halves instead of id by id (5.3).
     static func isTruncated(_ raw: String) -> Bool {
       let text = strippingFence(raw)
       guard let start = text.firstIndex(of: "["), let end = text.lastIndex(of: "]"),
