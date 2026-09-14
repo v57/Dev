@@ -609,7 +609,7 @@ extension Translation {
         Image(systemName: "arrow.left.arrow.right").foregroundStyle(.secondary)
         VStack(alignment: .leading, spacing: 2) {
           Text("Model exchange").font(.headline)
-          Text("Both sides of this batch: what was sent, and what came back — nothing parsed, nothing summarised.")
+          Text("Both sides of one batch: what was sent, and what came back.")
             .font(.caption)
             .foregroundStyle(.secondary)
         }
@@ -652,7 +652,7 @@ extension Translation {
       VStack(alignment: .leading, spacing: 0) {
         halfHeader(
           icon: "arrow.down.circle", title: "Model reply",
-          detail: "The answer to that request, as it came back — nothing parsed, nothing summarised.")
+          detail: "Raw and unparsed: this is the batch's answer exactly as it arrived.")
         switch Self.replyState(of: exchange.reply) {
         case .pending:
           note(
