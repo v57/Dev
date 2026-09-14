@@ -41,10 +41,11 @@ Constraints on the whole redesign, not gaps in it. Everything below assumes them
   `LocalizationStore`, `TranslationPipeline`, `TranslationRouter`, `Stage0Learner`
   or `Reconcile`, and nothing in the old pipeline calls into these types. They
   share exactly two surfaces, deliberately — the `.xcstrings` artifact (Save is
-  still its only writer) and the SwiftData models the store maps onto. The old flow
-  keeps working untouched while the new one is built; when the new one lands, the
-  old one is deleted in the same commit (10.9). Whether they should also share the
-  records themselves is 10.16.
+  still its only writer) and the SwiftData models the store maps onto — which they
+  SHARE (10.16, settled). The old flow keeps working untouched while the new one is
+  built, and it STAYS when the new one lands (10.9, reader 2026-09-14): there is no
+  cut-over and no deletion, so the app carries both pipelines, each reachable from
+  its own control, until the reader says otherwise.
 - **One `Start` does the whole thing.** A single control runs the main flow's whole
   plan in order — prepare, prelearn, learn, translate (4.2) — instead of the user
   walking stages. The stage rail becomes PROGRESS, not a menu; a step with nothing
@@ -606,6 +607,11 @@ The operation classes know what to send, nothing knows how to send it.
                      Closing it must not stop a run: the bottom status bar carries
                      the run's state (running, step, done/total, failure) and reopens
                      the overlay wherever the run is now.
+                     WHERE the controls sit once the shell is wired (reader,
+                     2026-09-14): `Start` is a button in the TOOLBAR, and the reopen
+                     button belongs to the bottom STATUS BAR at the foot of the
+                     translation pane. The old pipeline's own Translate button is not
+                     removed and not rerouted (10.9): both runs are reachable.
       language bar   the selected languages as columns (the Add Language overlay
                      and the toggle list already exist in the current UI and are
                      worth carrying over), each with a progress reading
@@ -726,10 +732,13 @@ The operation classes know what to send, nothing knows how to send it.
 - [ ] 10.8 The redesign's `Context.append(value:)` bumps the version per call.
       Canonicalization (3.8) makes most calls no-ops; the version must bump per
       *real* change, or the whole column goes stale on a repeated lesson.
-- [ ] 10.9 Where the redesign's operation classes live once implemented: beside
-      `Localization/Redesign/` or inside `Translation/Pipeline/` with the current
-      pipeline deleted in the same commit. Recommendation: the latter, in one
-      commit, or the app carries two translation pipelines.
+- [x] 10.9 Where the redesign's operation classes live, and whether the old pipeline is
+      deleted: they stay beside `Localization/Redesign/`, and the OLD PIPELINE STAYS
+      (reader, 2026-09-14). No cut-over commit, nothing deleted. The redesign is an
+      addition, not a replacement: both pipelines are reachable, the old one from its
+      existing controls and the new one from its own `Start`, until the reader says
+      otherwise. This also removes the reason the recommendation existed — a second
+      pipeline was the price, and it is now the intent.
 - [ ] 10.10 Global cap 10 000 (the redesign's `Global.init`) versus the current
       builder's 5 000: one number, in `Translation.Limits`.
 - [ ] 10.11 How a CHANGED project rule reaches machine-translated slots. Now that
@@ -818,6 +827,7 @@ maxWidth, source and target — never the key, and the key stands in when no sou
 authored), 10.17/10.18 (the row pass is the LAST and ALWAYS-ON step of a run), and the
 row pass's shape: no selection, the whole row travels, the write-back refuses settled
 slots. Also settled since the first draft: Muse is the only model, the new logic runs
-beside the old one, and the UI is a closable overlay with a bottom status bar. `FullRow`
+beside the old one (10.9: it stays there), and the UI is a closable overlay with a bottom
+status bar — `Start` in the toolbar, the reopen button on the bar. `FullRow`
 is deleted (10.4), the records are shared with the old browser (10.16) and the cursor
-lives in a `RunCursor` row. Still open: 10.2, 10.6, 10.8, 10.9, 10.10, 10.11, 10.12, 10.13.
+lives in a `RunCursor` row. Still open: 10.2, 10.6, 10.8, 10.10, 10.11, 10.12, 10.13.

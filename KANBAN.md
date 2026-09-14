@@ -3,17 +3,20 @@ Date: 2026-09-14   Board: dev-translation-redesign   Workdir: /Users/v57/Project
 
 STATUS   (updated 2026-09-14 01:52 — this doc is a narrative; the BOARD is the state:
           `hermes kanban --board dev-translation-redesign list --json`)
-  NOT DONE. 5 done, 1 ready to resume, 9 todo, 0 running. The board WAS stalled on the
-  Store card's `needs_input` gate; the user answered all three questions on 2026-09-14 and
-  the card is unblocked with the verdict in its comments:
-    · 10.16 SHARE — the new stages write the same SwiftData records the old browser reads
-    · the run cursor becomes a `RunCursor` @Model in the shared schema, not UserDefaults,
-      with the card explicitly authorised to add it additively to the Schema list
-    · the collision it found (Project.contextDoc is the to-one INVERSE of ContextDoc.project,
-      so a project document and its per-project language documents cannot share it) is fixed
-      by MAPPING: a language document carries the full scope id
-      "project/<id>/language/<code>" in `identifier` and does not set `project` at all.
-  The contexts card and all four stage cards are gated on it, so they resume when it does.
+  NEARLY DONE. 15 done, 2 blocked on the reader, 0 todo, 0 running, +1 card filed by the
+  reader's last answers (the shell wiring below). The deletion half of the cut-over is
+  CANCELLED: the old pipeline STAYS (10.9, reader 2026-09-14), so the app carries both
+  pipelines, each reachable from its own control. What is left:
+    · t_21a14f2f memory — the gold resolve needs two answers (10.11's sub-case and the
+      status a gold-resolved slot carries); its hints half has landed (003f1a8) along
+      with a measured fix to prelearn's write-back (ef13479)
+    · the new card: wire the overlay into the shell — `Start` in the toolbar, the reopen
+      button on the bottom status bar, the old pipeline's controls untouched
+  DONE across the board: store (incl. `RunCursor` + the full-scope-id mapping), contexts,
+  prompt, Muse router, runner, memory + imported DB, all four stages, review/edit + Save,
+  the workspace shell, the row page.
+  HEAD builds BUILD SUCCEEDED with zero warnings — verified by the orchestrator on a clean
+  tree, not quoted from the cards' summaries.
 
   DONE     t_db2260b2 prompt assembly (66fa010)   t_931a3ec5 Muse client (d457ec7)
            t_9caad4dc Router.values deletion (9d60f3d)   t_7baea299 run executor (a14a0fc)
@@ -70,8 +73,9 @@ BASELINE (what is in the tree today)
   Workspace.swift     Start, overlay presentation, status, review and edit actions. Stubs.
   Vertical *.swift    the four stage scans and their operation shapes. Partial — scan exists,
   Horizontal *.swift  execution and write-back do not.
-  *UI.swift           the four designed pages: paging per batch, per-item reveal, ten-item
-                      sample fixtures, #Preview per page. Done, bound to sample data only.
+  *UI.swift           the four designed pages, now BOUND TO THE LIVE RUN (the row page
+                      also reads its project's journal); the ten-item sample fixtures stay
+                      for the previews. Done.
   Design notes.md     the spec: rules, the gap analysis, and the open decisions in section 10.
 
 TASK LIST (id, priority, parents) — statuses below are from DISPATCH time; the DONE/BLOCKED
@@ -116,7 +120,6 @@ OPEN DECISIONS (notes section 10) — a worker who meets one asks instead of cho
   10.2  who may write the global document (recommendation: nobody yet)
   10.6  does the row pass need its own paid gate
   10.8  version bump gating (must bump only on a real change)
-  10.9  cut-over placement and timing
   10.10 global document cap: 10 000 as designed, or the builder's 5 000
   10.11 how a CHANGED project rule reaches already machine-translated slots
   10.12 the row pass's cost, and what the run control should say about it

@@ -1044,16 +1044,18 @@ enum Translation {
   /// The operations a run is made of.
   ///
   /// A TRANSLATE run is one button that performs `prepare -> prelearn -> learn ->
-  /// vertical`, in that order: preparation settles the rows (scan, merge the
-  /// catalog, load the session data, resolve the imported database — no model
-  /// call), prelearn supplies the machine record a human-verified slot is missing,
-  /// learn folds what the human changed into the project's language document, and
-  /// only then is the column translated. They are ordered operations of ONE run,
-  /// not passes the user triggers separately.
+  /// vertical -> horizontal`, in that order: preparation settles the rows (scan,
+  /// merge the catalog, load the session data, resolve the imported database — no
+  /// model call), prelearn supplies the machine record a human-verified slot is
+  /// missing, learn folds what the human changed into the project's language
+  /// document, only then is the column translated, and the row pass closes the run so
+  /// the corrections a verification session produced reach the other languages. They
+  /// are ordered operations of ONE run, not passes the user triggers separately.
   ///
-  /// `horizontal` is the exception: a run of its own (prepare -> horizontal),
-  /// because a project-document bump deliberately enqueues nothing and applying a
-  /// rule to values written before it is a paid sweep the user asks for.
+  /// `horizontal` is therefore not a run of its own by default, but it CAN be started
+  /// alone (`Stage.horizontal`): a project-document bump deliberately enqueues nothing
+  /// (2.3), so applying a changed rule to values written before it is a paid sweep the
+  /// user asks for — and that is the only way it runs alone.
   enum Stage: String, CaseIterable, Identifiable {
     case prepare
     case prelearn
