@@ -382,18 +382,13 @@ extension Translation {
 
     // MARK: - memory
 
-    /// One remembered translation. Resolution is by (source text, language) WITHIN
-    /// the project: the model's unique triple is (sourceText, sourceLanguage,
-    /// targetLanguage), and the project tag narrows a global table to this project's
-    /// memory.
-    ///
-    /// Gold wins when both grades exist for the same pair — `state == .reviewed` is
-    /// a human's entry, and handing back a hint where gold exists would show the
-    /// model's guess over a human's decision.
-    func memory(source: String, language: String, project: String) throws -> TranslationMemoryEntry? {
-      let rows = try memoryRows(source: source, language: language, project: project)
-      return rows.first { $0.state == .reviewed } ?? rows.first
-    }
+    // The read is `Memory.entry(source:language:)` and it is GLOBAL (6.2): one table
+    // shared by every project, one row per (sourceText, sourceLanguage,
+    // targetLanguage) triple, `projectTag` is provenance and never a filter. A
+    // project-narrowed read used to live here — `memory(source:language:project:)`,
+    // filtering on the tag — and was REMOVED (reader, 2026-09-14) rather than left
+    // beside the global one: it encoded a rule the app does not have, and the next
+    // caller would have picked it up.
 
     /// Persists one memory entry.
     ///
@@ -437,24 +432,6 @@ extension Translation {
       guard !hints.isEmpty else { return }
       for hint in hints { context.delete(hint) }
       try context.save()
-    }
-
-    /// This project's memory rows for one (source, language) pair, newest
-    /// confirmation first.
-    ///
-    /// The triple's SOURCE language is not part of the redesign's addressing
-    /// (`memory(source:language:project:)` is handed a source body, a target
-    /// language and a project), so a row is matched on the two halves the redesign
-    /// knows and narrowed by its project tag; the sort only decides which of several
-    /// rows answers.
-    private func memoryRows(
-      source: String, language: String, project: String
-    ) throws -> [TranslationMemoryEntry] {
-      let descriptor = FetchDescriptor<TranslationMemoryEntry>(
-        predicate: #Predicate { $0.sourceText == source && $0.targetLanguage == language })
-      return try context.fetch(descriptor)
-        .filter { $0.projectTag == project }
-        .sorted { ($0.confirmedAt ?? .distantPast) > ($1.confirmedAt ?? .distantPast) }
     }
 
     /// The row the model's unique triple already claims, if any.

@@ -517,11 +517,18 @@ The operation classes know what to send, nothing knows how to send it.
     triple and nothing else. So one confirmed source -> target pair is reused in
     EVERY project that asks for the same source text in that target language. An
     earlier draft of this section narrowed resolution to the project ("with the
-    project tag narrowing it") and `Store.memory` was implemented that way; that
-    was wrong against the app's own model and is corrected here and in the store
-    (the tag travels for provenance only, never as a filter). The status a
-    resolved slot carries, and whether a memory answer may replace machine text,
-    are 10.19.
+    project tag narrowing it") and a `Store.memory` that filtered on the tag was
+    implemented that way. That was wrong against the app's own model, and the read
+    has since been REMOVED: the live path is `Memory.entry(source:language:)`, which
+    is global, and the tag travels for provenance only, never as a filter. One wart
+    is left for a future reader rather than fixed here: `Memory.clearHints` /
+    `Store.clearHints` still narrow the hint rows by the project tag, which means
+    nothing now that hint rows are shared (the tag follows the last writer). It has
+    no caller today; when it gets one, decide whether it means "this language's
+    hints" or "this project's". The status a resolved slot carries, and whether a
+    memory answer may replace machine text, were 10.19 — answered: the slot reads
+    reviewed, and yes, a memory answer replaces machine text (a machine-only entry
+    fills emptiness only).
 
 6.3 The imported database (the shipped human translations in SQLite) resolves
     slots to `.imported` before any model call, marks them auto-confirmed, and
