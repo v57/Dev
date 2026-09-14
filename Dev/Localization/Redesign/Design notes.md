@@ -778,6 +778,30 @@ The operation classes know what to send, nothing knows how to send it.
     so the file-format work is not re-done in the redesign. The store is written
     after it.
 
+7.5 Clearing the store (reader, 2026-09-14: "Add button that clears all SwiftData
+    cache"). One button, app-level, that empties the translation store and leaves the
+    artifact alone. The scope is the whole point, so it is written down:
+      DELETED   `TranslationRecord` (every slot's value, status, `machine`, `reviewed`),
+                `TranslationEdit` (the journal — the learning corpus), `ContextDoc` and
+                `ContextEdit` (the global, project and language documents — the
+                accumulated lessons), `TranslationMemoryEntry` (gold AND hints),
+                `RunCursor` (every resume position).
+      KEPT      `Project` — the registry of names, catalog URLs and roots. It is
+                configuration, not cache: clearing it would empty the sidebar and
+                nobody asked for that. Every `.xcstrings` file is untouched, which is
+                what makes this survivable.
+    What that costs, stated because the button must say it too: the context documents
+    and the memory are NOT re-derivable from the catalogs. They are what the app learned
+    from the reader's own corrections, and this throws the learning away with the cache.
+    Two engineering requirements come with it:
+      - a cleared store with a live in-memory cache is worse than no button. The app
+        mirrors the store in `LocalizationStore`, and the redesign holds `Shell`/`Store`
+        caches (slot records, workspaces, per-stage runs and their batches, cursors).
+        After a clear those must be reloaded or dropped, and a run in flight must either
+        block the clear or be stopped by it — decided and stated, not left to chance;
+      - a confirmation first, naming what goes and what stays. This is the one button in
+        the app whose loss cannot be rebuilt by re-scanning.
+
 ## 8. The workspace (UI gaps)
 
 8.1 The redesign has stages and no surface. The surfaces it needs, each bound to
