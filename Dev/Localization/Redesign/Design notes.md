@@ -185,6 +185,34 @@ Constraints on the whole redesign, not gaps in it. Everything below assumes them
     slot is work when its own status says so, never because one form happens to be
     empty.
 
+2.8 Comments. `comment` has no home on the app side: the format carries it and the
+    store has no column for it (7.2), so a row's comment is read from the artifact and
+    travels into a prompt from there (4.3). What the redesign never had is GENERATION
+    — which Xcode 26 does with an on-device model, and which the reader wants too
+    ("we are currently missing that"). The settled shape of it:
+      - it runs AFTER the app's own Scan Strings operation, ON the scan's result, so
+        the source FILE each key came from is already in memory and no path is ever
+        stored in the store. `.stringsdata` carries the file per document
+        (`ScanStringsDataDocument.source`) and today `parse()` folds it away; keeping
+        it in the report is the whole reason this pass can exist without a schema.
+      - the call site is located by REGEX inside that file — the scan has no line
+        numbers — and the surrounding lines travel to the model as context, which is
+        what makes the comment describe USE rather than restate the string.
+      - ONLY keys whose artifact has no comment are touched. A human's comment is
+        never rewritten, and a key that already has one costs nothing.
+      - the model is the ON-DEVICE one (Foundation Models), the same capability
+        Xcode's own comment generation is built on: verified available on this
+        machine, ~2.3 s per comment, no key, no network, no rate budget. It is the
+        one NAMED exception to 5.2's single model.
+      - generated comments are app-side edits pending Save, like every other change
+        (5.8: Save stays the only writer of the `.xcstrings`).
+      - it is best-effort by construction: an unavailable model, a key with no call
+        site in the scanned file, a regex that finds nothing, a timeout or a refusal
+        SKIPS that key and reports it — never an error that fails the scan. The scan's
+        report is where the counts belong (generated / skipped, with the reason).
+    It is deliberately NOT part of a translate run: it belongs to the scan, because
+    that is where the paths are.
+
 ## 3. Context documents
 
 3.1 Scope identity. `Context.id` is built by a scope, never by string
@@ -470,7 +498,10 @@ The operation classes know what to send, nothing knows how to send it.
     assembly -> send through the model chain -> deterministic validation ->
     repair -> paid gate -> write-back -> checkpoint -> telemetry.
 
-5.2 Model routing. ONE model: Muse, for every call (see the rules above). There is
+5.2 Model routing. ONE model: Muse, for every call (see the rules above) — with ONE
+    named exception, the on-device model that writes comments after a scan (2.8). It
+    answers one call per comment-less key, it never leaves the device, and it never
+    answers a translation; nothing else may be added to the routing table. There is
     no chain to walk and nothing free to try first, so the runner never asks for
     "the next candidate" — it asks whether Muse is usable and whether it is cooling
     down. What survives from the current implementation's routing work is the two
