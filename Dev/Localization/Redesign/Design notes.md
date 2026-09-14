@@ -441,6 +441,24 @@ The operation classes know what to send, nothing knows how to send it.
     side is deliberately NOT in scope: a model answering prose with "—" is a
     validation matter (5.3), not eligibility.
 
+4.8 The row UNIVERSE is the open catalog, not the store (reader, 2026-09-14 — reported
+    from a live run: "prelearn uses rows from db that doesn't exist in the loaded
+    .xcstrings file"). `project.data` is one row per CATALOG key; the store supplies
+    the STATE of those keys and never the set of them:
+      - a key the store holds but the file does not → NO row. Its state waits in the
+        store for the key to come back.
+      - a key the file holds but the store has no record for → a ROW, whose slots
+        start from the artifact (source, value, and the catalog's own state) with
+        `machine`/`reviewed` empty. It is work like any other row.
+      - where both hold the key, the STORE wins for the value: a run writes app-side
+        and the file only catches up on Save (5.8), so the artifact's value is the
+        base state, not the latest one.
+    Row order is sorted by key: the catalog model holds `strings` as a Dictionary, so
+    real file order is not available to the redesign — an earlier draft promised
+    "catalog order" and that claim is withdrawn rather than faked. One consequence for
+    the shell: no workspace has to wait for the app's own reconcile to produce records
+    before its rows exist.
+
 5.1 Execution order per batch: admission (per-provider rate budget) -> prompt
     assembly -> send through the model chain -> deterministic validation ->
     repair -> paid gate -> write-back -> checkpoint -> telemetry.
