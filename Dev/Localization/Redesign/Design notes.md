@@ -547,8 +547,26 @@ The operation classes know what to send, nothing knows how to send it.
     (a flat zero means the provider cache is not being used). A run's clock and
     its per-model tally belong on the run, not on the store.
 
-5.8 The run never writes the artifact. Results reach the file only through the
-    open in-memory catalog and a user Save.
+5.8 The run never writes the artifact. Results reach the file only through the open
+    in-memory catalog and a user Save — which means the run has to PUBLISH its results
+    into that catalog object, and nothing does yet (reader, 2026-09-14, asking "when
+    will I be able to save the translation to .xcstrings?"; measured: no
+    `CatalogFileIO`, no `StringCatalog` write and no mirror anywhere under
+    `Redesign/`). Three things are missing and they are one concern:
+      - the PUBLISH step. `Project` is handed the catalog as a VALUE
+        (`loadData(catalog:)`; `StringCatalog` is a struct), so it keeps its own copy
+        and the app's instance — the one the browser displays and the one Save writes —
+        never hears about a run's results. The pane's catalog stays the single instance
+        Save writes, and the redesign hands its results INTO it, the way the old
+        pipeline's `mirrorOpenCatalog` does. The redesign never touches the file.
+      - ONE dirty flag. The redesign's `isDirty` is its own and the app's
+        (`LocalizationStore.isDirty`, which drives ⌘S and the unsaved-changes prompt) is
+        another: a run's results currently make the redesign dirty while the app still
+        believes it has nothing to save, so its edits can be lost with no prompt at all.
+        The app's flag is the one that must know.
+      - the AFFORDANCE. Save has to be reachable from the new pane (the app's existing
+        ⌘S/toolbar path is enough once the two above hold) and a run's unsaved state has
+        to read where the user looks — the status bar is that place (8.1).
 
 5.9 Retries (reader, 2026-09-14). A model response is re-asked before a batch is given
     up on: THREE RETRIES after the first attempt — at most four sends for one batch —
