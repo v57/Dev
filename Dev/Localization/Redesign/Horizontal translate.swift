@@ -48,7 +48,9 @@ extension Translation {
       self.project = project
       scan()
     }
-    /// One pass over the rows: `translatable`, NOTHING ELSE (4.6). No version test,
+    /// One pass over the rows: `translatable`, NOTHING ELSE (4.6). The one row that is
+    /// not sent is a row with no language at all — it has no work to express and would
+    /// expand to an empty batch. No version test,
     /// no per-language filter, no "the row has no source" case either — a row with
     /// nothing authored sends its KEY as the content (4.3). A row with a settled
     /// column and columns that need work is sent exactly like any other.
@@ -62,6 +64,10 @@ extension Translation {
       for index in 0..<project.data.count {
         let item = project.data[index]
         guard item.translatable else { continue }
+        // A row with NO language at all is SKIPPED (reader, 2026-09-14): it has
+        // nothing to carry and nothing to write, and it would expand to a batch with
+        // zero items — a request whose item list is empty.
+        guard !item.targets.isEmpty else { continue }
         // No selection, and no "row has no source" case either: a row with nothing
         // authored sends its KEY as the content (`item.content`).
         operations.items
