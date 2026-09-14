@@ -346,12 +346,19 @@ extension Translation {
     /// line), so a failure of theirs is not something a re-ask is offered for: it stays in the
     /// run's own report, where it belongs.
     ///
-    /// These are the run's OWN batch objects, with their items, their positions and their
-    /// languages — the reason a re-ask needs no scan: the list is already cut and the requests
-    /// go out exactly as they did the first time (4.3, 5.11).
+    /// The batches the retry offers: the run's OWN batch objects carrying at least one
+    /// FAILED ROW, in either translate job — with their items, their positions and their
+    /// languages, which is why a re-ask needs no scan: the list is already cut and the
+    /// requests go out exactly as they did the first time (4.3, 5.11).
+    ///
+    /// NOT only the batches whose own phase is failed: a batch that wrote 31 of its 33
+    /// rows IS applied (`settle`), and the two rows that went wrong are precisely what a
+    /// retry is for. The batch stays the unit that is re-sent — a request is what the run
+    /// holds, and re-cutting one is what 5.11 forbids.
     var failedBatches: [Batch] {
       batches.filter {
-        $0.phase == .failed && ($0.stage == .vertical || $0.stage == .horizontal)
+        ($0.stage == .vertical || $0.stage == .horizontal)
+          && $0.items.contains { $0.phase == .failed }
       }
     }
 
@@ -1209,10 +1216,19 @@ extension Translation {
       return answered
     }
 
-    /// The batch's phase, read off its items: failed when one of them is, applied
-    /// otherwise. A discarded answer (a settled slot) is neither.
+    /// The batch's phase, read off its items: FAILED only when the batch wrote NOTHING
+    /// and something in it failed — otherwise applied (reader, 2026-09-14: "When some
+    /// rows failed -> It should only mark those rows as failed, other as completed, so
+    /// only when all failed -> batch marked as failed").
+    ///
+    /// A batch is a REQUEST, not a row: asking for 33 rows and getting 31 good ones is a
+    /// request that worked, and the two that went wrong carry `.failed` on themselves,
+    /// which is what the page marks. A batch whose answers were all discarded (settled
+    /// slots) wrote nothing and failed at nothing either, so it is applied.
     private func settle(_ batch: inout Run.Batch) {
-      batch.phase = batch.items.contains { $0.phase == .failed } ? .failed : .applied
+      let wrote = batch.items.contains { $0.phase == .applied }
+      let failed = batch.items.contains { $0.phase == .failed }
+      batch.phase = !wrote && failed ? .failed : .applied
     }
 
     /// Keeps a batch's raw reply on the RUN's own copy of it, at the moment the reply

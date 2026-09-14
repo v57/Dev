@@ -566,7 +566,10 @@ The operation classes know what to send, nothing knows how to send it.
     checkpoints. The write set is decided here, per slot, from the slot's own
     status — `.verified` and `.imported` are never overwritten, whatever the request
     asked for (4.6). A failed batch leaves nothing half-written: the batch's results
-    are applied as one unit.
+    are applied as one unit. A PARTIALLY failed batch is not a failed batch (reader,
+    2026-09-14): a batch that wrote some of its rows is applied, and the rows that went
+    wrong say so themselves — only a batch that wrote NOTHING and failed is marked
+    failed. The batch is a request; the row is the unit a human reads.
 
 5.6 Control. Start / pause / cancel, with the batch cursor persisted as a `RunCursor`
     row (7.2) so a paused or interrupted run resumes at the next unstarted batch instead
@@ -647,7 +650,7 @@ The operation classes know what to send, nothing knows how to send it.
     When a run has ended, the batches that failed are already known: they are the run's
     own batch objects, holding their items, their positions and their languages. What the
     reader wants is the obvious next action instead of a second Start:
-      - the button appears on a FINISHED run that has failed batches, and it covers BOTH
+      - the button appears on a FINISHED run that carries failed ROWS, and it covers BOTH
         translate jobs — the column pass and the row pass. Prelearn and learn are not
         translations and are not re-run by it; a run with no failures offers nothing.
       - it re-runs exactly those batches. NO scan, no re-cut, no regeneration of the list:
@@ -846,7 +849,9 @@ The operation classes know what to send, nothing knows how to send it.
                      ("Add model input to that model reply view", reader, same day).
                      Raw, not parsed, on purpose — what the validator accepted, what it
                      rejected and how the batch was written is then visible
-                     instead of inferred. One request is one batch, so a
+                     instead of inferred. The MARK belongs to the ROW: a failed row
+                     carries its own xmark and its siblings keep their ticks, and the
+                     batch's own mark appears only when the batch wrote nothing. One request is one batch, so a
                      page shows exactly one exchange: a batch still in flight says so
                      (there is no input to show until it is sent), and a batch that
                      failed shows both sides anyway. The INPUT marks where the provider's
