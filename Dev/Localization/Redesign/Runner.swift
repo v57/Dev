@@ -6,7 +6,7 @@
 //
 //  The run executor: the state of one run, the batches it is made of, and the one
 //  thing that knows HOW a batch happens — admission, prompt assembly, the model,
-//  deterministic validation, the paid gate, write-back, checkpoint,
+//  deterministic validation, write-back, checkpoint,
 //  telemetry. Semantics are in "Design notes.md", section 5; section 4 says what
 //  each operation IS, and that half belongs to the stage files.
 //
@@ -219,8 +219,10 @@ extension Translation {
       /// machine text it replaced.
       var target: StringBody
       let comment: String
-      /// The reviewer's guideline. Travels to the model ONLY inside the paid gate,
-      /// and only for an item whose reply is already over it.
+      /// The reviewer's guideline, in characters; 0 = none. It travels in the ITEM
+      /// payload of both translate shapes (`comment`, `maxWidth`, `source`, `target` —
+      /// 10.15), so a translation is asked to FIT it instead of being shortened after
+      /// the fact; the browser's width badge stays advisory.
       let maxWidth: Int
       /// What the machine produced for this slot, where the stage has one to
       /// compare — the learn fold's evidence. Never on the wire for a translate
@@ -763,7 +765,7 @@ extension Translation {
     /// A vertical stage's groups as the runner's batches. The group IS the request,
     /// so every group becomes one batch, in the order the scan produced them.
     ///
-    /// The batch's language is copied onto every item as well: the paid gate is
+    /// The batch's language is copied onto every item as well: the request builder is
     /// handed the ITEMS and reads the language off them, and a per-language batch's
     /// items carry none of their own by construction (4.3).
     private func batches(of stage: VerticalTranslate) -> [Run.Batch] {
@@ -1008,7 +1010,7 @@ extension Translation {
     // MARK: - one batch
 
     /// One batch, start to applied: admission -> prompt -> send -> deterministic
-    /// validation -> the paid gate -> write-back -> checkpoint ->
+    /// validation -> write-back -> checkpoint ->
     /// telemetry (5.1). The checkpoint is the caller's, so the cursor never claims a
     /// batch whose write-back failed.
     ///
@@ -1088,7 +1090,7 @@ extension Translation {
       let answer = try await send(request, in: run)
       batch.model = answer.model
       // The reply belongs to the BATCH, and it is kept the moment it arrives rather than
-      // when the batch returns: everything after this point — validation, the paid gate,
+      // when the batch returns: everything after this point — validation,
       // a cut reply's re-ask — can throw, and a batch whose reply failed
       // validation is the one a human most wants to read (8.1). `Router.lastRawReply`
       // keeps only the last call's text, which by then is another batch's.
@@ -1128,7 +1130,7 @@ extension Translation {
       // So what arrived is written, and the remainder is re-asked IN HALVES — never
       // re-asked one id at a time, which is what a cut is not (5.3).
       if report.truncated, batch.items.count > 1 {
-        let answered = try await gate(report.accepted, of: batch, in: run)
+        let answered = report.accepted
         apply(answered, of: &batch, in: run)
         let remaining = batch.items.enumerated()
           .filter { writable.contains($0.offset) && answered[String($0.offset)] == nil }
@@ -1149,7 +1151,7 @@ extension Translation {
       // request — L0, L1 and the payload — for ONE value, while the retry re-asks the
       // whole batch with that context shared (5.9/5.11). What the reader gets instead of
       // an invisible call in the middle of a batch is a failure they can see and re-run.
-      var resolved = report.accepted
+      let resolved = report.accepted
       for id in report.rejected {
         guard let position = Int(id), batch.items.indices.contains(position) else { continue }
         let item = batch.items[position]
@@ -1161,8 +1163,6 @@ extension Translation {
           retryable: false)
       }
 
-      // The paid gate, over everything about to be written (5.4).
-      resolved = try await gate(resolved, of: batch, in: run)
 
       // Write-back: one unit, decided per slot at the moment it is applied (5.5).
       apply(resolved, of: &batch, in: run)
@@ -1219,10 +1219,10 @@ extension Translation {
     /// arrives.
     ///
     /// `performOne` works on a VALUE of the batch and only writes it back when it returns,
-    /// so a reply that arrived and was then followed by a throw (the paid gate, a cut
-    /// reply's re-ask) would be lost with it — and 8.1 wants that reply on the page,
-    /// because it is the one that failed. Only the batch's OWN request is kept: the gate's
-    /// review answers one id at a time and is not what a page shows, and a
+    /// so a reply that arrived and was then followed by a throw (a cut reply's re-ask)
+    /// would be lost with it — and 8.1 wants that reply on the page, because it is the
+    /// one that failed. Only the batch's OWN request is kept — nothing else builds a
+    /// request the run reads back — and a
     /// re-ask's half carries an id the run's list does not hold (`<batch>.r0`), so writing
     /// nothing for it is also what keeps the page's reply the batch's own.
     private func retain(_ raw: String?, of batch: Run.Batch, in run: Run) {
@@ -1335,34 +1335,6 @@ extension Translation {
       }
     }
 
-    /// The one paid call (5.4): the candidates that were already in the prompt, plus
-    /// `{id, valid, fix}`.
-    ///
-    /// A correction is trusted only when it passes the same free checks the candidate
-    /// did; a settled slot is never a target, so a fix for one is discarded; and an
-    /// item that cannot be fixed is written AS IS rather than dropped, which is why a
-    /// rejected correction leaves the candidate alone.
-    private func gate(
-      _ resolved: [String: String], of batch: Run.Batch, in run: Run
-    ) async throws -> [String: String] {
-      guard !resolved.isEmpty else { return resolved }
-      let answer = try await send(
-        Prompt.review(project: project, items: batch.items, replies: resolved), in: run)
-      guard let raw = answer.raw else { return resolved }
-      let writable = writablePositions(of: batch)
-      var corrected = resolved
-      for (id, review) in Validator.reviews(in: raw) {
-        guard let position = Int(id), batch.items.indices.contains(position),
-          writable.contains(position), resolved[id] != nil,
-          !review.valid, let fix = review.fix
-        else { continue }
-        let item = batch.items[position]
-        let body = Validator.decode(fix, for: item, language: language(of: item, in: batch))
-        guard Validator.defects(body, of: item).isEmpty else { continue }
-        corrected[id] = fix
-      }
-      return corrected
-    }
 
     // MARK: - write-back
 
@@ -1714,7 +1686,7 @@ extension Translation {
 
     /// The language an item is translated into: its own, or the batch's when the batch
     /// names one. The executor copies a batch's language onto its items as well, so an
-    /// item always has one and the paid gate can read it off the item.
+    /// item always has one, so a request builder can read it off the item.
     private func language(of item: Run.Item, in batch: Run.Batch) -> String {
       item.language ?? batch.language ?? ""
     }
@@ -1806,8 +1778,8 @@ extension Translation {
     }
   }
 
-  /// Deterministic, free, and always run before the paid gate: a dropped
-  /// placeholder or an empty reply must never cost a review call.
+  /// Deterministic, free, and run before anything is written: a dropped placeholder
+  /// or an empty reply must never reach a slot.
   ///
   /// The checks and their tolerances follow `TranslationValidator` — read as the
   /// precedent, never called — one level up: the ids are the items' POSITIONS as
@@ -1872,7 +1844,7 @@ extension Translation {
       return report
     }
 
-    /// The same check with every item writable. The write-back and the gate still
+    /// The same check with every item writable. The write-back still
     /// resolve the real write set per slot; this is what a caller that has no status
     /// to read (a design page, a probe) can ask.
     static func validate(_ reply: [String: String], for items: [Run.Item]) -> Report {
@@ -1921,32 +1893,7 @@ extension Translation {
       return false
     }
 
-    /// The paid gate's rows: `{id, valid, fix}` per candidate (5.4).
-    struct Review {
-      let valid: Bool
-      let fix: String?
-    }
 
-    static func reviews(in raw: String) -> [String: Review] {
-      let text = strippingFence(raw)
-      guard let start = text.firstIndex(of: "[") else { return [:] }
-      var rows: [[String: Any]] = []
-      if let end = text.lastIndex(of: "]"), start <= end,
-        let data = String(text[start...end]).data(using: .utf8),
-        let parsed = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
-      {
-        rows = parsed
-      } else {
-        rows = salvage(in: text[start...])
-      }
-      var reviews: [String: Review] = [:]
-      for row in rows {
-        guard let id = idText(row["id"]) else { continue }
-        let valid = (row["valid"] as? Bool) ?? ((row["valid"] as? NSNumber)?.boolValue ?? false)
-        reviews[id] = Review(valid: valid, fix: answerText(row["fix"]))
-      }
-      return reviews
-    }
 
     /// What is wrong with one item's answer, deterministically and for free: nothing
     /// to judge in an empty answer, a placeholder multiset that did not survive (5.3).

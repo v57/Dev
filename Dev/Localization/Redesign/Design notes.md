@@ -435,7 +435,8 @@ Constraints on the whole redesign, not gaps in it. Everything below assumes them
         byte-identical and the row request is still cacheable (4.3);
       - a reply that CONTRADICTS a verified sibling is the interesting failure here,
         not a malformed one. The validator already knows which columns were settled
-        (5.3), so the gate can be asked whether the candidate is wrong GIVEN them —
+        (5.3), so the row request itself carries them and the model is asked to be
+        consistent GIVEN them —
         "this reads correctly, but not for this key, because the language next to it
         says something else" — rather than merely whether it is a well-formed
         translation. No column pass can make that check, and it is the reason the
@@ -496,7 +497,7 @@ The operation classes know what to send, nothing knows how to send it.
 
 5.1 Execution order per batch: admission (per-provider rate budget) -> prompt
     assembly -> send through the model chain -> deterministic validation ->
-    paid gate -> write-back -> checkpoint -> telemetry.
+    write-back -> checkpoint -> telemetry.
 
 5.2 Model routing. ONE model: Muse, for every call (see the rules above) — with ONE
     named exception, the on-device model that writes comments after a scan (2.8). It
@@ -529,8 +530,7 @@ The operation classes know what to send, nothing knows how to send it.
     then only for phrases over four characters). What is left of the free checks is what
     is mechanically knowable: an EMPTY answer, and a PLACEHOLDER multiset that did not
     survive. An identical answer is written as `.translated`, which puts it in the
-    review flow where a human decides, and the paid gate still reviews what is written
-    (5.4). The cost, accepted knowingly: a model that returns a whole sentence unchanged
+    review flow where a human decides; nothing else reviews it (5.4). The cost, accepted knowingly: a model that returns a whole sentence unchanged
     for the wrong language now looks like an ordinary unreviewed translation instead of
     an error.
 
@@ -540,16 +540,26 @@ The operation classes know what to send, nothing knows how to send it.
     full L0 + L1 blocks and the payload for a SINGLE value, run invisibly in the middle
     of a batch — also the window in which a pause froze an unsettled batch. The retry
     re-asks the whole batch with that context shared, and the reader can see it and
-    trigger it. Only ids that survive reach the paid gate. The ids that MUST be
+    trigger it. Only ids that survive are written. The ids that MUST be
     answered are the writable slots —
     resolved from the slot's status, the same check the write-back makes; a settled
     value that travelled as context (4.6) may come back empty or different, and that
     is not a defect.
 
-5.4 The paid gate is the only review call: it receives the candidates that were
-    already in the prompt plus `{id, valid, fix}`. Corrections are re-validated,
-    a too-wide item may be shortened (best effort, never looped), and an
-    unfixable item is written as-is rather than dropped.
+5.4 NO REVIEW CALL (reader, 2026-09-14: "maxWidth should go to the vertical translator
+    and horizontal translator, reviewer is not needed on those stages as we have a
+    single model now"). The paid gate is GONE: there is no second call over the
+    candidates, no `{id, valid, fix}` review, and nothing shortens a too-wide value
+    after the fact. The reason is the reader's and it is sound — with ONE model, a
+    review is that model reading its own output back, which is not an independent
+    check, and it doubled the cost of every batch. What replaces it:
+      - the WIDTH guideline travels in the item payload of BOTH translate shapes (4.3,
+        9.3), so a translation is asked to fit instead of being shortened later;
+      - the free checks stay the only filter (5.3): an empty answer and a placeholder
+        multiset that did not survive. An answer identical to its source is written as
+        `.translated` for a human to judge;
+      - everything else is the human's review flow, which is where this pipeline has
+        been putting its judgement calls all along.
 
 5.5 Write-back. A batch applies its own results: `target`, `machine`, status, the
     version stamp, the producing model name and the edit journal row, then
@@ -835,7 +845,7 @@ The operation classes know what to send, nothing knows how to send it.
                      wire carried them) and the model's RAW reply for that batch
                      ("Add model input to that model reply view", reader, same day).
                      Raw, not parsed, on purpose — what the validator accepted, what it
-                     rejected and what the paid gate was asked about is then visible
+                     rejected and how the batch was written is then visible
                      instead of inferred. One request is one batch, so a
                      page shows exactly one exchange: a batch still in flight says so
                      (there is no input to show until it is sent), and a batch that
@@ -873,24 +883,24 @@ The operation classes know what to send, nothing knows how to send it.
 ## 9. Validation, width and plurals
 
 9.1 Placeholders, ids and empty are validated deterministically and for
-    free; only survivors reach the paid gate (5.3).
+    free; only survivors are written (5.3).
 
 9.2 Characters, not tokens: the models routed here have very large context
     windows, so a grapheme count is accurate enough and costs nothing. This is
     why batches are measured with `StringBody.characters` and why there is no
     tokenizer in the design.
 
-9.3 The width guideline is sent on a vertical request (reader, 2026-09-14): it is
-    part of the item's field set (4.3). This REVERSES a rule the current pipeline
-    documents and defends — `plans/translation-flow.md` states it is never sent,
-    on the grounds that "a width constraint in a translation prompt degrades the
-    translation", and that is why the current `TranslationContext` carries no
-    width and the paid gate receives `maxChars` only for a candidate that is
-    already over. Two consequences to accept knowingly: the gate's shortener
-    is a fix path of its own rather than the only channel, and the browser's width
-    badge stays advisory (it changes no state and never blocks "Verified"). If
-    translations start reading terse-but-awkward, the first thing to try is
-    dropping this field again — it is one line of the item payload.
+9.3 The width guideline travels with BOTH translate requests (reader, 2026-09-14: it
+    goes to "the vertical translator and horizontal translator"): it is part of the
+    item's field set (4.3), emitted whenever it is non-zero, and the translate system
+    text tells the model to keep within it. This REVERSES a rule the current pipeline
+    documents and defends — `plans/translation-flow.md` states it is never sent, on the
+    grounds that "a width constraint in a translation prompt degrades the
+    translation" — and it is now the ONLY channel: the reviewer that used to receive
+    `maxChars` for an over-wide candidate is gone (5.4), so nothing shortens a value
+    after the fact. The browser's width badge stays advisory (it changes no state and
+    never blocks "Verified"). If translations start reading terse-but-awkward, the
+    first thing to try is dropping the field again — it is one line of the payload.
 
 9.4 Plural rules: the stub's table is COMPLETE relative to what the app uses, and
     the real gap is that there are two copies of it. Measured 2026-09-13: the
@@ -953,9 +963,8 @@ The operation classes know what to send, nothing knows how to send it.
       `forms` map; `Plurals` keeps only `value(for:)` / `set(_:for:)` so a stage can
       address one form, and a write-back stamps the same state on every form of the
       slot.
-- [ ] 10.6 Does a horizontal (row) pass need its own paid gate, or may it reuse
-      the vertical gate verbatim? Recommendation: reuse the gate, keep the
-      per-item language naming.
+- [x] 10.6 MOOT (reader, 2026-09-14): there is no gate any more (5.4), so a row pass
+      cannot have one of its own. The per-item language naming stands.
 - [x] 10.7 Prelearn is an OPERATION OF THE TRANSLATE RUN (reader, 2026-09-13), not
       a pass of its own: preparation first (scan the catalog, merge it into the
       in-memory catalog, load the data), prelearn second, then learn, then
@@ -1022,7 +1031,8 @@ The operation classes know what to send, nothing knows how to send it.
 - [x] 10.14 `maxWidth` TRAVELS with a vertical request (reader, 2026-09-14), which
       departs from the current pipeline: it keeps the width guideline out of every
       prompt on the grounds that a width constraint degrades a translation, and
-      sends `maxChars` only through the paid gate (9.3). Recorded as a decision
+      sends `maxChars` only through the gate — which is itself gone now, so the width
+      field is the only channel there is (9.3). Recorded as a decision
       rather than a fill because it reverses an earned rule — the thing to watch is
       a translation that reads as if it were written to a budget instead of to the
       UI. Dropping it again is one field of the item payload.
@@ -1064,9 +1074,9 @@ The operation classes know what to send, nothing knows how to send it.
                           per-item language, the L0/ITEMS note
       Plurals.swift       + form accessors, the rule-table provenance note
       Runner.swift        new — run state, batches, routing, validation,
-                          paid gate, checkpointing, telemetry
+                          checkpointing, telemetry
       Prompt.swift        new — L0/L1/L2 and L0/ITEMS assembly, learn fold,
-                          compression and gate prompts
+                          compression prompts
       Store.swift         new — the SwiftData store: the model map (context docs,
                           slots, journal, memory, cursor) and the sentinel /
                           additive-migration rules

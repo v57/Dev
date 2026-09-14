@@ -32,9 +32,8 @@
 //  reply's "text" mirrors the body it answers.
 //
 //  Reply shapes, per request: `translate`/`row` answer a JSON array of
-//  `{"id": <position>, "text": <body>}`, `review` answers
-//  `{"id": <position>, "valid": <bool>, "fix": <body>}`, and `learnFold`/`compress`
-//  answer document TEXT rather than a per-id map — their `ids` is therefore empty.
+//  `{"id": <position>, "text": <body>}`, and `learnFold`/`compress` answer document
+//  TEXT rather than a per-id map — their `ids` is therefore empty.
 
 import Foundation
 
@@ -150,66 +149,6 @@ extension Translation {
       """
       return Request(
         system: systemPrompt(.compress(language: language, limit: limit)), user: user)
-    }
-
-    // MARK: - the paid gate
-
-    /// The single paid call: the candidates that were already in the prompt, plus
-    /// `{id, valid, fix}` per rejected id.
-    ///
-    /// The context is the one the candidate was produced under — L0 always, and L1
-    /// when the batch names exactly one language — because the gate's whole value is
-    /// judging a concrete translation, not re-translating blind. A row batch is
-    /// mixed-language, so no L1 block exists there and its items name their own
-    /// language instead, which is also what lets the gate ask whether a candidate
-    /// contradicts a SETTLED sibling (4.6): a settled column travels as an item whose
-    /// candidate is the value already committed to.
-    ///
-    /// The candidate per id is the reply verbatim; a slot the model did not answer
-    /// falls back to the value the slot already carries. `maxWidth` is carried ONLY
-    /// for an item whose candidate is already over it — the one place a width
-    /// guideline reaches a model through this pass is here and in the item payload.
-    ///
-    /// The L1 block needs a language, and a batch has one exactly when its items name
-    /// one: a ROW batch names several (so its items carry their language instead, and
-    /// a settled column travels as an item whose candidate is the value already
-    /// committed to), and a per-language batch's items carry none by default. The
-    /// caller therefore has to name the language on the items it hands the gate —
-    /// `Run.Item.language` is nil on a vertical batch — or the gate is assembled
-    /// without the language it is judging against.
-    static func review(project: Project, items: [Run.Item], replies: [String: String]) -> Request {
-      let languages = Set(items.compactMap(\.language))
-      let uniform = languages.count == 1 ? languages.first : nil
-      let l0 = sharedBlocks(project: project)
-      let l1 = uniform.map { languageBlocks(language: $0, project: project) } ?? []
-
-      let payload: [[String: Any]] = items.enumerated().map { index, item in
-        var candidate: Any = body(item.target)
-        if let reply = replies[String(index)], !reply.isEmpty {
-          candidate = reply
-        }
-        var row: [String: Any] = [
-          "id": index,
-          "source": body(payloadSource(item)),
-          "candidate": candidate,
-        ]
-        if !item.comment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-          row["comment"] = clamp(item.comment, to: Limits.commentCharacters)
-        }
-        if item.maxWidth > 0, isOver(candidate, limit: item.maxWidth) {
-          row["maxWidth"] = item.maxWidth
-        }
-        if languages.count > 1, let language = item.language {
-          row["language"] = language
-        }
-        return row
-      }
-
-      return request(
-        system: systemPrompt(.review),
-        l0: l0,
-        rest: l1 + ["CANDIDATES\n" + json(payload)],
-        ids: positions(count: items.count))
     }
 
     /// A request as the router sends it. `ids` is what the validator matches the
@@ -331,16 +270,6 @@ extension Translation {
 
     /// True when a candidate is already over its width guideline. A candidate that
     /// is not a string (a plural object) is measured by its text.
-    private static func isOver(_ candidate: Any, limit: Int) -> Bool {
-      switch candidate {
-      case let text as String:
-        return text.count > limit
-      case let forms as [String: String]:
-        return forms.values.contains { $0.count > limit }
-      default:
-        return false
-      }
-    }
 
     // MARK: - L0 and L1 blocks
 
@@ -491,7 +420,6 @@ extension Translation {
     private enum Shape {
       case translate
       case row
-      case review
       /// The learn fold and the compression pass name their own language and cap.
       case learn(language: String)
       case compress(language: String, limit: Int)
@@ -503,8 +431,6 @@ extension Translation {
         return translateSystem(direction: .targetLanguageSection)
       case .row:
         return translateSystem(direction: .perItemLanguage)
-      case .review:
-        return reviewSystem
       case .learn(let language):
         return learnSystem(language: language)
       case .compress(let language, let limit):
@@ -585,40 +511,6 @@ extension Translation {
       fit is a defect. Never drop or shorten a placeholder to fit.
       When a translation is ambiguous, pick the most natural option and translate \
       it — never ask back, never refuse.
-      """
-    }
-
-    /// The paid gate: judge the candidates, correct only real defects.
-    private static var reviewSystem: String {
-      """
-      You are a strict software-localization reviewer. For each item you get the \
-      source string and a CANDIDATE translation. Judge the candidate against its \
-      "COMMENT", against its target language — named in the "TARGET LANGUAGE" \
-      section, or per item — and against the project context.
-
-      Rules:
-      1. Reply with ONLY a JSON array — no prose, no markdown fences. Each element \
-      is {"id": <the item's id>, "valid": <true|false>, "fix": "<corrected \
-      translation>"}, one element per input item, in the same order.
-      2. Mark valid=false ONLY for a real defect: wrong meaning, a broken or altered \
-      placeholder, the wrong language, wrong grammatical agreement, a value that \
-      contradicts a settled value of the same row, or clearly non-idiomatic \
-      register. Do not rewrite a correct translation to your own preference — when \
-      in doubt, mark it valid and leave "fix" empty.
-      3. Leave "fix" empty when valid=true.
-      4. When the items of one request name different languages, judge each item on \
-      its own AND check that the row reads consistently across the languages it \
-      names; a value that contradicts a settled one is a defect of the candidate, \
-      never of the settled value.
-      5. When an item's "source" and "candidate" are objects of plural categories, \
-      judge and fix every category, and answer with "fix" as the same kind of \
-      object.
-      6. An item may carry "maxWidth": its candidate is longer than the guideline \
-      the UI gives that string. Then rephrase or abbreviate it so it fits, keeping \
-      the meaning, the placeholders and the register. If it cannot be shortened \
-      without losing meaning, mark it valid and leave "fix" empty.
-      7. An item whose candidate is empty has nothing to judge: mark it valid and \
-      leave "fix" empty.
       """
     }
 
