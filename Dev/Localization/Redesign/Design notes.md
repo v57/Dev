@@ -865,9 +865,17 @@ The operation classes know what to send, nothing knows how to send it.
                      two seconds — so a finished batch is READ before the next takes the
                      screen. The delay is PRESENTATION ONLY: it never holds the run back
                      (the run advances at its own pace and the page catches up), a newer
-                     index restarts the pause rather than queueing behind the old one,
-                     and the first appearance is not delayed at all (a page opened
-                     mid-run goes straight to the batch the run is on).
+                     index recomputes it rather than queueing behind the old one, and
+                     the first appearance is not delayed at all (a page opened mid-run
+                     goes straight to the batch the run is on).
+                     The pause is a BUDGET measured from the LAST SCROLL, not a fresh
+                     timer per change (reader, 2026-09-14): a batch arriving 0.5 s after
+                     the previous one waits the remaining 1.5 s, so a run that produces
+                     batches quickly keeps advancing the page instead of postponing it
+                     forever. `.task(id:)` CANCELS the old task on every change — that is
+                     the framework's contract, not something the closure controls — so a
+                     plain `Task.sleep(pacing)` there would restart the two seconds each
+                     time; the wait is computed from the shared deadline instead.
       language bar   the selected languages as columns (the Add Language overlay
                      and the toggle list already exist in the current UI and are
                      worth carrying over), each with a progress reading
