@@ -1168,9 +1168,14 @@ extension Translation {
       apply(resolved, of: &batch, in: run)
 
       // Anything still unanswered is reported, never retried forever: the run keeps
-      // its other results.
+      // its other results. An item already marked failed was REPORTED where it was
+      // rejected, with the defect that rejected it — reporting it a second time as "no
+      // translation produced" said the wrong thing about it (a translation WAS produced;
+      // it was thrown out) and doubled the entry in the failure list (reader,
+      // 2026-09-14).
       for (position, item) in batch.items.enumerated()
-      where writable.contains(position) && resolved[String(position)] == nil {
+      where writable.contains(position) && resolved[String(position)] == nil
+        && batch.items[position].phase != .failed {
         batch.items[position].phase = .failed
         fail(
           run, key: item.key, language: language(of: item, in: batch),
@@ -2058,7 +2063,13 @@ extension Translation {
     /// they review the slot, not this check's.
     private static func echoes(_ answer: StringBody, _ source: StringBody) -> Bool {
       let sourceText = source.catalogValue.trimmingCharacters(in: .whitespacesAndNewlines)
-      guard sourceText.count > 4 else { return false }
+      // A single TOKEN is never an echo (reader, 2026-09-14). "Start", "Symbol", "OK" and
+      // every acronym are legitimately identical in a target language, and the length
+      // guard ALONE rejected exactly those — the loanword case the guard says it exists
+      // to protect. A PHRASE that comes back unchanged is the real echo: nobody
+      // translates a sentence by leaving it. (`%lld bytes` -> `%lld Bytes` was the other
+      // half of this: a case difference is not sameness either.)
+      guard sourceText.count > 4, sourceText.contains(" ") else { return false }
       switch answer {
       case .value(let text):
         return text.trimmingCharacters(in: .whitespacesAndNewlines) == sourceText

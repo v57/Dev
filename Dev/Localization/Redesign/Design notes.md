@@ -528,8 +528,13 @@ The operation classes know what to send, nothing knows how to send it.
     correct German answer — German capitalizes its nouns, and the batch failed on it.
     An echo is the reply BEING the source; a case difference is a change the target
     language may have required, and whether it is enough is the human's call when they
-    review the slot. So: exact comparison, trimming preserved, the length guard (>4)
-    kept, and every form of a plural still has to echo to count.
+    review the slot. So: exact comparison, trimming preserved, every form of a plural
+    still has to echo to count — and a source of ONE WORD is never an echo (reader,
+    2026-09-14, from a live run: `Start` and `Symbol` came back unchanged for `cs`,
+    which is what Czech calls them, and both were thrown away). A phrase that comes back
+    unchanged is the echo the rule is for; a single token — and every acronym — is the
+    loanword case the guard always said it was protecting. An answer that IS identical
+    is written as `.translated`, so a human still sees it in the review flow.
 
     NO REPAIR (reader, 2026-09-14). A rejected id is marked FAILED, carrying the defect
     that rejected it, and the run's own RETRY of the failed batches is the recovery path
