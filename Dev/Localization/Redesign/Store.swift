@@ -341,22 +341,37 @@ extension Translation {
     /// overwritten — is the caller's check, made against the slot's own status at
     /// apply time (5.5). The store cannot make it: it holds a record, not the
     /// statuses the run resolved.
-    func upsert(_ record: TranslationRecord) throws {
+    /// `saving: false` is for a caller writing MANY records in one pass (`Project.saveData`
+    /// writes a whole session): every `context.save()` here is its own transaction, and a
+    /// session can touch thousands of records, so the batch writes through and the caller
+    /// saves once (`Store.save`). A single write still saves by default — a caller writing
+    /// one record wants it durable now.
+    func upsert(_ record: TranslationRecord, saving: Bool = true) throws {
       record.contextVersions = Self.lifted(record.contextVersions)
       record.updatedAt = .now
       if record.modelContext == nil { context.insert(record) }
-      try context.save()
+      if saving { try context.save() }
     }
 
     // MARK: - journal (the learning corpus)
 
     /// Appends one journal row. Append-only: an edit is never rewritten, and it is
     /// the provenance of every value the app holds.
-    func append(_ edit: TranslationEdit) throws {
+    func append(_ edit: TranslationEdit, saving: Bool = true) throws {
       edit.contextVersions = Self.lifted(edit.contextVersions)
       context.insert(edit)
-      try context.save()
+      if saving { try context.save() }
     }
+
+    /// The ONE transaction for a batch of writes: the counterpart of `upsert(_:saving:)`
+    /// and `append(_:saving:)`, so a caller that walked a whole session pays for one save
+    /// instead of one per record.
+    func save() throws { try context.save() }
+
+    /// Drops a batch's PENDING writes. The counterpart of `save()`, so a session write
+    /// that threw part-way leaves nothing half-applied for a later, unrelated save (a
+    /// run's write-back) to flush by accident.
+    func rollback() { context.rollback() }
 
     /// `confirmedOnly` is the learn corpus: pipeline-written rows are not lessons,
     /// only the ones a human confirmed. Oldest first, which is the order `learn`

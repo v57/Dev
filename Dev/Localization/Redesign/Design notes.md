@@ -852,6 +852,21 @@ The operation classes know what to send, nothing knows how to send it.
       - a confirmation first, naming what goes and what stays. This is the one button in
         the app whose loss cannot be rebuilt by re-scanning.
 
+7.6 A session write is ONE transaction (reader, 2026-09-14: "saveData() takes too long.
+    Is it because context.save called on each row?"). It was, exactly: `saveData` walks
+    every row, every slot and every form, and `Store.upsert` and `Store.append` each ended
+    with their own `context.save()` — one transaction per record, on the main actor, plus a
+    second save for every journal row. That is why a real project's session save takes
+    minutes. The write path now takes `saving:` (false inside a batch) and the session pays
+    ONE `Store.save()` at the end; a throw rolls the batch back (`Store.rollback`), so a
+    failed session write leaves nothing half-applied for a later, unrelated save to flush.
+    The change gate stays, for a different reason than it was written for: skipping a record
+    that already matches keeps `updatedAt` meaning when the slot last MOVED, not when a
+    save last ran.
+    The same shape survives in the RUNNER's write-back — `persist` per applied write, so one
+    save per slot of a batch. It should adopt the same flag (one save per batch), and it is
+    left to whoever owns `Runner.swift` next because that file is in flight.
+
 ## 8. The workspace (UI gaps)
 
 8.1 The redesign has stages and no surface. The surfaces it needs, each bound to

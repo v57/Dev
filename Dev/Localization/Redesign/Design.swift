@@ -786,6 +786,14 @@ enum Translation {
     /// and the confirmation a `.verified` slot is.
     func saveData() throws {
       guard !data.isEmpty else { return }
+      // ONE save for the whole session, and all-or-nothing. Every write below goes
+      // through WITHOUT saving: each `context.save()` is its own transaction, and this
+      // loop can touch thousands of records — which is why the session save took minutes
+      // on a real project. A throw rolls the batch back instead of leaving a
+      // half-applied session for the next, unrelated save to flush.
+      let store = global.store
+      var committed = false
+      defer { if !committed { store.rollback() } }
       var records: [RecordKey: TranslationRecord] = [:]
       for record in try global.store.records(project: id) {
         records[RecordKey(
@@ -797,20 +805,19 @@ enum Translation {
           for form in Self.forms(of: slot) {
             let record = try record(for: row, slot: slot, form: form, of: records)
             // The change gate, for the same reason a document has one: a save is a walk
-            // of the whole project, and `Store.upsert` writes per call — so a slot that
-            // already says exactly what the session says is skipped, and `updatedAt`
-            // keeps meaning when the slot last MOVED.
+            // of the whole project, so a slot that already says exactly what the session
+            // says is skipped — and `updatedAt` keeps meaning when the slot last MOVED.
             guard !unchanged(form, of: slot, record) else { continue }
             let before = record.value
             write(form, of: slot, to: record)
-            try global.store.upsert(record)
+            try store.upsert(record, saving: false)
             // The journal, which is the learning corpus (7.2, 2.5). The ONE edit
             // recorded here is a value a human settled that MOVED: a machine write-back
             // journals itself at the run's write-back, a pure confirmation records
             // nothing (the model agreeing with the human is not a lesson), and the
             // imported resolve is not a lesson about our model at all (6.3).
             if slot.status == .verified, before != record.value {
-              try global.store.append(
+              try store.append(
                 TranslationEdit(
                   record: record,
                   fromValue: before,
@@ -818,11 +825,14 @@ enum Translation {
                   editor: .human,
                   reason: "Confirmed in review: the human's value replaced the stored one",
                   contextVersions: Store.persistable(slot.versions),
-                  isUserConfirmed: true))
+                  isUserConfirmed: true),
+                saving: false)
             }
           }
         }
       }
+      try store.save()
+      committed = true
     }
     /// True when the record already carries exactly what the session says, so writing it
     /// again would be a no-op with a side effect. The mirror of `write(_:of:to:)`: every
