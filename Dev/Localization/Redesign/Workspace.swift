@@ -540,6 +540,12 @@ extension Translation {
     /// plain prose line (3.5 — an exact-line membership test, no model call). A note that
     /// becomes a memo, or is cleared, RETRACTS the line it folded, and a text that did not
     /// change writes nothing — not even a version bump (3.3).
+    ///
+    /// The key's records are ONE transaction (7.6): the note lands on every record of the key or
+    /// on none, so the loop writes through without saving and the key pays ONE `Store.save()`.
+    /// A failure is REPORTED where the reader looks (`error`, the pane's alert) instead of being
+    /// swallowed by `try?`, and what did not land is rolled back — a note that reads as stored
+    /// when it is not is worse than an error.
     func setNote(_ note: String?, scope: NoteScope, key: String) {
       let text = (note ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
       let records = records(of: key).values.flatMap { $0 }
@@ -556,14 +562,20 @@ extension Translation {
           replace(folded, with: rule)
         }
       }
-      for record in records {
-        record.note = text.isEmpty ? nil : text
-        record.noteScope = text.isEmpty ? nil : (scope == .projectRule ? Self.ruleScope : Self.memoScope)
-        // What the fold did, so the next edit re-folds and a clear retracts. The old
-        // browser's columns, kept for the same reason.
-        record.noteFoldedText = rule.isEmpty ? nil : rule
-        record.noteFoldedAt = rule.isEmpty ? nil : .now
-        try? store.upsert(record)
+      do {
+        for record in records {
+          record.note = text.isEmpty ? nil : text
+          record.noteScope = text.isEmpty ? nil : (scope == .projectRule ? Self.ruleScope : Self.memoScope)
+          // What the fold did, so the next edit re-folds and a clear retracts. The old
+          // browser's columns, kept for the same reason.
+          record.noteFoldedText = rule.isEmpty ? nil : rule
+          record.noteFoldedAt = rule.isEmpty ? nil : .now
+          try store.upsert(record, saving: false)
+        }
+        try store.save()
+      } catch {
+        store.rollback()
+        self.error = error.localizedDescription
       }
     }
     /// The reviewer's guideline. Review side only: it never enters a prompt except
@@ -576,9 +588,19 @@ extension Translation {
     /// projection on (its `maxWidth` is not settable), so a change here reaches a prompt from
     /// the next open.
     func setMaxWidth(_ width: Int?, key: String) {
-      for record in records(of: key).values.flatMap({ $0 }) {
-        record.maxWidth = width
-        try? store.upsert(record)
+      // The key's records are ONE transaction here too (7.6), for the same reason the note's
+      // are: the guideline lands on every record of the key or on none, and a failed write is
+      // surfaced rather than swallowed — a width the reviewer set and the pane shows as stored
+      // is a promise the next run relies on.
+      do {
+        for record in records(of: key).values.flatMap({ $0 }) {
+          record.maxWidth = width
+          try store.upsert(record, saving: false)
+        }
+        try store.save()
+      } catch {
+        store.rollback()
+        self.error = error.localizedDescription
       }
     }
 
@@ -678,8 +700,11 @@ extension Translation {
       guard body != project.context.context else { return }
       project.context.context = body
       project.context.version += 1
-      // `setNote` cannot throw, so a failed store write leaves the body and its bump in
-      // memory — the same shape `Context.append` has, and the next write republishes them.
+      // The DOCUMENT's own write is one write (`saveDocument`, which 7.6 leaves as it is), and a
+      // failure here leaves the body and its bump in memory — the same shape `Context.append`
+      // has, and the next write republishes them. The key's RECORDS are the other half of a note
+      // edit and are not silent: `setNote` reports a failure there, because a note that reads as
+      // stored when it is not is worse than an error.
       try? project.context.save()
     }
     /// The raw `noteScope` a record carries. The strings are the store's ABI — the old browser

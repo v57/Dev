@@ -99,7 +99,12 @@ extension Translation {
     /// A gold entry carries what the old pipeline's Stage 0 wrote: provider
     /// `manual` ("a human vouched for this"), the confirmation time, and no
     /// confidence. A hint carries the hosted model's provider and no confirmation.
-    func upsert(_ entry: Entry) throws {
+    ///
+    /// `saving: false` is for a caller writing MANY entries in one pass — a fold writes one gold
+    /// entry per lesson of its batch — and it is passed STRAIGHT to `Store.upsert`: every
+    /// `context.save()` is its own transaction, so the batch writes through and the caller saves
+    /// once (`Store.save`), the shape `Project.saveData` uses (7.6).
+    func upsert(_ entry: Entry, saving: Bool = true) throws {
       let gold = entry.grade == .gold
       let row = TranslationMemoryEntry(
         sourceText: entry.source,
@@ -113,7 +118,7 @@ extension Translation {
         projectTag: project.id,
         contextVersions: Store.persistable(entry.versions),
         confirmedAt: gold ? .now : nil)
-      try store.upsert(row)
+      try store.upsert(row, saving: saving)
     }
 
     /// Drops the hints of one language — used when a language document changes

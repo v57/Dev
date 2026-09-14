@@ -418,11 +418,16 @@ extension Translation {
     /// confirmed this translation and the app's rule is that gold is gold (the old
     /// machine-hint upsert kept the same guard). Gold may still be updated by gold —
     /// a human re-confirming a newer value wins.
-    func upsert(_ entry: TranslationMemoryEntry) throws {
+    ///
+    /// `saving: false` is the same rule `upsert(_ record:saving:)` states, for the same reason:
+    /// a fold writes a whole batch's gold entries at once, and every `context.save()` here is
+    /// its own transaction, so the batch writes through and the caller saves once
+    /// (`Store.save`). A single entry still saves by default.
+    func upsert(_ entry: TranslationMemoryEntry, saving: Bool = true) throws {
       entry.contextVersions = Self.lifted(entry.contextVersions)
       guard let existing = try entryRow(for: entry), existing !== entry else {
         if entry.modelContext == nil { context.insert(entry) }
-        try context.save()
+        if saving { try context.save() }
         return
       }
       guard !(existing.state == .reviewed && entry.state != .reviewed) else { return }
@@ -433,7 +438,7 @@ extension Translation {
       existing.contextVersions = entry.contextVersions
       existing.confirmedAt = entry.confirmedAt
       existing.confidence = entry.confidence
-      try context.save()
+      if saving { try context.save() }
     }
 
     /// Drops the hints of one language — used when a language document changes

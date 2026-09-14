@@ -1031,7 +1031,10 @@ extension Translation {
         positions.append(position)
       }
       guard !writes.isEmpty else { return }
-      for write in writes { persist(write, of: batch, in: run) }
+      // The resolve's writes are ONE transaction (7.6). A failure leaves the batch's items in
+      // the request: nothing was written, so nothing is settled — the batch is sent as if
+      // memory had missed the pair, rather than the slot being dropped unanswered.
+      guard writeBack(writes, of: batch, in: run) else { return }
       // The item leaves a per-language request; in a row batch it stays, carrying what
       // it was answered with. Either way its write is already applied.
       if batch.stage == .vertical {
@@ -1463,8 +1466,14 @@ extension Translation {
             memory: nil))
         positions.append(position)
       }
-      for write in writes { persist(write, of: batch, in: run) }
-      for position in positions { batch.items[position].phase = .applied }
+      if writeBack(writes, of: batch, in: run) {
+        for position in positions { batch.items[position].phase = .applied }
+      } else {
+        // Rolled back: the batch wrote NOTHING, so every row it carried is work again — the
+        // rows read failed, so the batch reads failed (`settle`), and the run's retry offers
+        // exactly these batches again (5.11).
+        for position in positions { batch.items[position].phase = .failed }
+      }
     }
 
     /// One slot write, gathered before anything is written so a batch applies as one
@@ -1502,64 +1511,118 @@ extension Translation {
       let memory: Memory.Grade?
     }
 
-    /// One gathered write: the working copy first, then the app's session, then the
-    /// machine hint the value leaves in translation memory.
+    /// Applies a batch's gathered writes as ONE transaction (5.5, 7.6): the records, their
+    /// journal rows and the machine hint each value leaves go through WITHOUT saving, and the
+    /// batch pays ONE `Store.save()`. That is the shape `Project.saveData` already uses, and it
+    /// is why a 33-row batch no longer costs ~33 transactions on a store the size of the
+    /// reader's (167 174 rows): a `context.save()` is a transaction, and a per-record loop is
+    /// one per record.
+    ///
+    /// A failure anywhere in the batch rolls it BACK, store and session alike, and is reported
+    /// once. Nothing of the batch is left pending for a later, unrelated save to flush — which
+    /// the session needs as much as the store, because the session is what the next Save writes
+    /// (5.8), so a value a failed row left behind would be persisted by something that never
+    /// heard about the failure. The caller marks the batch failed: a batch that wrote NOTHING
+    /// and failed IS a failed batch (5.5), and its rows stay work — and a batch with nothing to
+    /// write at all pays no transaction either, because a save with nothing pending is a price
+    /// with no product.
+    private func writeBack(_ writes: [SlotWrite], of batch: Run.Batch, in run: Run) -> Bool {
+      // A batch with nothing to write opens no transaction at all.
+      guard !writes.isEmpty else { return true }
+      var before: [SlotPosition: LocalizationString] = [:]
+      var current: SlotWrite?
+      do {
+        for write in writes {
+          current = write
+          let position = SlotPosition(row: write.row, slot: write.slot)
+          if before[position] == nil, run.project.data.indices.contains(write.row),
+            run.project.data[write.row].targets.indices.contains(write.slot) {
+            before[position] = run.project.data[write.row].targets[write.slot]
+          }
+          try persist(write, of: batch, in: run)
+        }
+        try store.save()
+        return true
+      } catch {
+        store.rollback()
+        for (position, slot) in before
+        where run.project.data.indices.contains(position.row)
+          && run.project.data[position.row].targets.indices.contains(position.slot) {
+          run.project.data[position.row].targets[position.slot] = slot
+        }
+        fail(
+          run, key: current?.key, language: current?.language,
+          message: error.localizedDescription, retryable: true)
+        return false
+      }
+    }
+
+    /// One slot of the session, addressed the way a write addresses it: the row it belongs to
+    /// and its position in that row. What a rolled-back batch restores.
+    private struct SlotPosition: Hashable {
+      let row: Int
+      let slot: Int
+    }
+
+    /// One gathered write, INSIDE its batch's transaction: the working copy first, then the
+    /// app's session, then the machine hint the value leaves in translation memory.
     ///
     /// The in-memory row goes first because the next batch's register sample is read
     /// off it (4.5). The store is the app's own records — the redesign writes the
     /// same store, additively, and has no second one to keep in step (7.2; whether
     /// the two implementations should share the records is 10.16).
-    private func persist(_ write: SlotWrite, of batch: Run.Batch, in run: Run) {
+    ///
+    /// Every store write here goes through WITHOUT saving (`saving: false`): the batch owns the
+    /// transaction and pays the one `Store.save()` (`writeBack`). A failure is THROWN rather
+    /// than reported here, so the batch's owner can roll the whole batch back before it reports
+    /// it — a write that cannot be finished must leave nothing pending behind it.
+    private func persist(_ write: SlotWrite, of batch: Run.Batch, in run: Run) throws {
       var slot = run.project.data[write.row].targets[write.slot]
       if let target = write.target { slot.target = target }
       if let machine = write.machine { slot.machine = machine }
       if let status = write.status { slot.status = status }
       if let versions = write.versions { slot.versions = versions }
       run.project.data[write.row].targets[write.slot] = slot
-      do {
-        for form in forms(of: write) {
-          let record = try slotRecord(
-            key: write.key, language: write.language, category: form.category)
-          let before = record.value
-          if let value = form.value {
-            record.value = value
-            // Who wrote it decides the state. A model's output is unreviewed
-            // (`needs_review`); a gold memory entry is a value a HUMAN confirmed
-            // (10.19b), which is the one shape the store's own projection reads back as
-            // `.verified` — and it is never an auto-reviewed import.
-            record.state =
-              value.isEmpty ? .empty : (write.memory == .gold ? .reviewed : .needs_review)
-            if write.memory == .gold {
-              record.autoReviewed = false
-              record.reviewedAt = .now
-            }
-          }
-          if let machine = form.machine { record.machine = machine }
-          // Provenance. A gold entry is the human's value, so the record says who
-          // vouched for it (`manual`, as the old pipeline's memory resolve left it),
-          // and a value memory answered names translation memory as its editor instead
-          // of a model that was never asked.
-          record.provider = write.memory == .gold ? .manual : .deepseek
-          record.lastEditor = write.memory == nil ? write.model : Self.memoryEditor
-          if let versions = write.versions { record.contextVersions = Store.persistable(versions) }
-          try store.upsert(record)
-          // The journal is the value's before -> after, so a write that only records
-          // the machine's output is not an edit of the slot.
-          if write.target != nil {
-            try store.append(
-              TranslationEdit(
-                record: record,
-                fromValue: before,
-                toValue: record.value ?? "",
-                editor: .provider,
-                reason: write.reason,
-                contextVersions: Store.persistable(write.versions ?? .none),
-                isUserConfirmed: false))
+      for form in forms(of: write) {
+        let record = try slotRecord(
+          key: write.key, language: write.language, category: form.category)
+        let before = record.value
+        if let value = form.value {
+          record.value = value
+          // Who wrote it decides the state. A model's output is unreviewed
+          // (`needs_review`); a gold memory entry is a value a HUMAN confirmed
+          // (10.19b), which is the one shape the store's own projection reads back as
+          // `.verified` — and it is never an auto-reviewed import.
+          record.state =
+            value.isEmpty ? .empty : (write.memory == .gold ? .reviewed : .needs_review)
+          if write.memory == .gold {
+            record.autoReviewed = false
+            record.reviewedAt = .now
           }
         }
-      } catch {
-        fail(run, key: write.key, language: write.language,
-             message: error.localizedDescription, retryable: true)
+        if let machine = form.machine { record.machine = machine }
+        // Provenance. A gold entry is the human's value, so the record says who
+        // vouched for it (`manual`, as the old pipeline's memory resolve left it),
+        // and a value memory answered names translation memory as its editor instead
+        // of a model that was never asked.
+        record.provider = write.memory == .gold ? .manual : .deepseek
+        record.lastEditor = write.memory == nil ? write.model : Self.memoryEditor
+        if let versions = write.versions { record.contextVersions = Store.persistable(versions) }
+        try store.upsert(record, saving: false)
+        // The journal is the value's before -> after, so a write that only records
+        // the machine's output is not an edit of the slot.
+        if write.target != nil {
+          try store.append(
+            TranslationEdit(
+              record: record,
+              fromValue: before,
+              toValue: record.value ?? "",
+              editor: .provider,
+              reason: write.reason,
+              contextVersions: Store.persistable(write.versions ?? .none),
+              isUserConfirmed: false),
+            saving: false)
+        }
       }
       // What a translate stage produced is kept as a HINT in translation memory
       // (6.1/6.2): provenance for the value, so a later run — and the browser — can
@@ -1578,22 +1641,18 @@ extension Translation {
       // with — so re-recording it would only rewrite its provenance with this run's
       // name and its project tag (10.19).
       if let produced = write.target, write.memory == nil {
-        do {
-          try Memory(project: project).upsert(
-            Memory.Entry(
-              key: write.key,
-              source: write.source,
-              language: write.language,
-              // The form the artifact itself shows for a plural (`catalogValue`),
-              // exactly as the fold's gold write records it: memory is addressed by
-              // (source text, language) and carries no category.
-              value: produced.catalogValue,
-              grade: .hint,
-              versions: write.versions ?? .none))
-        } catch {
-          fail(run, key: write.key, language: write.language,
-               message: error.localizedDescription, retryable: true)
-        }
+        try Memory(project: project).upsert(
+          Memory.Entry(
+            key: write.key,
+            source: write.source,
+            language: write.language,
+            // The form the artifact itself shows for a plural (`catalogValue`),
+            // exactly as the fold's gold write records it: memory is addressed by
+            // (source text, language) and carries no category.
+            value: produced.catalogValue,
+            grade: .hint,
+            versions: write.versions ?? .none),
+          saving: false)
       }
       // A write memory answered is not one of this step's CUT items: it is counted where
       // the report can see it, beside the items the step sent (5.7).
@@ -1717,9 +1776,17 @@ extension Translation {
       } catch {
         fail(run, language: language, message: error.localizedDescription, retryable: true)
       }
+      // The gold entries a fold writes are ONE transaction (7.6): the lessons of a batch are one
+      // unit, so the entries go through WITHOUT saving and the batch pays ONE `Store.save()` —
+      // this is a per-item save loop otherwise, on a stage that runs for every language of a
+      // project. A failure rolls the entries already written back rather than leaving half of
+      // the batch pending, and is reported once, with the entry it died on. What the fold
+      // appended to the language document is a write of its own (and is left alone, 7.6).
       let memory = Memory(project: project)
-      for item in batch.items {
-        do {
+      var current: Run.Item?
+      do {
+        for item in batch.items {
+          current = item
           try memory.upsert(
             Memory.Entry(
               key: item.key,
@@ -1727,11 +1794,14 @@ extension Translation {
               language: language,
               value: item.target.catalogValue,
               grade: .gold,
-              versions: item.versions))
-        } catch {
-          fail(run, key: item.key, language: language,
-               message: error.localizedDescription, retryable: true)
+              versions: item.versions),
+            saving: false)
         }
+        try store.save()
+      } catch {
+        store.rollback()
+        fail(run, key: current?.key, language: language,
+             message: error.localizedDescription, retryable: true)
       }
       run.tally.itemsDone += batch.items.count
       run.tally.byStage[.learn, default: 0] += batch.items.count
