@@ -796,16 +796,21 @@ The operation classes know what to send, nothing knows how to send it.
                      translation pane. The old pipeline's own Translate button is not
                      removed and not rerouted (10.9): both runs are reachable.
       stage pages    every stage page is SPLIT IN HALF (reader, 2026-09-14): the
-                     request's own items on the left, the model's RAW reply for that
-                     batch on the right. Raw, not parsed, on purpose — what the
-                     validator accepted, what the repair step fixed and what the paid
-                     gate was asked about is then visible instead of inferred. One
-                     request is one batch, so a page shows exactly one reply: a batch
-                     still in flight says so, and a batch that failed shows what came
-                     back anyway. The run has to retain the reply PER BATCH for this
-                     (today only the last call's text survives, `Router.lastRawReply`,
-                     and the batch is what a page shows). A step whose page has no
-                     batch keeps its single-pane notice: there is no reply to show.
+                     request's own items on the left, and on the right BOTH SIDES of
+                     the exchange — the model INPUT that was sent (system + user, as the
+                     wire carried them) and the model's RAW reply for that batch
+                     ("Add model input to that model reply view", reader, same day).
+                     Raw, not parsed, on purpose — what the validator accepted, what
+                     the repair step fixed and what the paid gate was asked about is
+                     then visible instead of inferred. One request is one batch, so a
+                     page shows exactly one exchange: a batch still in flight says so
+                     (there is no input to show until it is sent), and a batch that
+                     failed shows both sides anyway. The INPUT marks where the provider's
+                     cacheable prefix ends, because that byte-prefix is what the cached
+                     share in the tally is about (5.7) and a flat zero means it moved.
+                     The run has to retain the input PER BATCH for this, the way it now
+                     retains the reply. A step whose page has no batch keeps its
+                     single-pane notice: there is no exchange to show.
       language bar   the selected languages as columns (the Add Language overlay
                      and the toggle list already exist in the current UI and are
                      worth carrying over), each with a progress reading
