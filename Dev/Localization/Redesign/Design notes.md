@@ -459,6 +459,13 @@ The operation classes know what to send, nothing knows how to send it.
     the shell: no workspace has to wait for the app's own reconcile to produce records
     before its rows exist.
 
+    The rule is stated TWICE on purpose (reader, 2026-09-14): once where the rows are
+    built (`loadData`, which fixes every stage at once) and once at the scans, so a
+    row that is not part of the open catalog is not work even if it arrives in
+    `project.data` by another path — a hand-built data set, a preview, a future
+    caller. The flag that answers it belongs to the ROW and has one definition; no
+    stage may work it out for itself by reaching into the store or the file.
+
 5.1 Execution order per batch: admission (per-provider rate budget) -> prompt
     assembly -> send through the model chain -> deterministic validation ->
     repair -> paid gate -> write-back -> checkpoint -> telemetry.
