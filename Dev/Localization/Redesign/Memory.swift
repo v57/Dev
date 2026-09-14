@@ -13,12 +13,16 @@
 //
 
 import Foundation
+import SwiftData
 
 extension Translation {
-  /// Per-key knowledge, in two grades. Scoped to one project: what a lesson says
-  /// is this project's own vocabulary, and the gold entries come from this
-  /// project's own confirmations. The imported database is the one global source,
-  /// and it is a source, not a lesson — see `Imported`.
+  /// Per-key knowledge, in two grades. GLOBAL, not per project (6.2, reader
+  /// 2026-09-14): the app's own model keeps ONE remembered translation per
+  /// (sourceText, sourceLanguage, targetLanguage), shared by every project — its
+  /// docs say a reviewed entry "auto-resolves as `reviewed` in ANY future catalog"
+  /// — and `projectTag` is informational, written as provenance and never read as a
+  /// filter. The imported database is the other global source, and it is a source,
+  /// not a lesson — see `Imported`.
   @Observable @MainActor class Memory {
     let project: Project
     /// SwiftData, so resolution and writes are synchronous fetches.
@@ -52,10 +56,17 @@ extension Translation {
       case hint
     }
 
-    /// An exact (source, language) hit within this project. A gold hit is what lets
-    /// the pipeline skip a slot entirely; a hint is provenance, not a decision.
+    /// An exact (source, language) hit, GLOBALLY (6.2): memory is one table shared by
+    /// every project, so a value a human confirmed for this source text in this
+    /// language answers the slot in EVERY catalog that asks for the pair. A gold hit
+    /// is what lets the run skip a slot entirely; a hint is provenance, not a
+    /// decision — unless the slot holds nothing at all, which is the caller's rule
+    /// and not this one's (10.19c, `Run.resolveMemory`).
+    ///
     /// Resolution is by source text and language — the app's translation memory is
-    /// keyed that way (see `Store.memory`) — and the key travels for provenance.
+    /// keyed by its (sourceText, sourceLanguage, targetLanguage) triple, and the
+    /// redesign has the target language and the source text — and the key travels for
+    /// provenance.
     ///
     /// The two grades come straight off the row's state: `reviewed` is a human's
     /// entry and `needs_review` is the model's, which is the app's own convention
@@ -65,8 +76,7 @@ extension Translation {
     /// worse than a miss. The same guard is in the old TM resolve, for the same
     /// reason.
     func resolve(source: String, language: String) throws -> Entry? {
-      guard let row = try store.memory(source: source, language: language, project: project.id)
-      else { return nil }
+      guard let row = try entry(source: source, language: language) else { return nil }
       guard row.state != .empty else { return nil }
       return Entry(
         key: nil,
@@ -110,32 +120,60 @@ extension Translation {
     /// enough that the old machine values are no longer evidence of anything. Gold
     /// is never dropped by a stage.
     ///
-    /// Scoped to this project: memory is per project (6.1), so another project's
-    /// hints for the same language are none of this one's business.
+    /// The tag scopes the DROP, not a read: it is the project a hint was last written
+    /// from, and this drops the ones THIS project's runs left. Resolution is global and
+    /// unfiltered (6.2) — an entry is one row per source -> target pair whatever its tag
+    /// — so whether a hint drop should be global too is the reader's call and is
+    /// reported, not decided here.
     func clearHints(language: String) throws {
       try store.clearHints(language: language, project: project.id)
+    }
+
+    /// The one remembered translation a (source text, target language) pair has —
+    /// GLOBAL, and not narrowed by project (6.2).
+    ///
+    /// The app's model makes the triple (sourceText, sourceLanguage, targetLanguage)
+    /// the unit: one row per remembered translation, shared by every project. So the
+    /// read matches the two halves the redesign has and NOTHING else — `projectTag` is
+    /// provenance ("Project the entry was created from (informational; entries are
+    /// global)") and is never a filter. Newest confirmation first, and GOLD WINS when
+    /// both grades exist for the pair, which is `Store.memory`'s own rule kept while
+    /// its project filter goes.
+    ///
+    /// The rows are read through the store's context rather than `Store.memory`, which
+    /// still narrows by project: dropping the filter there would touch `Store.swift`,
+    /// another card's file. `Store.memory`'s filter and doc are drift against 6.2 and
+    /// are reported on its card.
+    private func entry(source: String, language: String) throws -> TranslationMemoryEntry? {
+      let descriptor = FetchDescriptor<TranslationMemoryEntry>(
+        predicate: #Predicate { $0.sourceText == source && $0.targetLanguage == language })
+      let rows = try store.context.fetch(descriptor)
+        .sorted { ($0.confirmedAt ?? .distantPast) > ($1.confirmedAt ?? .distantPast) }
+      return rows.first { $0.state == .reviewed } ?? rows.first
     }
 
     /// The source language an entry is written with, when the redesign has none to
     /// offer.
     ///
-    /// 6.2 keys memory by (source text, language) within the project, and the
-    /// redesign's `Entry` carries no source language — the redesign's `Project`
+    /// 6.2 keys memory by (source text, language) GLOBALLY, and the redesign's `Entry`
+    /// carries no source language — the redesign's `Project`
     /// holds target languages only. The app's `TranslationMemoryEntry` does require
     /// the column (its unique triple is (sourceText, sourceLanguage,
     /// targetLanguage)), so it is filled in this order:
     ///
     ///   1. the source language of the row this pair ALREADY has, so an entry the
     ///      old pipeline wrote for this project is updated rather than duplicated
-    ///      beside itself with a different language on the same triple,
+    ///      beside itself with a different language on the same triple. That lookup is
+    ///      GLOBAL too: the triple is one row whatever project wrote it, and a
+    ///      project-narrowed read would miss the row another project's run wrote and
+    ///      insert a second one for the same pair,
     ///   2. `defaultSourceLanguage` for a pair nothing has ever written: the app's
     ///      own fallback for a catalog that names none (`PipelineRunContext` and the
     ///      loader both default to it), which is what keeps ONE pair ONE row across
     ///      both writers (10.16: one store, two writers, the same records).
     private func sourceLanguage(for entry: Entry) throws -> String {
       guard
-        let existing = try store.memory(
-          source: entry.source, language: entry.language, project: project.id),
+        let existing = try self.entry(source: entry.source, language: entry.language),
         !existing.sourceLanguage.isEmpty
       else { return Self.defaultSourceLanguage }
       return existing.sourceLanguage

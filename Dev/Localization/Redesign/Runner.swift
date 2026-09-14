@@ -108,7 +108,10 @@ extension Translation {
       /// language is named inside each item.
       let language: String?
       var items: [Item]
-      let characters: Int
+      /// What this batch carries, which is what the run pays for (5.7). Memory can
+      /// answer an item before the request is built, so it is recomputed then: the
+      /// report counts what was sent, never what a slot would have cost.
+      var characters: Int
       /// The model that answered — the write-back stamps the slot with it (5.5).
       var model: String = ""
       var phase: Phase = .pending
@@ -123,7 +126,11 @@ extension Translation {
       /// batch, where one request spans several languages.
       let language: String?
       let source: StringBody
-      let target: StringBody
+      /// The value the slot holds, which is what a request shows as the current one
+      /// (4.3). Written when memory answers the slot before the request is built, so the
+      /// row's own payload carries the value the run just resolved instead of the stale
+      /// machine text it replaced.
+      var target: StringBody
       let comment: String
       /// The reviewer's guideline. Travels to the model ONLY inside the paid gate,
       /// and only for an item whose reply is already over it.
@@ -184,6 +191,13 @@ extension Translation {
       /// Items done per operation of the run, so a step that did nothing is
       /// visible as a step that did nothing.
       var byStage: [Stage: Int] = [:]
+      /// Writes a step did with NO request at all: the slots translation memory answered
+      /// (6.2, `Run.resolveMemory`). Kept apart from `itemsDone`/`byStage` on purpose —
+      /// those two count the items a step CUT, and a slot memory answers never becomes
+      /// one, so counting it there would make the rail read "5 done of 1 cut" (5.7).
+      /// No readout shows this number yet; the saving is already visible in
+      /// `characters` and `requests`, and this is what says how much of it memory did.
+      var resolved: [Stage: Int] = [:]
     }
 
     /// A failure worth surfacing: the item or batch it happened on, and whether
@@ -277,6 +291,10 @@ extension Translation {
     private var rowPositions: [String: Int] = [:]
     /// The word a fold answers when the document already covers every lesson.
     private static let noChange = "NO_CHANGE"
+    /// Who a value memory answered with is attributed to, in the record the app's own
+    /// browser reads. The old pipeline's memory resolve wrote exactly this word, and a
+    /// model that was never asked must not be named as the writer (10.16).
+    private static let memoryEditor = "Translation Memory"
 
     init(project: Project) {
       self.project = project
@@ -449,10 +467,17 @@ extension Translation {
     }
 
     /// Scans one operation into the run's batch list. The stage owns WHAT to send —
-    /// its predicate, its per-language grouping and its character splitting (4.4) —
-    /// so this only turns what it built into the runner's own batches.
+    /// its predicate, its per-language grouping and its character splitting (4.4) — so
+    /// this only turns what it built into the runner's own batches; and THEN it applies
+    /// translation memory to them (6.2, `resolveMemory`), because a slot memory already
+    /// answers must never reach a request.
+    ///
+    /// The resolve runs at SCAN time rather than per batch on purpose: this is where
+    /// the run's batch list becomes FINAL — the cursor numbers these batches, a resumed
+    /// run keeps them instead of re-cutting them, and the stage files stay memory-free
+    /// (their own cards ask for that).
     private func scan(_ operation: Stage, into run: Run) throws {
-      let batches: [Run.Batch]
+      var batches: [Run.Batch]
       switch operation {
       case .prepare:
         return
@@ -465,6 +490,16 @@ extension Translation {
       case .horizontal:
         batches = self.batches(of: try project.horizontalTranslate())
       }
+      // One lookup per (source, language) pair per scan: the resolve is a store fetch,
+      // and a project's rows share their sources. Rebuilt for every operation, so a
+      // lesson the fold wrote earlier in the same run is read by the next scan.
+      var cards: [MemoryKey: Remembered] = [:]
+      for index in batches.indices {
+        resolveMemory(&batches[index], in: run, cards: &cards)
+      }
+      // A batch memory emptied has nothing to ask and is not a batch: dropping it here
+      // keeps the run's list, the cursor's ordinals and the tally to what is sent.
+      batches.removeAll { $0.items.isEmpty }
       run.batches.append(contentsOf: batches)
       run.tally.batches += batches.count
       run.tally.items += batches.reduce(0) { $0 + $1.items.count }
@@ -571,6 +606,152 @@ extension Translation {
       }
     }
 
+    // MARK: - translation memory, read before the request
+
+    /// The pair memory is addressed by: the source text a request would send — 4.3's
+    /// fallback included, so the read looks up exactly what a hint write recorded — and
+    /// the target language.
+    private struct MemoryKey: Hashable {
+      let source: String
+      let language: String
+    }
+
+    /// What one lookup answered. Kept per scan, because the resolve is a store fetch
+    /// and a project's rows share their sources.
+    private enum Remembered {
+      /// No entry for the pair, or an entry that carries no value.
+      case nothing
+      case hit(Memory.Entry)
+    }
+
+    /// The two memory rules of 6.2/10.19, applied to one batch BEFORE it is sent:
+    ///
+    ///   GOLD — a human confirmed this exact (source, language) pair, so it answers the
+    ///   slot with NO model call at all (6.2, which is what keeps a column's
+    ///   1 000-character document sufficient: per-key knowledge lives here). It
+    ///   REPLACES machine text — a `.stale` or `.translated` slot — and it is the only
+    ///   thing that may: a value a human settled (`.verified`) or the database shipped
+    ///   (`.imported`) is never overwritten (10.19a). The slot it answers reads
+    ///   `reviewed` afterwards (10.19b), which freezes it for the rest of the run.
+    ///
+    ///   HINT — machine output kept for reference. It is PROVENANCE, NOT A DECISION
+    ///   (6.2): it is never applied over anything a human or a machine wrote, and what
+    ///   it may do is fill a slot that holds NOTHING (10.19c), as machine output
+    ///   (`.translated`, the old pipeline's needs_review role).
+    ///
+    /// The write goes through the same `SlotWrite`/`persist` path every other write
+    /// uses, so memory is never a second writer of a slot: it decides a value and the
+    /// store's own state exactly as a model's answer does. What happens to the ITEM:
+    ///
+    ///   - a per-language (vertical) batch DROPS it. The request must not carry a slot
+    ///     nothing may spend a call on, and the batch keeps the items that still need
+    ///     one — a batch they empty entirely is sent nowhere.
+    ///   - a row (horizontal) batch KEEPS it, with the resolved value in its payload:
+    ///     4.6's payload carries every language of the row, and 10.19b removes a
+    ///     resolved slot from the write set, not from the row's VIEW. Its answer is
+    ///     then discarded like any answer for a settled slot.
+    ///
+    /// Only a translate stage resolves. prelearn writes the machine record of a slot a
+    /// HUMAN owns (and the value rule below refuses those slots anyway), and the fold's
+    /// reply is document text rather than candidates — its gold write is already in
+    /// memory by the time a column translates.
+    private func resolveMemory(
+      _ batch: inout Run.Batch, in run: Run, cards: inout [MemoryKey: Remembered]
+    ) {
+      guard batch.stage == .vertical || batch.stage == .horizontal else { return }
+      var positions: [Int] = []
+      var writes: [SlotWrite] = []
+      for position in batch.items.indices {
+        let item = batch.items[position]
+        let language = language(of: item, in: batch)
+        // The slot this item answers, as the open catalog holds it NOW.
+        guard let row = rowPositions[item.key], project.data.indices.contains(row),
+          let slot = project.data[row].targets.firstIndex(where: { $0.language == language })
+        else { continue }
+        let current = project.data[row].targets[slot]
+        // The value rule, asked of the slot's own status: a settled value is context,
+        // not a target (4.6), and 10.19a names the one value memory never replaces —
+        // another human's.
+        guard Run.writable(current.status) else { continue }
+        let source = item.payloadSource.catalogValue
+        guard !source.isEmpty else { continue }
+        let key = MemoryKey(source: source, language: language)
+        if cards.index(forKey: key) == nil {
+          cards[key] = answer(for: key, of: item.key, in: run)
+        }
+        guard case .hit(let entry)? = cards[key] else { continue }
+        // Gold replaces machine text; a hint only fills EMPTYNESS (10.19a/10.19c).
+        guard entry.grade == .gold || current.target.isEmpty else { continue }
+        // The entry's value is memory's TEXT — one body per pair, with no categories —
+        // so it is decoded exactly like a model's flat answer: a plural slot keeps its
+        // parallel and the form the artifact reads is the one filled.
+        let body = Validator.decode(entry.value, for: item, language: language)
+        guard !body.isEmpty else { continue }
+        writes.append(
+          SlotWrite(
+            key: item.key,
+            language: language,
+            row: row,
+            slot: slot,
+            source: source,
+            target: body,
+            // The machine record is what OUR model produced for this slot before, and
+            // memory answers with a VALUE: neither the value nor the status of a
+            // machine record is decided here.
+            machine: nil,
+            // 10.19b: a gold hit reads `reviewed`, so it is frozen for writing — and it
+            // still travels in a row batch, as context. A hint keeps the machine's
+            // status: unreviewed output, which the row pass may still adapt.
+            status: entry.grade == .gold ? .verified : .translated,
+            // The documents the value was produced against, which is the entry's own
+            // stamp and not this run's: a gold entry written against an older project
+            // document is still a human's value, and its provenance has to say so.
+            versions: entry.versions,
+            previous: current.target,
+            // No model was asked for this value.
+            model: "",
+            reason: entry.grade == .gold
+              ? "Resolved from reviewed translation memory (gold)"
+              : "Resolved from machine translation memory (hint)",
+            memory: entry.grade))
+        positions.append(position)
+      }
+      guard !writes.isEmpty else { return }
+      for write in writes { persist(write, of: batch, in: run) }
+      // The item leaves a per-language request; in a row batch it stays, carrying what
+      // it was answered with. Either way its write is already applied.
+      if batch.stage == .vertical {
+        for position in positions.reversed() { batch.items.remove(at: position) }
+      } else {
+        for (position, write) in zip(positions, writes) {
+          if let target = write.target { batch.items[position].target = target }
+          batch.items[position].phase = .applied
+        }
+      }
+      // What a batch carries is what it costs, and memory just changed that.
+      batch.characters = batch.items.reduce(0) { $0 + $1.characters }
+    }
+
+    /// One lookup, reported rather than thrown. A memory read that fails must not cost
+    /// the run a value: the item stays unresolved and the model answers it, exactly as
+    /// if the pair had no entry — and the failure is on the run.
+    private func answer(for key: MemoryKey, of slot: String, in run: Run) -> Remembered {
+      do {
+        guard
+          let entry = try Memory(project: project).resolve(
+            source: key.source, language: key.language)
+        else { return .nothing }
+        // Memory never carries a valueless entry (`Memory.resolve` guards the row's own
+        // state); one that somehow does answers nothing.
+        return entry.value.isEmpty ? .nothing : .hit(entry)
+      } catch {
+        fail(
+          run, key: slot, language: key.language, message: error.localizedDescription,
+          retryable: true)
+        return .nothing
+      }
+    }
+
     // MARK: - one batch
 
     /// One batch, start to applied: admission -> prompt -> send -> deterministic
@@ -587,13 +768,23 @@ extension Translation {
     /// value and answers with the batch it produced.
     private func performOne(_ origin: Run.Batch, in run: Run) async throws -> Run.Batch {
       var batch = origin
+      // A batch memory emptied has nothing to ask: no request, no admission, and no
+      // failure — the scan already wrote what it answered (5.1).
+      guard !batch.items.isEmpty else {
+        batch.phase = .applied
+        return batch
+      }
       // The stamp a slot written now would carry is what the request is built
       // against, so it is read here — once, just before the prompt is assembled.
       for index in batch.items.indices {
         batch.items[index].versions = project.currentVersion(
           for: language(of: batch.items[index], in: batch))
       }
-      for index in batch.items.indices { batch.items[index].phase = .sent }
+      // Only an item still to be SENT is marked sent: one the scan answered from memory
+      // is applied, and re-labelling it would report a call that was never made.
+      for index in batch.items.indices where batch.items[index].phase == .pending {
+        batch.items[index].phase = .sent
+      }
       batch.phase = .sent
       run.tally.characters += batch.characters
 
@@ -900,7 +1091,9 @@ extension Translation {
             reason: batch.stage == .prelearn
               ? "Prelearn (\(batch.model)): machine record for a verified slot"
               : "\(batch.stage.title) (\(batch.model)): "
-                + (previous.isEmpty ? "filled empty slot" : "differs from previous machine value")))
+                + (previous.isEmpty ? "filled empty slot" : "differs from previous machine value"),
+            // A request produced it: no memory answered this slot.
+            memory: nil))
         positions.append(position)
       }
       for write in writes { persist(write, of: batch, in: run) }
@@ -915,17 +1108,31 @@ extension Translation {
       let language: String
       let row: Int
       let slot: Int
-      /// The source text the value answers, as the request was shown it. `Memory`
-      /// is addressed by (source text, language) within the project (6.2), so the
-      /// hint write needs it beside the slot it belongs to.
+      /// The source text the value answers, as the request was shown it. `Memory` is
+      /// addressed by (source text, language) GLOBALLY (6.2), so both the resolve's
+      /// read and the hint write need it beside the slot they belong to.
       let source: String
       let target: StringBody?
       let machine: StringBody?
       let status: LocalizationString.Status?
       let versions: Context.Version?
       let previous: StringBody
+      /// The model that answered this write. Empty for a write memory answered: no
+      /// model was asked, and the record says so instead (see `memory`).
       let model: String
       let reason: String
+      /// The memory entry the value was RESOLVED from, when it came from memory
+      /// instead of a model: nil for every write a request produced.
+      ///
+      /// It decides two things and nothing else. The RECORD's provenance: a gold entry
+      /// is a value a human confirmed, so the store keeps it `reviewed` with the
+      /// human's provider and names translation memory as the editor — the shape the
+      /// old pipeline's memory resolve leaves, read as precedent and never called. And
+      /// whether the write leaves a HINT behind: a model's output does (6.1/6.2), while
+      /// a write memory answered is already an entry — the gold it resolved from, or the
+      /// hint it filled a slot with — so re-recording it would only rewrite its
+      /// provenance with this run's name.
+      let memory: Memory.Grade?
     }
 
     /// One gathered write: the working copy first, then the app's session, then the
@@ -949,11 +1156,24 @@ extension Translation {
           let before = record.value
           if let value = form.value {
             record.value = value
-            record.state = value.isEmpty ? .empty : .needs_review
+            // Who wrote it decides the state. A model's output is unreviewed
+            // (`needs_review`); a gold memory entry is a value a HUMAN confirmed
+            // (10.19b), which is the one shape the store's own projection reads back as
+            // `.verified` — and it is never an auto-reviewed import.
+            record.state =
+              value.isEmpty ? .empty : (write.memory == .gold ? .reviewed : .needs_review)
+            if write.memory == .gold {
+              record.autoReviewed = false
+              record.reviewedAt = .now
+            }
           }
           if let machine = form.machine { record.machine = machine }
-          record.provider = .deepseek
-          record.lastEditor = write.model
+          // Provenance. A gold entry is the human's value, so the record says who
+          // vouched for it (`manual`, as the old pipeline's memory resolve left it),
+          // and a value memory answered names translation memory as its editor instead
+          // of a model that was never asked.
+          record.provider = write.memory == .gold ? .manual : .deepseek
+          record.lastEditor = write.memory == nil ? write.model : Self.memoryEditor
           if let versions = write.versions { record.contextVersions = Store.persistable(versions) }
           try store.upsert(record)
           // The journal is the value's before -> after, so a write that only records
@@ -986,8 +1206,11 @@ extension Translation {
       //
       // Only a translate stage's own output is a hint: prelearn writes the machine
       // record of a slot a HUMAN owns (`target` stays nil), which is not a value
-      // this run produced, and learn writes gold.
-      if let produced = write.target {
+      // this run produced; learn writes gold; and a write MEMORY answered is already
+      // an entry — the gold it resolved from, or the hint it filled an empty slot
+      // with — so re-recording it would only rewrite its provenance with this run's
+      // name and its project tag (10.19).
+      if let produced = write.target, write.memory == nil {
         do {
           try Memory(project: project).upsert(
             Memory.Entry(
@@ -1005,8 +1228,14 @@ extension Translation {
                message: error.localizedDescription, retryable: true)
         }
       }
-      run.tally.itemsDone += 1
-      run.tally.byStage[batch.stage, default: 0] += 1
+      // A write memory answered is not one of this step's CUT items: it is counted where
+      // the report can see it, beside the items the step sent (5.7).
+      if write.memory == nil {
+        run.tally.itemsDone += 1
+        run.tally.byStage[batch.stage, default: 0] += 1
+      } else {
+        run.tally.resolved[batch.stage, default: 0] += 1
+      }
     }
 
     /// The records one write touches: one per category for a plural slot (how the
