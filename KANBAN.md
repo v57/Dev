@@ -3,18 +3,20 @@ Date: 2026-09-14   Board: dev-translation-redesign   Workdir: /Users/v57/Project
 
 STATUS   (updated 2026-09-14 01:52 — this doc is a narrative; the BOARD is the state:
           `hermes kanban --board dev-translation-redesign list --json`)
-  NEARLY DONE. 15 done, 2 blocked on the reader, 0 todo, 0 running, +1 card filed by the
-  reader's last answers (the shell wiring below). The deletion half of the cut-over is
-  CANCELLED: the old pipeline STAYS (10.9, reader 2026-09-14), so the app carries both
-  pipelines, each reachable from its own control. What is left:
-    · t_21a14f2f memory — the gold resolve needs two answers (10.11's sub-case and the
-      status a gold-resolved slot carries); its hints half has landed (003f1a8) along
-      with a measured fix to prelearn's write-back (ef13479)
-    · the new card: wire the overlay into the shell — `Start` in the toolbar, the reopen
-      button on the bottom status bar, the old pipeline's controls untouched
+  NEARLY DONE. 17 done, 1 ready to resume (memory), 1 todo (gated on it), 0 running. The
+  deletion half of the cut-over is CANCELLED: the old pipeline STAYS (10.9, reader
+  2026-09-14), so the app carries both pipelines, each reachable from its own control —
+  the new one is now WIRED IN (5441b08: toolbar `Start`, the pane's overlay, the status
+  bar, additively, old controls untouched). What is left:
+    · t_21a14f2f memory — 10.19 is answered (gold replaces machine text; a resolved slot
+      reads reviewed and still travels to the row pass as readonly context; a machine
+      entry fills every empty slot), plus the defect it inherited: the memory READ must
+      not be filtered by project (6.2 — resolution is global)
+    · t_4c698bd7 eligibility — a value with no Latin letter is never translated (4.7),
+      linked after the memory card
   DONE across the board: store (incl. `RunCursor` + the full-scope-id mapping), contexts,
   prompt, Muse router, runner, memory + imported DB, all four stages, review/edit + Save,
-  the workspace shell, the row page.
+  the workspace shell, the row page, and the shell wiring.
   HEAD builds BUILD SUCCEEDED with zero warnings — verified by the orchestrator on a clean
   tree, not quoted from the cards' summaries.
 
@@ -124,9 +126,6 @@ OPEN DECISIONS (notes section 10) — a worker who meets one asks instead of cho
   10.11 how a CHANGED project rule reaches already machine-translated slots
   10.12 the row pass's cost, and what the run control should say about it
   10.13 Xcode's plural table or current CLDR as the authority (27 locales differ)
-  10.19 the memory resolve: (a) may a remembered human value replace machine text,
-        (b) which status does a resolved slot carry, (c) may a machine hint fill an
-        empty slot
   Unanswered by the user, and therefore also askable: does prelearn's request carry
   maxWidth (today only the column translate does)? Does the row pass's per-item field set
   differ from the column pass's?

@@ -428,6 +428,19 @@ The operation classes know what to send, nothing knows how to send it.
 `Runner.swift` fills that: a `Run` (observable, one per run, carrying its
 `plan`) plus a router that executes it.
 
+4.7 Eligibility: a value with NO English characters is never translated (reader,
+    2026-09-14). A string whose content holds no Latin letter has no prose to
+    translate — a leaked `%d - %d`, a bare number, a bullet, an em dash — so it is
+    out of scope for every translate stage and is SKIPPED rather than sent: no
+    model call, no batch, nothing to write. The test is on the CONTENT that would
+    be translated (the row's source, which falls back to its key, 4.3) and not on
+    the status: the question is "is there anything here a translator could
+    translate". A row skipped this way keeps whatever it carries, exactly like an
+    ignored key, and the row pass skips it too — it is not a row whose columns need
+    adapting. It belongs in ONE place so every translate scan inherits it. The reply
+    side is deliberately NOT in scope: a model answering prose with "—" is a
+    validation matter (5.3), not eligibility.
+
 5.1 Execution order per batch: admission (per-provider rate budget) -> prompt
     assembly -> send through the model chain -> deterministic validation ->
     repair -> paid gate -> write-back -> checkpoint -> telemetry.
@@ -776,22 +789,24 @@ The operation classes know what to send, nothing knows how to send it.
       `xcstringstool` accepts (probed). Recommendation: Xcode's table decides what a
       catalog may CONTAIN, and the CLDR delta is a verified add-on list re-checked
       on each Xcode update — but one table, one place, whichever wins.
-- [ ] 10.19 The memory resolve — three questions the run has to answer (put to the
-      reader 2026-09-14, answers pending):
-        (a) MAY a remembered human value REPLACE machine text already in the slot
-            (`.stale` and `.translated`), or does it only fill empty slots? A hint
-            never overrides a human value; the open case is a human value against a
-            machine one.
-        (b) WHAT STATUS does a memory-resolved slot carry? The model's own contract
-            answers `reviewed` ("a reviewed entry auto-resolves as `reviewed` in ANY
-            future catalog") — which also freezes the slot, because the write-back
-            never writes `.verified`. The alternative is `.translated`, so the slot
-            stays reviewable and the row pass may still adapt it.
-        (c) MAY a MACHINE-ONLY entry (`.needs_review`) fill an EMPTY slot as a
-            `.translated` value, the way the model's doc describes ("machine-only
-            entries resolve as needs_review hints")? The redesign currently treats a
-            hint as PROVENANCE ONLY: every translate stage writes one, nothing reads
-            one as an answer. The old pipeline read it as a value.
+- [x] 10.19 The memory resolve (reader, 2026-09-14):
+      (a) a remembered human value REPLACES machine text already in the slot —
+          `.stale` and `.translated` alike. A human's choice beats a machine's
+          output; the only value that is never overwritten is another human's
+          (`.verified`, `.imported`).
+      (b) a memory-resolved slot reads `reviewed` — the model's own contract ("a
+          reviewed entry auto-resolves as `reviewed` in ANY future catalog"), so it
+          is frozen for writing — and it STILL travels in the row pass, as context.
+          The row payload already carries every language including the settled ones
+          (4.6), which is exactly the readonly-for-context role the reader asked
+          for: resolving through memory removes the slot from the row's WRITE SET,
+          not from the row's view.
+      (c) a MACHINE-only entry fills every EMPTY slot it matches — "machine fills
+          all empty values as they shouldn't be empty" — as `.translated`, the old
+          pipeline's needs_review role, and it still never overrides a human value.
+          Together with (a): gold replaces machine text, a hint only fills
+          emptiness.
+      Resolution is global (6.2), so all three apply across projects.
 - [x] 10.14 `maxWidth` TRAVELS with a vertical request (reader, 2026-09-14), which
       departs from the current pipeline: it keeps the width guideline out of every
       prompt on the grounds that a width constraint degrades a translation, and
