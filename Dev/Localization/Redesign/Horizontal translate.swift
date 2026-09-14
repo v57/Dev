@@ -92,7 +92,7 @@ extension Translation {
         var operations = [Operations]()
         var current = Operations()
         var size = 0
-        let maxSize = Limits.batch
+        let maxSize = Limits.batch / 4
         for item in self.items {
           let chars = item.characters
           // A batch always takes at least one item, so a source that is over the budget
