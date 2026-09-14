@@ -518,23 +518,21 @@ The operation classes know what to send, nothing knows how to send it.
 
 5.3 Validation, in this order and none of it paid: echoed ids must match the
     request exactly, the placeholder multiset per item must survive, an
-    untranslated echo (the reply IS the source, compared EXACTLY, case included —
-    see below) is rejected, an empty reply is rejected,
+    empty reply is rejected,
     a truncated reply is reported as truncation and re-asked in halves.
 
-    THE ECHO TEST IS CASE-SENSITIVE (reader, 2026-09-14, from a live run: input
-    `%lld bytes`, the model answered `%lld Bytes` for `de`, "looks good but marked as
-    failure"). The reference compares case-insensitively, and that threw away a
-    correct German answer — German capitalizes its nouns, and the batch failed on it.
-    An echo is the reply BEING the source; a case difference is a change the target
-    language may have required, and whether it is enough is the human's call when they
-    review the slot. So: exact comparison, trimming preserved, every form of a plural
-    still has to echo to count — and a source of ONE WORD is never an echo (reader,
-    2026-09-14, from a live run: `Start` and `Symbol` came back unchanged for `cs`,
-    which is what Czech calls them, and both were thrown away). A phrase that comes back
-    unchanged is the echo the rule is for; a single token — and every acronym — is the
-    loanword case the guard always said it was protecting. An answer that IS identical
-    is written as `.translated`, so a human still sees it in the review flow.
+    NO ECHO GUARD (reader, 2026-09-14: "Remove that guard. Start is start in danish,
+    symbol is symbol"). An answer IDENTICAL to its source is not a defect and is no
+    longer rejected: a target language reuses a source word far more often than any
+    check can tell — `Start` and `Symbol` are what Danish, Czech and German call them —
+    and the two attempts to police it both threw away correct work (case-insensitively,
+    then only for phrases over four characters). What is left of the free checks is what
+    is mechanically knowable: an EMPTY answer, and a PLACEHOLDER multiset that did not
+    survive. An identical answer is written as `.translated`, which puts it in the
+    review flow where a human decides, and the paid gate still reviews what is written
+    (5.4). The cost, accepted knowingly: a model that returns a whole sentence unchanged
+    for the wrong language now looks like an ordinary unreviewed translation instead of
+    an error.
 
     NO REPAIR (reader, 2026-09-14). A rejected id is marked FAILED, carrying the defect
     that rejected it, and the run's own RETRY of the failed batches is the recovery path
@@ -850,7 +848,7 @@ The operation classes know what to send, nothing knows how to send it.
 
 ## 9. Validation, width and plurals
 
-9.1 Placeholders, ids, echo and empty are validated deterministically and for
+9.1 Placeholders, ids and empty are validated deterministically and for
     free; only survivors reach the paid gate (5.3).
 
 9.2 Characters, not tokens: the models routed here have very large context

@@ -1807,8 +1807,7 @@ extension Translation {
   }
 
   /// Deterministic, free, and always run before the paid gate: a dropped
-  /// placeholder, an echoed source or an empty reply must never cost a review
-  /// call.
+  /// placeholder or an empty reply must never cost a review call.
   ///
   /// The checks and their tolerances follow `TranslationValidator` — read as the
   /// precedent, never called — one level up: the ids are the items' POSITIONS as
@@ -1833,8 +1832,6 @@ extension Translation {
       case empty
       /// Placeholder multiset differs from the source's.
       case placeholders(expected: [String], got: [String])
-      /// The answer is the source text unchanged.
-      case echo
 
       var description: String {
         switch self {
@@ -1842,8 +1839,6 @@ extension Translation {
           return "empty response"
         case .placeholders(let expected, let got):
           return "placeholders changed (expected \(expected.joined(separator: " ")), got \(got.joined(separator: " ")))"
-        case .echo:
-          return "untranslated (identical to source)"
         }
       }
     }
@@ -1954,12 +1949,12 @@ extension Translation {
     }
 
     /// What is wrong with one item's answer, deterministically and for free: nothing
-    /// to judge in an empty answer, a placeholder multiset that did not survive, an
-    /// answer left in the source language (5.3).
+    /// to judge in an empty answer, a placeholder multiset that did not survive (5.3).
     ///
-    /// The source side is what the model was SHOWN (`payloadSource`), not the authored
-    /// field: a row with nothing authored sent its key, and an answer that echoes the
-    /// key is an echo.
+    /// An answer IDENTICAL to its source is NOT a defect (reader, 2026-09-14: "Start is
+    /// start in danish, symbol is symbol"). A language reuses a source word far more
+    /// often than a check can tell, and the reviewer sees the slot — so sameness is
+    /// written as `.translated` and judged by a human, never thrown away here.
     static func defects(_ answer: StringBody, of item: Run.Item) -> [Defect] {
       guard !answer.isEmpty else { return [.empty] }
       var defects: [Defect] = []
@@ -1967,9 +1962,6 @@ extension Translation {
       let got = placeholders(in: answer).sorted()
       if expected != got {
         defects.append(.placeholders(expected: expected, got: got))
-      }
-      if echoes(answer, item.payloadSource) {
-        defects.append(.echo)
       }
       return defects
     }
@@ -2047,48 +2039,6 @@ extension Translation {
       let range = NSRange(text.startIndex..., in: text)
       return regex.matches(in: text, range: range).compactMap {
         Range($0.range, in: text).map { String(text[$0]) }
-      }
-    }
-
-    /// An answer left in the source language. Only meaningful for a string long enough
-    /// that an unchanged copy is not a legitimate loanword or acronym (the reference's
-    /// own guard), and a plural answer has to echo EVERY form it fills to count.
-    ///
-    /// The comparison is EXACT, case included (reader, 2026-09-14). The reference
-    /// compares case-INSENSITIVELY and that threw away good answers: German capitalizes
-    /// its nouns, so `%lld bytes` -> `%lld Bytes` was reported as "untranslated
-    /// (identical to source)" and its whole batch failed on a correct translation. An
-    /// echo is the reply BEING the source; a difference in case is a change the target
-    /// language may have required, and whether it is enough is the human's call when
-    /// they review the slot, not this check's.
-    private static func echoes(_ answer: StringBody, _ source: StringBody) -> Bool {
-      let sourceText = source.catalogValue.trimmingCharacters(in: .whitespacesAndNewlines)
-      // A single TOKEN is never an echo (reader, 2026-09-14). "Start", "Symbol", "OK" and
-      // every acronym are legitimately identical in a target language, and the length
-      // guard ALONE rejected exactly those — the loanword case the guard says it exists
-      // to protect. A PHRASE that comes back unchanged is the real echo: nobody
-      // translates a sentence by leaving it. (`%lld bytes` -> `%lld Bytes` was the other
-      // half of this: a case difference is not sameness either.)
-      guard sourceText.count > 4, sourceText.contains(" ") else { return false }
-      switch answer {
-      case .value(let text):
-        return text.trimmingCharacters(in: .whitespacesAndNewlines) == sourceText
-      case .plural(let plural):
-        let filled = plural.values.filter { !$0.value.isEmpty }
-        guard !filled.isEmpty else { return false }
-        // A plural slot compares per CATEGORY against its own plural source; against
-        // a flat source (a plural slot whose source unit is flat) every form would
-        // have to be a copy of that text.
-        guard case .plural(let reference) = source else {
-          return filled.allSatisfy {
-            $0.value.trimmingCharacters(in: .whitespacesAndNewlines) == sourceText
-          }
-        }
-        return filled.allSatisfy { form in
-          let expected = reference.value(for: form.rule).trimmingCharacters(in: .whitespacesAndNewlines)
-          guard !expected.isEmpty else { return false }
-          return form.value.trimmingCharacters(in: .whitespacesAndNewlines) == expected
-        }
       }
     }
 
