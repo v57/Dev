@@ -70,12 +70,16 @@ struct ContentView: View {
           .help("Open a tool for the selected project")
         }
       }
-      // The redesign's Start (Design notes 8.1): the one button that runs the
+      // The redesign's Starts (Design notes 8.1): the one button that runs the
       // new plan — prepare, prelearn, learn, translate, then the row pass —
       // for the project whose Localization pane is showing, because that pane
       // is where its run reports (its overlay, and its status bar at the
-      // foot). Disabled while a run is in flight: such a run is paused or
-      // cancelled from its own pages, and pressing Start again resumes it.
+      // foot). Its twin, immediately after it, is the same run with the two
+      // learning steps left out (reader, 2026-09-14): the pane's own status bar
+      // offers both, so the toolbar does too — wherever the reader looks for
+      // Start, both ways to start it are there. Disabled while a run is in
+      // flight: such a run is paused or cancelled from its own pages, and
+      // pressing Start again resumes it.
       // The old pipeline's Translate button lives in that pane's own toolbar
       // and is untouched — the app carries both runs, side by side (10.9).
       if let catalogURL = paneCatalogURL {
@@ -87,6 +91,15 @@ struct ContentView: View {
           }
           .disabled(!translation.canStart(catalogURL))
           .help(translation.startHelp(catalogURL))
+          // Icon-only, and the twin of the button beside it: it differs by ONE
+          // thing — the learning steps — and the tooltip is where that is said.
+          Button {
+            Task { await translation.startSkippingLearning(catalogURL) }
+          } label: {
+            Image(systemName: "forward.fill")
+          }
+          .disabled(!translation.canStart(catalogURL))
+          .help(translation.skipLearningHelp(catalogURL))
         }
       }
     }

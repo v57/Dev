@@ -308,8 +308,20 @@ extension Translation {
           }
           Button("Start") { Task { try? await workspace.start() } }
             .buttonStyle(.borderedProminent)
-            .disabled(!workspace.canStart)
+            .disabled(!workspace.canStartRun)
             .help(workspace.museNote ?? "Runs prepare, prelearn, learn, translate and the row pass")
+          // The SECOND way in, immediately after Start (reader, 2026-09-14: "Place it right after
+          // start button with `forward.fill` icon"): the same run with the two learning steps left
+          // out. Icon-only, because Start is the button that needs a word — this one differs from
+          // it by ONE thing, and its tooltip is where that thing is spelled out. Same shape as
+          // Start: the same disabled rule (`canStartRun`), the same `museNote` fallback.
+          Button {
+            Task { try? await workspace.startSkippingLearning() }
+          } label: {
+            Image(systemName: "forward.fill")
+          }
+          .disabled(!workspace.canStartRun)
+          .help(workspace.museNote ?? Run.skipLearningHelp)
         }
       }
     }
@@ -822,12 +834,16 @@ extension Translation {
       }
     }
 
-    /// Whether the toolbar's Start can do anything for a pane: its workspace exists, Muse
-    /// has a credential (5.2), and no run of it is in flight — a run already going is
-    /// paused or cancelled from its own pages rather than started twice (8.1).
+    /// Whether EITHER of the toolbar's start buttons can do anything for a pane: its workspace
+    /// exists, Muse has a credential (5.2), and no run of it is in flight — a run already going
+    /// is paused or cancelled from its own pages rather than started twice (8.1).
+    ///
+    /// One reading for the pair, and the same one the pane's own bar reads
+    /// (`Workspace.canStartRun`): the toolbar offers BOTH starts, so a rule stated per button
+    /// would be a rule that can drift from its twin.
     func canStart(_ catalogURL: URL) -> Bool {
       guard let workspace = workspace(for: catalogURL) else { return false }
-      return workspace.canStart && !workspace.status.isRunning
+      return workspace.canStartRun
     }
 
     /// The toolbar's Start: the run's pages come back up — a run the user just asked for
@@ -838,21 +854,46 @@ extension Translation {
     /// there is no other way in: `canStart` reads the same workspace, so the button this path
     /// belongs to is only enabled once the pane has handed it over.
     func start(_ catalogURL: URL) async {
+      await start(catalogURL, mode: .full)
+    }
+
+    /// The toolbar's SECOND Start (reader, 2026-09-14): the same path with the learning steps
+    /// left out of the plan. One implementation for both, because the two buttons differ by
+    /// exactly one thing — the mode the run is built with — and everything else about starting
+    /// (the focus, the pages coming back up, the run's own reporting) is the same act.
+    func startSkippingLearning(_ catalogURL: URL) async {
+      await start(catalogURL, mode: .skipLearning)
+    }
+
+    private func start(_ catalogURL: URL, mode: Translation.Run.Mode) async {
       guard let catalog = catalogs[catalogURL.path] else { return }
       guard let workspace = await focus(catalogURL: catalogURL, catalog: catalog) else { return }
       workspace.reopenOverlay()
-      try? await workspace.start()
+      try? await workspace.run(.vertical, mode: mode)
     }
 
     /// The Start button's help: why it is not available, or what it runs. A run in flight
     /// is the nearer reason of the two — the button is offering a WAIT, not a broken app.
     func startHelp(_ catalogURL: URL) -> String {
+      help(catalogURL, saying: "Run prepare, prelearn, learn, translate, then the row pass (8.1)")
+    }
+
+    /// The skip-learning button's help — the same shape, saying what THIS button does. The
+    /// sentence itself lives on `Run` beside the plan it describes, so the toolbar's button and
+    /// the pane's bar cannot end up describing two different runs.
+    func skipLearningHelp(_ catalogURL: URL) -> String {
+      help(catalogURL, saying: Translation.Run.skipLearningHelp)
+    }
+
+    /// What a start button says about itself, for either of the two: why it is not available,
+    /// or the sentence the caller supplies for what it would run.
+    private func help(_ catalogURL: URL, saying sentence: String) -> String {
       guard let workspace = workspace(for: catalogURL) else {
         return "The redesign's run starts once this project's catalog is open"
       }
       if workspace.status.isRunning { return "A run is in flight — pause or cancel it on its pages" }
       if let note = workspace.museNote { return note }
-      return "Run prepare, prelearn, learn, translate, then the row pass (8.1)"
+      return sentence
     }
 
     // MARK: - clearing the store (Design notes 7.5)

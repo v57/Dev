@@ -79,6 +79,11 @@ extension Translation {
       /// The run's own state, so the bar can say "paused" from "finished". Nil when
       /// this project has never run that stage.
       var state: Run.State?
+      /// WHICH PLAN the run is on (`Run.Mode`, 8.1). The bar names it for a plan that differs
+      /// from the usual one: a run of three steps whose line said nothing would let the two
+      /// absent steps read as steps that did nothing, when they are absent by choice. Nil when
+      /// this project has never run that stage.
+      var mode: Run.Mode?
       /// Items done against the items the run has CUT. The plan is discovered one
       /// operation at a time — a stage's batches exist only once it is scanned — so
       /// the total grows as the run walks its steps rather than being known up front.
@@ -87,8 +92,12 @@ extension Translation {
       var failures = 0
       /// Where the last run of this stage stopped, when no run of it is in memory.
       var checkpoint: Int?
-      /// One line for the status bar: the state, the step it is on, how far it got, and
-      /// what it is carrying (8.1).
+      /// One line for the status bar: the state, the plan it is running, the step it is on, how
+      /// far it got, and what it is carrying (8.1).
+      ///
+      /// The PLAN is named only when it is not the usual one: a run of three steps has to say it
+      /// is skipping the learning steps, or the two steps it never reaches read as steps that did
+      /// nothing — while the five-step plan's line stays exactly what it always was.
       var summary: String {
         guard let state else {
           guard let checkpoint, checkpoint > 0 else { return "No run yet" }
@@ -103,6 +112,7 @@ extension Translation {
           case .cancelled: "Cancelled"
           case .finished: "Finished"
           }
+        if let mode, mode != .full { line += " · \(mode.title)" }
         if let step { line += " · \(step.title)" }
         if total > 0 { line += " · \(done)/\(total)" }
         if failures > 0 { line += " · \(failures) failed" }
@@ -115,6 +125,7 @@ extension Translation {
         guard let run else { return }
         state = run.state
         isRunning = run.state == .running || run.state == .scanning
+        mode = run.mode
         step = run.operation
         done = run.tally.itemsDone
         total = run.tally.items
@@ -141,6 +152,14 @@ extension Translation {
     /// True when the one button can do anything at all: Muse has a credential.
     var canStart: Bool { runner.router.isConfigured }
 
+    /// What BOTH start buttons are disabled by (8.1): Muse has a credential, and no run of this
+    /// workspace is in flight. A run already going is paused or cancelled from its own pages
+    /// rather than started again, so the two buttons offer a WAIT — not two more runs.
+    ///
+    /// One reading, read by the pane's bar and by the toolbar's Start alike, because the two
+    /// hosts offer the same pair of buttons: a rule restated per host is a rule that can drift.
+    var canStartRun: Bool { canStart && !status.isRunning }
+
     private static let notConfigured =
       "Muse is not configured: set \(CommandCodeKeychain.envName) in the login keychain, "
       + "the environment, or ~/.hermes/.env."
@@ -158,6 +177,22 @@ extension Translation {
     /// stacked.
     func start() async throws {
       try await run(.vertical)
+    }
+
+    /// THE SECOND WAY IN (reader, 2026-09-14): the same run WITHOUT the learning steps —
+    /// prepare, translate, then the row pass.
+    ///
+    /// Nothing else differs: the same runner, the same stages, the same write-back, the same
+    /// retry and the same saving rules. What it does not do is prelearn (the machine record a
+    /// human-verified slot is missing) and learn (folding what the human changed into the
+    /// project's language document) — right for a project whose documents already carry what
+    /// they should.
+    ///
+    /// Preparation is NOT skipped and cannot be: it is what reads the rows and resolves the
+    /// imported database, so without it there is nothing for the translate stages to find (4.8).
+    /// The plan is decided in ONE place (`Run.plan`), never by trimming an array here.
+    func startSkippingLearning() async throws {
+      try await run(.vertical, mode: .skipLearning)
     }
 
     /// Loads the rows from the open catalog, the language documents and the last cursor,
@@ -240,9 +275,15 @@ extension Translation {
     /// Runs a stage's plan: `vertical` is prepare -> prelearn -> learn -> translate
     /// -> the row pass (prelearn, learn and the row pass are operations OF that run,
     /// not controls of their own), and `horizontal` alone re-runs just the sweep.
+    ///
+    /// `mode` is which plan a translate run performs (8.1): `.full` is the five steps above,
+    /// `.skipLearning` is the same run without the two learning steps. It reaches the runner
+    /// and lives on the run, so nothing else here has to know: the rail, the pages and the bar
+    /// all read the run's own plan.
+    ///
     /// A run needs a usable provider before it starts, so an unconfigured app fails at
     /// the button instead of per batch.
-    func run(_ stage: Stage) async throws {
+    func run(_ stage: Stage, mode: Run.Mode = .full) async throws {
       // One workspace shows one run at a time, so the rail and the bar follow the run
       // that was just asked for.
       self.stage = stage
@@ -251,7 +292,7 @@ extension Translation {
         throw BackendError.notConfigured(Self.notConfigured)
       }
       do {
-        try await runner.run(stage)
+        try await runner.run(stage, mode: mode)
       } catch {
         self.error = error.localizedDescription
         throw error
@@ -291,7 +332,7 @@ extension Translation {
         // The batches a resume landed are the run's results like any other: the app's
         // catalog is what a Save would write, so it learns about them now (5.8).
         publish()
-      case .cancelled, .finished: try await self.run(stage)
+      case .cancelled, .finished: try await self.run(stage, mode: run.mode)
       // Already going: a second start is a wait, not a second run (8.1).
       case .scanning, .running: return
       }

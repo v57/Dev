@@ -49,6 +49,11 @@ extension Translation {
     /// `[.prepare, .prelearn, .learn, .vertical, .horizontal]`: the row pass is a
     /// step, always, not a separate pass the user triggers.
     var operations: [Stage]
+    /// Which plan this run is on (`Mode`). Kept ON the run because everything that reports
+    /// about it — the rail, the four pages and the status bar — reads the run's own
+    /// `operations`, and three steps only read as deliberate if the run can say which plan
+    /// it is running (8.1: a step with nothing to do reads as a step that did nothing).
+    let mode: Mode
     var state: State = .idle
     /// Which operation of `operations` the run is on. The rail shows each step's
     /// progress through this, and reopening the overlay lands here (8.1).
@@ -66,21 +71,60 @@ extension Translation {
     var startedAt: Date?
     var finishedAt: Date?
 
-    init(stage: Stage, project: Project) {
+    init(stage: Stage, project: Project, mode: Mode = .full) {
       self.stage = stage
       self.project = project
-      operations = Run.plan(for: stage)
+      self.mode = mode
+      operations = Run.plan(for: stage, mode: mode)
     }
+
+    /// WHICH PLAN a run is on. One run, two ways to start it (reader, 2026-09-14: "Add skip
+    /// learning mode that will start from vertical translation").
+    ///
+    /// The difference is exactly the learning steps: `prelearn` supplies the machine record a
+    /// human-verified slot is missing and `learn` folds what the human changed into the
+    /// project's language document. A run that skips them is the same runner, the same stages,
+    /// the same write-back and the same retry — it simply does not perform those two
+    /// operations, which is right for a project whose language documents are already what they
+    /// should be and whose machine records nobody needs.
+    ///
+    /// It is NOT a plan with the steps trimmed at a call site: `Run.plan` is the one place a
+    /// plan is decided, and the run carries the mode so the rail, the pages and the bar can
+    /// report which plan they are showing.
+    enum Mode: String, CaseIterable {
+      /// prepare -> prelearn -> learn -> vertical -> horizontal.
+      case full
+      /// prepare -> vertical -> horizontal: the same run without the learning steps.
+      case skipLearning
+
+      /// How a readout NAMES this mode. The bar says it only for a plan that differs from the
+      /// usual one: a run of three steps whose bar said nothing would let the two absent steps
+      /// read as steps that did nothing, when they are absent by choice (8.1).
+      var title: String {
+        switch self {
+        case .full: "Full plan"
+        case .skipLearning: "Skip learning"
+        }
+      }
+    }
+
+    /// What the skip-learning Start says it does — ONE sentence, read by BOTH hosts that offer
+    /// the button (the toolbar's and the pane's bar), so the two can never say different things.
+    static let skipLearningHelp =
+      "Start without the learning steps: prepare, translate, then the row pass"
 
     /// The ordered operations behind a run. Preparation is always first: scan the
     /// catalog, merge it into the in-memory catalog, load the session rows and
     /// resolve the imported database, so every later operation sees one settled
-    /// set of rows.
+    /// set of rows. It survives the skip-learning plan for exactly that reason: it is
+    /// what reads the rows and resolves the imported database, so without it there
+    /// is no work for any later operation to find (4.8).
     ///
     /// prelearn and learn are operations OF the translate run, not passes a user
     /// starts: prelearn supplies the machine record a human-verified slot is
     /// missing, and learn folds what the human changed into the project's language
-    /// document before the column it governs is translated.
+    /// document before the column it governs is translated. `.skipLearning` drops
+    /// exactly those two and keeps everything else in the same order.
     ///
     /// The row pass is the LAST step of that run, and it is always enabled (reader,
     /// 2026-09-14). After the columns are translated, it puts each row in view so the
@@ -90,9 +134,15 @@ extension Translation {
     /// button again after a verification session is how those corrections reach the
     /// rest of the project — the vertical step finds nothing to redo (verified slots
     /// are not work), prelearn and learn do their thing, and the row pass adapts.
-    static func plan(for stage: Stage) -> [Stage] {
+    ///
+    /// The row-only flow has NO second variant: `.horizontal` is `[.prepare, .horizontal]`
+    /// in both modes, because there is no learning in it to skip.
+    static func plan(for stage: Stage, mode: Mode = .full) -> [Stage] {
       switch stage {
-      case .vertical: [.prepare, .prelearn, .learn, .vertical, .horizontal]
+      case .vertical:
+        mode == .skipLearning
+          ? [.prepare, .vertical, .horizontal]
+          : [.prepare, .prelearn, .learn, .vertical, .horizontal]
       case .horizontal: [.prepare, .horizontal]
       case .prepare: [.prepare]
       case .prelearn, .learn: [.prepare, stage]
@@ -455,12 +505,14 @@ extension Translation {
 
     /// Runs a stage's whole plan, one batch at a time, from its first operation to
     /// its last: a translate run is prepare -> prelearn -> learn -> translate -> the
-    /// row pass.
+    /// row pass, or — in `.skipLearning` — prepare -> translate -> the row pass.
     ///
     /// Starting twice is impossible: a run of this stage that is already in flight
-    /// is waited for, and a paused one is resumed from its cursor (8.1).
+    /// is waited for whatever plan it is on, and a paused one is resumed from its cursor
+    /// (8.1). A run that has ended is replaced by a freshly cut one, which is how the other
+    /// mode is reached.
     @discardableResult
-    func run(_ stage: Stage) async throws -> Run {
+    func run(_ stage: Stage, mode: Run.Mode = .full) async throws -> Run {
       if let existing = runs[stage] {
         switch existing.state {
         case .scanning, .running:
@@ -473,7 +525,7 @@ extension Translation {
           break
         }
       }
-      let run = Run(stage: stage, project: project)
+      let run = Run(stage: stage, project: project, mode: mode)
       runs[stage] = run
       try await execute(run)
       return run
