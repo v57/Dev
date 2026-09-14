@@ -156,17 +156,24 @@ extension Translation {
       try await run(.vertical)
     }
 
-    /// Loads the rows, the language documents and the last cursor, then applies
-    /// the imported-database resolve. Workspace open is the one place a project's
-    /// rows are read.
+    /// Loads the rows from the open catalog, the language documents and the last cursor,
+    /// then applies the imported-database resolve. Workspace open is the one place a
+    /// project's rows are read.
     ///
-    /// The artifact itself — opening and PARSING the `.xcstrings` — is the catalog
-    /// layer's async work and is not done here; this is the app-side half of an open:
-    /// the session rows projected onto the open catalog, the shipped translations that
-    /// settle a slot before any model call, and where the last run of each stage
-    /// stopped. The languages are loaded by the project's own initializer.
-    func open() async throws {
-      try project.loadData()
+    /// `catalog` is the artifact the pane is showing, PARSED by the catalog layer — its async
+    /// half, which owns opening the file (7.1) — and handed over as a value: the rows are one
+    /// per CATALOG key (4.8), so the parsing is the whole of what an open waits for. The URL
+    /// it came from is adopted with it, because that file is the one a Save writes (5.8) and
+    /// the app's own copy of it is the base state a Save applies the session onto.
+    ///
+    /// What is left for this side of an open is the app-side half: the session rows projected
+    /// onto that catalog, the shipped translations that settle a slot before any model call,
+    /// and where the last run of each stage stopped. The languages are loaded by the
+    /// project's own initializer.
+    func open(catalog: StringCatalog, from url: URL) async throws {
+      self.catalog = catalog
+      catalogURL = url
+      try project.loadData(catalog: catalog)
       try applyImported()
       cursors = Run.plan(for: .vertical).reduce(into: [:]) { found, stage in
         found[stage] = try? store.cursor(for: stage, project: project.id)
@@ -343,9 +350,9 @@ extension Translation {
     /// rather than as machine output: re-enabling a key is not a review decision.
     ///
     /// The artifact carries the flag and nothing else, and Save writes it from the toggle
-    /// recorded HERE rather than from the projected `translatable`: the row projection has no
-    /// catalog half, so it reads `true` for a key the FILE already ignores, and writing that
-    /// back would silently re-enable it.
+    /// recorded HERE rather than from the projected `translatable`: the projection now carries
+    /// the FILE's own flag (4.8), so writing every row's flag back would rewrite
+    /// `shouldTranslate` across the whole catalog instead of the one key the human toggled.
     func setTranslatable(_ translatable: Bool, key: String) {
       guard let row = project.rowIndex[key], project.data.indices.contains(row),
         project.data[row].translatable != translatable
@@ -631,10 +638,11 @@ extension Translation {
       case .stay: return
       }
     }
-    /// Drops what no Save wrote: the rows are re-projected from the store, which is where
-    /// everything a run wrote already is (`Runner.persist`) and where the last Save put the
-    /// human's values. A run's results therefore survive a discard; an unconfirmed edit does
-    /// not, which is the whole point of asking.
+    /// Drops what no Save wrote: the rows are re-projected from the artifact the open handed
+    /// over and from the store, which is where everything a run wrote already is
+    /// (`Runner.persist`) and where the last Save put the human's values. A run's results
+    /// therefore survive a discard; an unconfirmed edit does not, which is the whole point of
+    /// asking.
     private func discard() {
       project.data.removeAll()
       project.rowIndex.removeAll()
@@ -664,12 +672,14 @@ extension Translation {
         }
       }
     }
-    /// The artifact this session is saved through, parsed once and kept.
+    /// The artifact this session is saved through: the catalog an OPEN was handed, and the URL
+    /// it came from (4.8) — parsed once by the catalog layer and KEPT, so a Save applies the
+    /// session onto the copy the APP holds rather than onto a second read of the file.
     ///
-    /// WHERE it is comes from the app's own project row (`Store.projectRow(id:)` then
-    /// `catalogURL`): the redesign's `Project` holds no handle on the open catalog, because
-    /// opening and parsing the `.xcstrings` is the catalog layer's async work (7.1). When that
-    /// layer lands, this is the one place that should adopt the catalog it already opened.
+    /// The fallback is for a workspace that never went through an open (a preview, a probe):
+    /// WHERE the file is then comes from the app's own project row (`Store.projectRow(id:)`
+    /// then `catalogURL`), because the redesign's `Project` holds no handle on the artifact —
+    /// opening and parsing the `.xcstrings` is the catalog layer's async work (7.1).
     private func artifact() async throws -> (StringCatalog, URL) {
       if let open = catalog, let url = catalogURL { return (open, url) }
       guard let row = try store.projectRow(id: project.id) else {

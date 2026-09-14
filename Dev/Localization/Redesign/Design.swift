@@ -458,12 +458,23 @@ enum Translation {
     /// Only the languages in play. A language that is in the catalog but not in
     /// this map is not translated, and its column is not shown.
     var languages: [String: Language] = [:]
-    /// One entry per catalog key, in catalog order. The catalog key — not the
+    /// One entry per CATALOG key, sorted by key. The catalog key — not the
     /// array position — is the identity every operation carries.
+    ///
+    /// SORTED BY KEY, and not in file order: the catalog is the row universe (4.8), and
+    /// its own model holds `strings` as a `[String: Entry]` Dictionary, so the file's
+    /// order is not available to anything downstream. An earlier doc promised "catalog
+    /// order" and that claim is withdrawn rather than faked.
     var data: [LocalizationKey] = []
     /// key -> position in `data`, so a result can be applied by key and
     /// re-checked against the scan's snapshot.
     var rowIndex: [String: Int] = [:]
+    /// The parsed catalog the rows are projected from (4.8). A row IS a catalog key, so
+    /// the artifact is what makes the row universe — and keeping it is what lets the
+    /// no-argument `loadData()` re-project the same file state (a discard, a stage
+    /// factory, the run's own prepare). Nil until a catalog is handed to
+    /// `loadData(catalog:)`; a project with no artifact has no rows at all.
+    private var catalog: StringCatalog?
     init(id: String, global: Global) throws {
       self.id = id
       self.global = global
@@ -480,8 +491,10 @@ enum Translation {
     /// addressed one scope at a time by their full id, so there is nothing to
     /// enumerate. A SLOT RECORD is what "in play" means on this side: the reconcile
     /// that seeds a project creates one per (key, language, category) — the empty ones
-    /// included — so a column exists exactly when the store has rows for it, and the
-    /// columns cannot disagree with the rows `loadData` projects from the same fetch.
+    /// included — so a column exists exactly when the store has rows for it. The rows
+    /// themselves come from the catalog now (4.8), so a column reaches keys the store
+    /// holds no record for; what it cannot do is appear for a language nothing in the
+    /// store knows.
     private func loadLanguages() throws {
       for code in Set(try global.store.records(project: id).map(\.language)).sorted()
       where languages[code] == nil {
@@ -499,59 +512,180 @@ enum Translation {
     func removeLanguage(_ code: String) {
       languages[code] = nil
     }
-    /// Builds the rows: the catalog's keys, projected onto what the store knows
-    /// about them — the imported-database resolve (status `.imported`), the
-    /// staleness stamps, the journal. The artifact's own values are the base state.
+    /// Builds the rows from an OPEN CATALOG — the artifact is the row universe (4.8), so
+    /// this is the entry point an open goes through: the pane hands over the catalog it is
+    /// showing (its parsed `StringCatalog`), and the store supplies the STATE of the keys
+    /// that catalog holds.
     ///
-    /// SYNCHRONOUS, and deliberately: by the time this runs, Prepare has already
-    /// opened and parsed the .xcstrings (that part is async and belongs to the
-    /// catalog layer), so this is a fetch plus a projection.
+    /// One row per CATALOG key, sorted by key (see `data`). A record whose key the catalog
+    /// does not hold produces NO row — its state stays in the store, waiting for the key to
+    /// come back — and a catalog key the store holds no record for IS a row, whose slots
+    /// start from the artifact. Where BOTH hold the key the STORE wins for the value: a run
+    /// writes app-side and the file only catches up on Save (5.8), so the artifact's value
+    /// is the base state and never the latest one.
     ///
-    /// The projection is from the app's OWN records — `Store.records`, ONE fetch for
-    /// the whole project — which is what the redesign shares with the browser the old
-    /// pipeline feeds (10.16): a key the store holds no record for is not a row, and
-    /// the reconcile creates a record only for a TRANSLATABLE key (it skips
-    /// `shouldTranslate == false`), so `translatable` reads true for every row this
-    /// builds and an ignored key simply has no row. Two things the store does not
-    /// carry are therefore absent by construction rather than by accident: the
-    /// developer COMMENT (it lives in the artifact, and reaches a prompt through the
-    /// catalog layer) and the artifact's own key order (the order here is the fetch's,
-    /// which is by key). Neither changes the shape of a row: a row with no comment
-    /// sends none (4.3), and the key is what every operation carries (1.2).
+    /// The catalog is KEPT (`self.catalog`), which is what makes the no-argument
+    /// `loadData()` a re-projection of the same artifact rather than a second source of
+    /// truth.
+    func loadData(catalog: StringCatalog) throws {
+      self.catalog = catalog
+      try loadData()
+    }
+    /// Re-projects the rows from the artifact this project last loaded.
+    ///
+    /// SYNCHRONOUS, and deliberately (7.1): the `.xcstrings` was opened and PARSED by the
+    /// catalog layer (`StringCatalog.loadOffMainActor` is its async half) and handed in as a
+    /// value, so what is left here is a walk over the catalog's own Dictionary plus ONE fetch
+    /// (`Store.records`) for the whole project. A project no catalog was handed to has no
+    /// rows at all: there is no key set to build them from, and the store is not one.
     func loadData() throws {
+      guard let catalog else { return }
       guard data.isEmpty else { return }
       let records = try global.store.records(project: id)
-      guard !records.isEmpty else { return }
       let byKey = Dictionary(grouping: records, by: \.key)
       var rows: [LocalizationKey] = []
       var positions: [String: Int] = [:]
-      for key in byKey.keys.sorted() {
-        guard let ofKey = byKey[key] else { continue }
+      for key in catalog.strings.keys.sorted() {
         positions[key] = rows.count
-        rows.append(row(key: key, records: ofKey))
+        rows.append(row(key: key, records: byKey[key] ?? [], catalog: catalog))
       }
       data = rows
       rowIndex = positions
     }
-    /// One row of the table, projected from the records of one key.
+    /// One row of the table: a CATALOG key, with what the store knows about it.
     ///
-    /// The source is the STORED source text, which is what the reconcile took from the
-    /// catalog (including a plural's source form), and everything else is the row's
-    /// slots. `maxWidth` is key-scoped in the store — every record of the key carries
-    /// the same guideline — so taking the first non-nil one is exact, not a guess.
-    private func row(key: String, records: [TranslationRecord]) -> LocalizationKey {
+    /// The source is the ARTIFACT's (the file is where source text is authored, and the
+    /// store's `sourceText` is a copy the reconcile took from that same file), the comment
+    /// likewise — it is the one row field with no home on this side, because the format
+    /// carries it and the store has no column for it — and the width guideline is the
+    /// STORE's (the `.xcstrings` format has no width field). The ignore flag is the
+    /// artifact's too: 2.1's first row is `shouldTranslate == false -> ignore`, so a key the
+    /// FILE takes out of scope reads as out of scope whatever the store says about it.
+    ///
+    /// The slots are one per language IN PLAY (`languages`, which the store supplies). Where
+    /// the store holds records for the pair they ARE the slot; where it holds none the slot
+    /// is the artifact's own. `maxWidth` is key-scoped in the store — every record of the key
+    /// carries the same guideline — so taking the first non-nil one is exact, not a guess.
+    private func row(
+      key: String, records: [TranslationRecord], catalog: StringCatalog
+    ) -> LocalizationKey {
+      let translatable = catalog.entry(for: key)?.shouldTranslate != false
+      let byLanguage = Dictionary(grouping: records, by: \.language)
       var targets: [LocalizationString] = []
-      for language in Set(records.map(\.language)).sorted() {
-        targets.append(slot(language: language, records: records.filter { $0.language == language }))
+      for language in languages.keys.sorted() {
+        var slot: LocalizationString
+        if let ofLanguage = byLanguage[language] {
+          slot = self.slot(language: language, records: ofLanguage)
+        } else {
+          slot = Self.slot(language: language, key: key, catalog: catalog)
+        }
+        // An ignored key is out of scope for every stage and keeps its value (2.1): the
+        // status is what a scan and `Run.writable` read, so a record written before the flag
+        // was set cannot be translated over.
+        if !translatable { slot.status = .ignore }
+        targets.append(slot)
       }
       return LocalizationKey(
         key: key,
-        source: .value(records.first?.sourceText ?? key),
-        comment: "",
+        source: Self.source(of: key, in: catalog),
+        comment: catalog.entry(for: key)?.comment ?? "",
         maxWidth: records.compactMap(\.maxWidth).first ?? 0,
+        translatable: translatable,
         targets: targets)
     }
+    /// The row's source body, read from the ARTIFACT.
+    ///
+    /// The `.xcstrings` is where source text is AUTHORED: the store's `sourceText` is a copy
+    /// the reconcile took from that same file, so the file wins wherever the two can
+    /// disagree (a source edited in Xcode, a project the app's own open has not reconciled
+    /// yet). A source the file varies by plural carries its FORMS — a plural body rather
+    /// than one form's text, because the prompt and the write-back both read the whole set —
+    /// and a source the file has no unit for reads as the key, which is what the artifact
+    /// itself shows (4.3).
+    private static func source(of key: String, in catalog: StringCatalog) -> StringBody {
+      guard catalog.hasPlurals(for: key, language: catalog.sourceLanguage) else {
+        return .value(catalog.sourceDisplay(for: key))
+      }
+      var forms = Plurals(language: catalog.sourceLanguage)
+      for (category, value) in catalog.sourcePluralForms(for: key) {
+        guard let rule = Plural.Rule(rawValue: category) else { continue }
+        forms.set(value, for: rule)
+      }
+      // A varied key whose source forms the file fills with nothing is an EMPTY body, so the
+      // row still falls back to its key (`content`).
+      return forms.isEmpty ? .value(catalog.sourceDisplay(for: key)) : .plural(forms)
+    }
+    /// One (key, language) slot the STORE holds no record for: the artifact's own state.
+    ///
+    /// This is the row the universe rule CREATES (4.8) — a key the file holds and the store
+    /// has never seen — so everything here comes from the file: the value (`rawValue`, or the
+    /// plural forms the node carries for this language, rebuilt over the TARGET language's
+    /// own rule set as 1.4 requires) and the status (2.1's file mapping). `machine` and
+    /// `reviewed` stay empty by construction — nobody has produced a machine value for this
+    /// slot and nobody has confirmed one — which is exactly what makes it WORK like any other
+    /// row. The stamp is `.none`: no document was in play when the file was written, so a
+    /// document that exists marks the slot stale (3.4).
+    private static func slot(
+      language: String, key: String, catalog: StringCatalog
+    ) -> LocalizationString {
+      var slot = LocalizationString(language: language)
+      let state: String?
+      if let units = catalog.pluralUnits(for: key, language: language) {
+        var target = Plurals(language: language)
+        for (category, unit) in units {
+          guard let rule = Plural.Rule(rawValue: category) else { continue }
+          target.set(unit.value ?? "", for: rule)
+        }
+        state = Self.state(of: units)
+        slot.target = .plural(target)
+      } else {
+        state = catalog.state(for: key, language: language)
+        slot.target = .value(catalog.rawValue(for: key, language: language) ?? "")
+      }
+      slot.status = Self.status(state: state, value: slot.target)
+      return slot
+    }
+    /// The file's own state for a plural node.
+    ///
+    /// A varied node carries its state INSIDE each form — there is no flat unit to read — and
+    /// Xcode gives a plural ONE state per language rather than one per form (1.4), so the
+    /// forms are read as one: the `other` form's state when the file states one, else the
+    /// first state any form carries, in category order so the answer never depends on a
+    /// Dictionary's iteration order. A node that states none leaves the status to the value.
+    private static func state(of units: [String: StringCatalog.StringUnit]) -> String? {
+      if let other = units["other"]?.state { return other }
+      return units.keys.sorted().compactMap { units[$0]?.state }.first
+    }
+    /// The status an ARTIFACT slot reads as — 2.1's FILE mapping, deliberately not the store
+    /// mapping beside it (the two disagree about who wrote the value and whether anyone
+    /// vouched for it):
+    ///
+    ///     absent unit / empty value -> needsTranslate
+    ///     "new"                     -> needsTranslate
+    ///     "needs_review"            -> translated
+    ///     "translated"              -> verified
+    ///     "stale"                   -> stale
+    ///
+    /// An empty value outranks the state, exactly as it does on the store side: a unit with
+    /// nothing in it is work whatever it claims. A state the format does not name — an absent
+    /// one included — reads as UNREVIEWED output rather than as a confirmation, because
+    /// nothing but a human produces `.verified` (2.2). `.imported` is never produced here: it
+    /// is app-side knowledge the file cannot carry, and the imported-database resolve is what
+    /// writes it (`Workspace.applyImported`, 6.3).
+    private static func status(state: String?, value: StringBody) -> LocalizationString.Status {
+      guard !value.isEmpty else { return .needsTranslate }
+      switch state {
+      case "new": return .needsTranslate
+      case "needs_review": return .translated
+      case "translated": return .verified
+      case "stale": return .stale
+      default: return .translated
+      }
+    }
     /// One (key, language) slot, projected from the records of that pair.
+    ///
+    /// The pair HAS records by construction: a (key, language) the store holds nothing for is
+    /// the artifact's own slot (`slot(language:key:catalog:)`).
     ///
     /// The records are per language and, for a varied key, per category. A plural slot
     /// is rebuilt over the TARGET LANGUAGE'S OWN rules (1.4), which is what keeps its
@@ -594,7 +728,9 @@ enum Translation {
     ///
     /// This is the STORE mapping, and it is not the file mapping (2.1): `state` says who
     /// wrote the value, `autoReviewed` says nobody vouched for it, and an empty value
-    /// outranks both — a slot with nothing in it is work whatever its row claims.
+    /// outranks both — a slot with nothing in it is work whatever its row claims. A slot the
+    /// store holds no record for reads through the FILE mapping instead
+    /// (`status(state:value:)`), because there is no record to read.
     ///
     /// `.stale` is deliberately NOT produced here. A store record cannot express it
     /// (app-side staleness is never written back), so it is the staleness predicate's

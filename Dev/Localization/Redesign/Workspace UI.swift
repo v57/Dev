@@ -605,6 +605,13 @@ extension Translation {
     private var global: Global?
     /// One workspace per project, keyed by the redesign's project id.
     private var workspaces: [String: Workspace] = [:]
+    /// The parsed catalog each project's pane handed over, by the catalog URL it came from.
+    ///
+    /// A workspace's rows are one per CATALOG key (4.8), so one can only be built from the
+    /// artifact itself — and the toolbar's `Start` has a URL and nothing else. The pane is the
+    /// one surface that holds the parsing (`LocalizationStore.catalog`), so it hands it over
+    /// on focus and the shell keeps it for the Start.
+    private var catalogs: [String: StringCatalog] = [:]
     /// Which project a catalog URL belongs to. A pane holds a FILE URL and nothing else,
     /// so the app's own row — resolved once, here — is what names its workspace.
     private var projects: [String: String] = [:]
@@ -633,18 +640,25 @@ extension Translation {
     /// imported database (6.3) and where the last run of each stage stopped.
     ///
     /// Called by the pane when it appears and by `start` before a run, so a Start always
-    /// acts on the workspace the pane is showing.
+    /// acts on the workspace the pane is showing. `catalog` is the parsing the pane holds: the
+    /// rows are one per CATALOG key (4.8), so the artifact the pane is showing is the only
+    /// thing a workspace can be built from — and it is kept, because `start`'s own input is a
+    /// URL and nothing else.
     ///
-    /// A workspace whose rows are still empty is opened AGAIN: a pane appears while the
-    /// app's own open is still reconciling the catalog, and the redesign projects its
-    /// rows from THAT reconcile (7.2), so the first focus that finds the records is the
-    /// one that fills them.
+    /// A workspace whose rows are still empty is opened AGAIN. That is a RETRY, not a wait:
+    /// an open that failed (a store fetch, a project row that is not there yet) leaves no rows
+    /// behind, and a focus is the next moment to try again. The rows themselves no longer wait
+    /// for the app's own reconcile — the catalog supplies them — which is what this re-open
+    /// used to exist for.
     @discardableResult
-    func focus(catalogURL: URL) async -> Workspace? {
+    func focus(catalogURL: URL, catalog: StringCatalog) async -> Workspace? {
       guard let row = try? store.projectRow(id: catalogURL.path) else { return nil }
       projects[catalogURL.path] = row.name
+      catalogs[catalogURL.path] = catalog
       if let workspace = workspaces[row.name] {
-        if workspace.project.data.isEmpty { try? await workspace.open() }
+        if workspace.project.data.isEmpty {
+          try? await workspace.open(catalog: catalog, from: catalogURL)
+        }
         error = nil
         return workspace
       }
@@ -653,7 +667,7 @@ extension Translation {
         guard let global = self.global else { return nil }
         let workspace = Workspace(project: try global.loadProject(id: row.name), store: store)
         workspaces[row.name] = workspace
-        try await workspace.open()
+        try await workspace.open(catalog: catalog, from: catalogURL)
         error = nil
         return workspace
       } catch {
@@ -673,8 +687,13 @@ extension Translation {
     /// The toolbar's Start: the run's pages come back up — a run the user just asked for
     /// is a run they can watch — and then the run itself starts, or the one already in
     /// flight is resumed. What a run reports about itself is the workspace's own.
+    ///
+    /// The artifact the pane handed over on focus is what a workspace is built from (4.8), and
+    /// there is no other way in: `canStart` reads the same workspace, so the button this path
+    /// belongs to is only enabled once the pane has handed it over.
     func start(_ catalogURL: URL) async {
-      guard let workspace = await focus(catalogURL: catalogURL) else { return }
+      guard let catalog = catalogs[catalogURL.path] else { return }
+      guard let workspace = await focus(catalogURL: catalogURL, catalog: catalog) else { return }
       workspace.reopenOverlay()
       try? await workspace.start()
     }

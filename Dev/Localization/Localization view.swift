@@ -321,14 +321,16 @@ struct LocalizationView: View {
       }
     }
     .animation(.smooth, value: isOverlayPresented)
-    // The redesign's workspace is built once the app holds THIS project's
-    // catalog: its rows are projected from the records that open reconciled
-    // (7.2), so this is the first moment there is anything to build them from.
-    // The shell keeps the workspace (and a run in it) alive after this pane goes
-    // away — looking at another project never stops a run.
+    // The redesign's workspace is built once the app holds THIS project's catalog: its
+    // rows are one per catalog KEY (4.8), so the PARSING of the file is the whole of what
+    // an open waits for — and the app is holding it here, which is why the parsed catalog
+    // is handed over with the URL. The shell keeps the workspace (and a run in it) alive
+    // after this pane goes away — looking at another project never stops a run.
     .task(id: boundCatalogURL) {
-      guard let boundCatalogURL else { return }
-      await shell.focus(catalogURL: boundCatalogURL)
+      guard let boundCatalogURL, let catalog = store.catalog,
+        store.catalogURL == boundCatalogURL
+      else { return }
+      await shell.focus(catalogURL: boundCatalogURL, catalog: catalog)
     }
     .toolbar {
       ControlsBar(store: store, allowsOpenCatalog: allowsOpenCatalog)
