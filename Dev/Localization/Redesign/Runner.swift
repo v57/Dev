@@ -119,6 +119,10 @@ extension Translation {
       /// `Limits.retries + 1` after a retryable failure sent it back for another answer
       /// (5.9). Kept on the batch, on the run's own copy, because that is what a progress
       /// line reads WHILE a re-ask is in flight — a retry nobody can see reads as a hang.
+      ///
+      /// A re-ask BY HAND counts here too (5.11): it is another attempt at the same unit of
+      /// work, which is also what keeps its characters from being charged a second time
+      /// (5.7 — the cost of a unit is counted once, while every SEND is counted).
       var attempt: Int = 1
       /// The model's RAW reply for THIS batch, exactly as the provider sent it: what the
       /// right half of a stage page prints, unread (8.1, "stage pages").
@@ -276,6 +280,35 @@ extension Translation {
 
     var isFinished: Bool { state == .finished || state == .cancelled }
 
+    /// True while 5.11's re-ask is in flight: the batches a finished run gave up on are being
+    /// asked again. The run it belongs to reads as RUNNING while this holds — a batch being
+    /// re-asked must read as running again rather than as still finished — and it is what tells
+    /// a re-ask from the run's own execution.
+    var isRetrying = false
+
+    /// The batches 5.11's button re-asks: the TRANSLATE jobs' batches that failed — the column
+    /// pass and the row pass — in the order the run cut them.
+    ///
+    /// Prelearn and learn are not translations (they write a machine record and a document
+    /// line), so a failure of theirs is not something a re-ask is offered for: it stays in the
+    /// run's own report, where it belongs.
+    ///
+    /// These are the run's OWN batch objects, with their items, their positions and their
+    /// languages — the reason a re-ask needs no scan: the list is already cut and the requests
+    /// go out exactly as they did the first time (4.3, 5.11).
+    var failedBatches: [Batch] {
+      batches.filter {
+        $0.phase == .failed && ($0.stage == .vertical || $0.stage == .horizontal)
+      }
+    }
+
+    /// Whether the overlay offers 5.11's retry: a FINISHED run that still carries a failed
+    /// TRANSLATE batch. A run with no failures offers nothing, a run that was cancelled is over
+    /// rather than finished, and a re-ask already in flight does not offer itself again.
+    var canRetryFailedBatches: Bool {
+      state == .finished && !isRetrying && !failedBatches.isEmpty
+    }
+
     /// The rule of the write set for a write of the VALUE, and its ONLY rule: a slot the
     /// run may write is one whose OWN status allows it. `.verified` and `.imported` are
     /// never overwritten — a value this project has already committed to is context, not a
@@ -397,8 +430,13 @@ extension Translation {
 
     /// Cancels the batch in flight and keeps everything already applied. The run
     /// stays resumable from its cursor.
+    ///
+    /// A re-ask in flight is not a run being paused (5.11): the run it belongs to has already
+    /// finished, so there is no cursor to resume from and nothing to pause — the re-ask runs on,
+    /// and `stopRetry` is what ends it.
     func pause(_ run: Run) {
       guard run.state == .running || run.state == .scanning else { return }
+      guard !run.isRetrying else { return }
       run.state = .paused
       task?.cancel()
     }
@@ -406,10 +444,122 @@ extension Translation {
     /// Cancels the batch in flight and keeps everything already applied. The run is
     /// over: pressing Start again builds a fresh one, and its scan finds only what is
     /// still work.
+    ///
+    /// While a re-ask is what is in flight there is no run left to cancel — it finished long
+    /// ago — so this STOPS the asking instead (`stopRetry`).
     func cancel(_ run: Run) {
       guard run.state != .finished, run.state != .cancelled else { return }
+      guard !run.isRetrying else { return stopRetry(run) }
       run.state = .cancelled
       task?.cancel()
+    }
+
+    /// Stops an in-flight re-ask (5.11). What ends is the ASKING: a re-ask runs on a run that has
+    /// already finished — there is no cursor to resume from and no run to cancel — so the batches
+    /// it did not reach stay failed and reported, and the button offers exactly those again.
+    ///
+    /// Its own ending is the only thing the workspace saves on (5.10), and a stopped one is not
+    /// that ending: what it did land stays app-side until an explicit Save, the way a cancelled
+    /// run's results do.
+    func stopRetry(_ run: Run) {
+      guard run.isRetrying else { return }
+      task?.cancel()
+    }
+
+    /// What a re-ask did: how many batches it re-sent, and whether it ran to the end.
+    ///
+    /// The workspace needs both halves. The COUNT is what makes an empty button a no-op, and
+    /// `completed` is what it saves on: a re-ask that ran on a run that had finished is that
+    /// run's own ending (5.10), while one the user stopped never was.
+    struct Retry {
+      let batches: Int
+      let completed: Bool
+    }
+
+    /// Re-asks the batches a FINISHED run gave up on — 5.11's button, and the only way a failed
+    /// batch is asked again without starting over.
+    ///
+    /// Exactly the failed TRANSLATE batches go out, AS THEY STAND. NO scan, no re-cut and no
+    /// regeneration of the list: the run already holds those batch objects with their items,
+    /// their positions and their languages, so every id is still the position it always was
+    /// (4.3) and the request is built exactly as it was built the first time. Rebuilding a
+    /// stage's operations from the project is what pressing Start does; this deliberately does
+    /// not, because the reader's point was that a finished run should not need a second Start.
+    ///
+    /// The run it belongs to was finished before this began and is finished again when it is
+    /// over; what this answers beyond the count is whether the re-ask RAN TO THE END.
+    @discardableResult
+    func retryFailedBatches(_ run: Run) async -> Retry {
+      let failed = run.canRetryFailedBatches ? run.failedBatches : []
+      guard !failed.isEmpty else { return Retry(batches: 0, completed: false) }
+      // The flag goes up HERE rather than inside the task: `canRetryFailedBatches` is what the
+      // button reads and what the next call's guard asks, so a re-ask is under way the moment it is
+      // asked for — not a moment later, when two presses could both start one.
+      run.isRetrying = true
+      let task = Task { await self.retry(failed, of: run) }
+      self.task = task
+      await task.value
+      if self.task == task { self.task = nil }
+      return Retry(batches: failed.count, completed: !task.isCancelled)
+    }
+
+    /// The re-ask itself, one failed batch at a time: each goes out ONCE, carrying the items the
+    /// run still holds, and nothing walks the operations, the cursor or the project's rows.
+    ///
+    /// ONCE, and not through 5.9's loop: the automatic retries belong to a batch's own execution
+    /// and were already spent on it, so this is a NEW attempt AFTER them, never instead of them
+    /// (5.11). A batch that fails again leaves the run's copy failed and reported, and the button
+    /// re-offers it — the re-ask promises nothing.
+    ///
+    /// The batches are addressed by ID and re-read off the run before each send, because a send
+    /// suspends: what is replaced is the run's own copy, never the snapshot this loop walks.
+    ///
+    /// The flag the button reads (`Run.isRetrying`) is put up by the caller and cleared here, so it
+    /// is never left standing by an ending this loop does not reach.
+    private func retry(_ batches: [Run.Batch], of run: Run) async {
+      // The cursor the run's own walk left behind — the end of the list — so the re-ask can report
+      // the batch it is on without moving where the run stopped (5.6).
+      let cursor = run.batchIndex
+      run.finishedAt = nil
+      run.state = .running
+      for batch in batches {
+        if Task.isCancelled { break }
+        guard let index = run.batches.firstIndex(where: { $0.id == batch.id }) else { continue }
+        // The batch being re-asked is what the run REPORTS it is on: `Run.reasking` reads the
+        // cursor, and the cursor of a finished run is past the end of the list — so the re-ask
+        // moves it onto the batch it is asking, which is what the progress line and the overlay's
+        // page read while the request is out. The run's own cursor is put back below.
+        let standing = run.batches[index]
+        run.batchIndex = index
+        // The batch reads as RUNNING again while it is re-asked (5.11): a page reads the batch's
+        // phase and its items', so both go back — the failure stamped the whole batch, while an
+        // item that LANDED (memory answered it) keeps the phase that says so and is not re-asked.
+        for position in run.batches[index].items.indices
+        where run.batches[index].items[position].phase == .failed {
+          run.batches[index].items[position].phase = .pending
+        }
+        run.batches[index].phase = .sent
+        // Another attempt at the SAME unit of work (5.7): the characters are not paid for twice,
+        // the SEND is — counted where the send happens, `Tally.sends` (5.9).
+        run.batches[index].attempt += 1
+        do {
+          run.batches[index] = try await performOne(run.batches[index], in: run)
+        } catch is CancellationError {
+          // Stopped mid-request. An attempt that never answered leaves the batch as it was —
+          // failed and reported — so the button offers it again, which is the whole of what 5.11
+          // promises a stopped re-ask.
+          run.batches[index] = standing
+          break
+        } catch {
+          markFailed(batch, error: error, in: run)
+        }
+      }
+      run.isRetrying = false
+      run.batchIndex = cursor
+      // The run ends where it began: FINISHED. Stopping a re-ask stops the asking; it does not
+      // un-finish the run it belongs to, and it is not a cancel (5.10).
+      run.state = .finished
+      run.finishedAt = .now
     }
 
     // MARK: - the plan

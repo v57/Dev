@@ -304,6 +304,47 @@ extension Translation {
       runner.cancel(run)
     }
 
+    /// 5.11's action, from the overlay's chrome. It runs exactly the batches the run gave up on —
+    /// the failed ones of BOTH translate jobs — as the run holds them: `Runner.retryFailedBatches`
+    /// scans nothing, re-cuts nothing and rebuilds nothing off the project, so the requests go out
+    /// as they went out the first time and every id is still the position it always was.
+    ///
+    /// The re-ask's own ending is what the write reads (5.10): it ran on a run that had FINISHED,
+    /// so its results are written like any other completion's — through the publish step and the
+    /// app's own writer, the ONE writer this session has, so the earlier completion's write is
+    /// simply continued. A re-ask the user STOPPED is not that ending: what it landed stays
+    /// app-side until an explicit Save, the way a cancelled run's results do.
+    func retryFailedBatches() async throws {
+      guard let run = runner.runs[stage], run.canRetryFailedBatches else { return }
+      guard runner.router.isConfigured else {
+        error = Self.notConfigured
+        throw BackendError.notConfigured(Self.notConfigured)
+      }
+      let failures = run.failures.count
+      let retry = await runner.retryFailedBatches(run)
+      guard retry.batches > 0 else { return }
+      if retry.completed {
+        await save()
+      } else {
+        publish()
+      }
+      // A batch that failed AGAIN is reported the way a run reports one (5.7). The failures list
+      // is the attempts' HISTORY and keeps what the original run left there (5.9), so this asks
+      // for an entry the re-ask itself added — otherwise a settled failure would raise the alert
+      // again — and it leaves a failed write's own message alone.
+      if run.failures.count > failures, error == nil, let failure = run.failure {
+        error = failure.message
+      }
+    }
+
+    /// Stops 5.11's re-ask. The run it belongs to is already finished, so what ends is the ASKING:
+    /// the batches the re-ask did not reach stay failed and reported, and the button offers exactly
+    /// those again.
+    func stopRetry() {
+      guard let run = runner.runs[stage] else { return }
+      runner.stopRetry(run)
+    }
+
     /// How many slots the horizontal pass would touch, for the confirmation that
     /// names the cost before it is paid: every WRITABLE slot of a translatable row.
     /// The row travels whole, so a settled column is sent along as context — it is

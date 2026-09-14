@@ -274,19 +274,43 @@ extension Translation {
 
     @ViewBuilder
     private func controls(_ run: Run?) -> some View {
-      switch run?.state {
-      case .scanning, .running:
-        Button("Pause") { workspace.pause() }
-        Button("Cancel") { workspace.cancel() }
-      case .paused:
-        Button("Resume") { Task { try? await workspace.resume() } }
-          .buttonStyle(.borderedProminent)
-        Button("Cancel") { workspace.cancel() }
-      case .cancelled, .finished, .idle, nil:
-        Button("Start") { Task { try? await workspace.start() } }
-          .buttonStyle(.borderedProminent)
-          .disabled(!workspace.canStart)
-          .help(workspace.museNote ?? "Runs prepare, prelearn, learn, translate and the row pass")
+      if run?.isRetrying == true {
+        // A re-ask (5.11) is stopped, not paused: the run it belongs to is already finished, so
+        // there is no cursor to resume from. The batches it did not reach stay failed, and the
+        // button below offers them again the moment the re-ask is over.
+        Button("Stop") { workspace.stopRetry() }
+          .help("Stop re-asking — the batches it did not reach stay failed and are offered again")
+      } else {
+        switch run?.state {
+        case .scanning, .running:
+          Button("Pause") { workspace.pause() }
+          Button("Cancel") { workspace.cancel() }
+        case .paused:
+          Button("Resume") { Task { try? await workspace.resume() } }
+            .buttonStyle(.borderedProminent)
+          Button("Cancel") { workspace.cancel() }
+        case .cancelled, .finished, .idle, nil:
+          // 5.11: a FINISHED run that gave up on batches offers the re-ask BESIDE Start — the same
+          // batches again, not a second run of the whole plan. It covers both translate jobs (the
+          // column pass and the row pass), and a run with nothing failed offers nothing.
+          if let run, run.canRetryFailedBatches {
+            Button {
+              Task { try? await workspace.retryFailedBatches() }
+            } label: {
+              Label(
+                "Retry failed batches (\(run.failedBatches.count))",
+                systemImage: "arrow.clockwise")
+            }
+            .disabled(!workspace.canStart)
+            .help(
+              "Re-ask exactly the batches this run gave up on — the column pass and the row pass. "
+                + "No scan and no re-cut: they go out as they stand.")
+          }
+          Button("Start") { Task { try? await workspace.start() } }
+            .buttonStyle(.borderedProminent)
+            .disabled(!workspace.canStart)
+            .help(workspace.museNote ?? "Runs prepare, prelearn, learn, translate and the row pass")
+        }
       }
     }
 
