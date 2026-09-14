@@ -341,12 +341,26 @@ extension Translation.VerticalTranslate {
       // defect (5.3), which is exactly why this batch is the failed one, and the pane has
       // to say "the model answered nothing" rather than show a blank box.
       "\n   \n",
+      // The last batch, which the fixture leaves UNSENT: the reply the preview's own fake run
+      // answers it with when it lands it.
+      """
+      [{"id": 0, "text": "Allgemein"},
+       {"id": 1, "text": "Darstellung"},
+       {"id": 2, "text": "Erweitert"},
+       {"id": 3, "text": "Änderungen automatisch sichern"},
+       {"id": 4, "text": "Strings durchsuchen"},
+       {"id": 5, "text": "Breitenbegrenzung (Zeichen)"},
+       {"id": 6, "text": "Der Katalog %@ wurde nicht gefunden."},
+       {"id": 7, "text": "Prüfung erforderlich"},
+       {"id": 8, "text": "Überprüft"},
+       {"id": 9, "text": "Drücken Sie ⌘F, um zu suchen"}]
+      """,
     ]
 
-    /// What each page's right half starts with, aligned with `sample`: the three landed
-    /// batches carry their raw reply, the failed one carries what actually came back
-    /// (nothing), and the last batch has not been sent yet — so its pane says "no reply
-    /// yet" instead of showing an unexplained empty box.
+    /// What each page's right half starts with, aligned with `sample`: the batches that landed
+    /// carry their raw reply, the failed one carries what actually came back (nothing), and the
+    /// last has not been sent yet — so its pane says "no reply yet" instead of showing an
+    /// unexplained empty box.
     static var replies: [Translation.Run.Reply] {
       [
         Translation.Run.Reply(raw: answers[0], phase: .applied),
