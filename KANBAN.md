@@ -124,6 +124,9 @@ OPEN DECISIONS (notes section 10) — a worker who meets one asks instead of cho
   10.11 how a CHANGED project rule reaches already machine-translated slots
   10.12 the row pass's cost, and what the run control should say about it
   10.13 Xcode's plural table or current CLDR as the authority (27 locales differ)
+  10.19 the memory resolve: (a) may a remembered human value replace machine text,
+        (b) which status does a resolved slot carry, (c) may a machine hint fill an
+        empty slot
   Unanswered by the user, and therefore also askable: does prelearn's request carry
   maxWidth (today only the column translate does)? Does the row pass's per-item field set
   differ from the column pass's?

@@ -492,9 +492,23 @@ The operation classes know what to send, nothing knows how to send it.
 
 6.2 Memory entries carry gold (a human confirmed value — written by learn) and
     hints (a machine value). A gold hit resolves a slot with no model call; a
-    hint may be shown but never overrides an existing human value. Resolution is
-    by (source text, language) within the project, which is the key the app's
-    `TranslationMemoryEntry` already uses, with the project tag narrowing it.
+    hint may be shown but never overrides an existing human value.
+    Resolution is by (source text, source language, target language) and it is
+    GLOBAL, not per project (reader, 2026-09-14). `TranslationMemoryEntry`'s own
+    contract says so: "one remembered translation per (sourceText, sourceLanguage,
+    targetLanguage), shared across projects. Gold is gold — a reviewed entry
+    auto-resolves as `reviewed` in ANY future catalog", its `#Unique` constraint
+    covers the triple alone, and `projectTag` is documented as informational
+    ("Project the entry was created from (informational; entries are global)").
+    The old lookup agrees — `TranslationMemory.entry`'s predicate matches the
+    triple and nothing else. So one confirmed source -> target pair is reused in
+    EVERY project that asks for the same source text in that target language. An
+    earlier draft of this section narrowed resolution to the project ("with the
+    project tag narrowing it") and `Store.memory` was implemented that way; that
+    was wrong against the app's own model and is corrected here and in the store
+    (the tag travels for provenance only, never as a filter). The status a
+    resolved slot carries, and whether a memory answer may replace machine text,
+    are 10.19.
 
 6.3 The imported database (the shipped human translations in SQLite) resolves
     slots to `.imported` before any model call, marks them auto-confirmed, and
@@ -762,6 +776,22 @@ The operation classes know what to send, nothing knows how to send it.
       `xcstringstool` accepts (probed). Recommendation: Xcode's table decides what a
       catalog may CONTAIN, and the CLDR delta is a verified add-on list re-checked
       on each Xcode update — but one table, one place, whichever wins.
+- [ ] 10.19 The memory resolve — three questions the run has to answer (put to the
+      reader 2026-09-14, answers pending):
+        (a) MAY a remembered human value REPLACE machine text already in the slot
+            (`.stale` and `.translated`), or does it only fill empty slots? A hint
+            never overrides a human value; the open case is a human value against a
+            machine one.
+        (b) WHAT STATUS does a memory-resolved slot carry? The model's own contract
+            answers `reviewed` ("a reviewed entry auto-resolves as `reviewed` in ANY
+            future catalog") — which also freezes the slot, because the write-back
+            never writes `.verified`. The alternative is `.translated`, so the slot
+            stays reviewable and the row pass may still adapt it.
+        (c) MAY a MACHINE-ONLY entry (`.needs_review`) fill an EMPTY slot as a
+            `.translated` value, the way the model's doc describes ("machine-only
+            entries resolve as needs_review hints")? The redesign currently treats a
+            hint as PROVENANCE ONLY: every translate stage writes one, nothing reads
+            one as an answer. The old pipeline read it as a value.
 - [x] 10.14 `maxWidth` TRAVELS with a vertical request (reader, 2026-09-14), which
       departs from the current pipeline: it keeps the width guideline out of every
       prompt on the grounds that a width constraint degrades a translation, and
@@ -777,7 +807,8 @@ The operation classes know what to send, nothing knows how to send it.
 - [x] 10.16 The new stages write to the SAME SwiftData records the old pipeline reads
       (reader, 2026-09-14): one store with two writers, so the old browser shows what a
       new run wrote and a new run sees what the old one left. New logic writes only
-      through `Store`, and the old pipeline stays exactly as it is until it is deleted.
+      through `Store`, and the old pipeline stays exactly as it is (10.9, settled: it
+      is NOT deleted).
       The price is the two mappings settled with it: the `RunCursor` row above (the one
       schema addition) and the full-scope-id rule for language documents (§3.1, §7.2).
 - [x] 10.17 The row pass runs AFTER the vertical translation pass and is ALWAYS
@@ -830,4 +861,6 @@ slots. Also settled since the first draft: Muse is the only model, the new logic
 beside the old one (10.9: it stays there), and the UI is a closable overlay with a bottom
 status bar — `Start` in the toolbar, the reopen button on the bar. `FullRow`
 is deleted (10.4), the records are shared with the old browser (10.16) and the cursor
-lives in a `RunCursor` row. Still open: 10.2, 10.6, 10.8, 10.10, 10.11, 10.12, 10.13.
+lives in a `RunCursor` row. Still open: 10.2, 10.6, 10.8, 10.10, 10.11, 10.12, 10.13,
+10.19 (the memory resolve: replace machine text? which status? may a machine hint fill an
+empty slot?).
