@@ -115,6 +115,32 @@ extension Translation {
       /// The model that answered — the write-back stamps the slot with it (5.5).
       var model: String = ""
       var phase: Phase = .pending
+      /// The model's RAW reply for THIS batch, exactly as the provider sent it: what the
+      /// right half of a stage page prints, unread (8.1, "stage pages").
+      ///
+      /// Per BATCH, not per run, because a page shows one batch and `Router.lastRawReply`
+      /// keeps only the LAST call's text — a page would show the wrong request's answer for
+      /// every batch but the newest. It is set the moment the call returns and KEPT after
+      /// it, including on a batch that then failed validation or was cut off: a reply that
+      /// failed is exactly the one a human wants to read. Nothing here parses it, and
+      /// nothing decides anything with it: it is printed as it came.
+      var rawReply: String?
+
+      /// What a stage page's right half reads: the reply, and the phase that says WHY
+      /// there is none yet (still in flight, no request spent, or the call failed).
+      var reply: Reply { Reply(raw: rawReply, phase: phase) }
+    }
+
+    /// One batch as a stage page's right half sees it: the model's raw reply and the
+    /// batch's own phase, so the page can say "still in flight" instead of showing an
+    /// empty box, and "the model answered nothing" instead of showing whitespace (8.1,
+    /// "stage pages").
+    struct Reply: Equatable {
+      /// The reply as it came back; nil when nothing has answered this batch.
+      let raw: String?
+      /// Where the batch is in its life — the only thing that tells a batch nobody has
+      /// sent yet from one no model will ever answer (`Run.resolveMemory`).
+      let phase: Phase
     }
 
     /// One slot inside a batch. Its KEY is app-side only: the request's ids are the
@@ -790,6 +816,13 @@ extension Translation {
 
       let answer = try await send(request(for: batch, in: run), in: run)
       batch.model = answer.model
+      // The reply belongs to the BATCH, and it is kept the moment it arrives rather than
+      // when the batch returns: everything after this point — validation, a repair call,
+      // the paid gate, a cut reply's re-ask — can throw, and a batch whose reply failed
+      // validation is the one a human most wants to read (8.1). `Router.lastRawReply`
+      // keeps only the last call's text, which by then is another batch's.
+      batch.rawReply = answer.raw
+      retain(answer.raw, of: batch, in: run)
 
       // The fold answers DOCUMENT TEXT: there is nothing per-id to validate, repair
       // or gate, because the reply is not a set of candidates (5.3/5.4 are about
@@ -906,6 +939,21 @@ extension Translation {
     /// otherwise. A discarded answer (a settled slot) is neither.
     private func settle(_ batch: inout Run.Batch) {
       batch.phase = batch.items.contains { $0.phase == .failed } ? .failed : .applied
+    }
+
+    /// Keeps a batch's raw reply on the RUN's own copy of it, at the moment the reply
+    /// arrives.
+    ///
+    /// `performOne` works on a VALUE of the batch and only writes it back when it returns,
+    /// so a reply that arrived and was then followed by a throw (a repair call, the paid
+    /// gate, a cut reply's re-ask) would be lost with it — and 8.1 wants that reply on the
+    /// page, because it is the one that failed. Only the batch's OWN request is kept: the
+    /// repair call and the gate answer one id each and are not what a page shows, and a
+    /// re-ask's half carries an id the run's list does not hold (`<batch>.r0`), so writing
+    /// nothing for it is also what keeps the page's reply the batch's own.
+    private func retain(_ raw: String?, of batch: Run.Batch, in run: Run) {
+      guard let index = run.batches.firstIndex(where: { $0.id == batch.id }) else { return }
+      run.batches[index].rawReply = raw
     }
 
     // MARK: - the request

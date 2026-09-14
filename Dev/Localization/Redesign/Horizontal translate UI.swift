@@ -52,6 +52,10 @@ extension Translation.HorizontalTranslate {
   struct Content: View {
     let index: Int
     let operations: [Operations]
+    /// The model's RAW reply for each page, PARALLEL to `operations` (8.1, "stage pages").
+    /// The page shows one batch, so its reply is the entry at the page's own offset; a
+    /// caller that supplies none gets the "no reply yet" reading rather than a crash.
+    var replies: [Translation.Run.Reply] = []
     /// The journal this page reads (`Write`): the live page is handed its project's
     /// (`journal(of:)`), the design preview its sample's. Empty is legal and shows
     /// the pre-pass reading only — no write is claimed without evidence.
@@ -62,7 +66,7 @@ extension Translation.HorizontalTranslate {
         ScrollView(.horizontal) {
           LazyHStack(spacing: 0) {
             ForEach(operations.enumerated(), id: \.offset) { (offset, element) in
-              OperationContent(operation: element, journal: journal).frame(width: view.size.width, height: view.size.height)
+              OperationContent(operation: element, reply: reply(at: offset), journal: journal).frame(width: view.size.width, height: view.size.height)
             }
           }.scrollTargetLayout()
         }.scrollTargetBehavior(.paging).scrollPosition(id: $scrollPosition, anchor: .center)
@@ -72,13 +76,23 @@ extension Translation.HorizontalTranslate {
         }
       }
     }
+
+    /// The reply of the batch this page is showing.
+    private func reply(at offset: Int) -> Translation.Run.Reply {
+      replies.indices.contains(offset) ? replies[offset] : Translation.Run.Reply(raw: nil, phase: .pending)
+    }
   }
   /// A page per ROW, not per language: one request carries every column of the row,
   /// and the settled columns travel with it as context. So the page is a row — the
   /// source on top, then one line per language, showing what each column holds and
   /// what this pass did to it.
+  ///
+  /// SPLIT IN HALF (8.1, "stage pages"): those rows on the left as they always were and
+  /// the model's RAW reply for the batch on the right.
   struct OperationContent: View {
     let operation: Operations
+    /// The batch's raw reply — what the right half prints, unread.
+    let reply: Translation.Run.Reply
     /// The journal, so the page can tell a column this pass FILLED from one it
     /// REWROTE (`outcome(_:)`). Empty claims nothing.
     var journal: [Write] = []
@@ -199,65 +213,80 @@ extension Translation.HorizontalTranslate {
       }
     }
     var body: some View {
-      ScrollView {
-        LazyVStack(alignment: .leading, spacing: 8) {
-          HStack(alignment: .firstTextBaseline) {
-            Image(systemName: icon).font(.title.bold()).frame(width: 32, height: 32)
-              .opacity(operation.isCompleted || operation.isFailed ? 1 : 0.1)
-            Text("Translating \(operation.items.count) rows")
-              .font(.largeTitle.bold())
-              .frame(maxWidth: .infinity)
-          }.foregroundStyle(color)
-          Text("A row travels whole: its settled columns are context for the request, and are never written.")
-            .font(.callout)
-            .foregroundStyle(.tertiary)
-            .padding(.bottom, 8)
-          ForEach(operation.items.enumerated(), id: \.offset) { (rowIndex, item) in
-            VStack(alignment: .leading, spacing: 4) {
-              Text(item.key).font(.headline.monospaced())
-              Translation.VerticalTranslate.StringView(value: item.source)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-              ForEach(item.targets.enumerated(), id: \.offset) { (index, slot) in
-                let outcome = outcome(slot, of: item)
-                HStack(alignment: .firstTextBaseline, spacing: 12) {
-                  Text(slot.language)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                    .frame(width: 28, alignment: .leading)
-                  Image(systemName: marker(slot)).foregroundStyle(markerColor(slot))
-                  if slot.target.isEmpty {
-                    Text("…").foregroundStyle(.tertiary)
-                  } else {
-                    Translation.VerticalTranslate.StringView(value: slot.target)
-                  }
-                  // What the column said BEFORE the write, when this pass rewrote it:
-                  // the adjusted column is the change the row pass exists to make, so
-                  // the page shows the change.
-                  if case .adjusted(let previous) = outcome, let previous {
-                    Text("was").font(.caption2).foregroundStyle(.tertiary)
-                    Translation.VerticalTranslate.StringView(value: previous)
-                      .font(.caption2).foregroundStyle(.tertiary).strikethrough()
-                  }
-                  if let tag = tag(outcome) {
-                    Text(tag).font(.caption2).foregroundStyle(.tertiary)
-                  }
-                }.animation(.smooth.delay(Double(index) / 10), value: slot)
+      HStack(spacing: 0) {
+        // The batch's own rows — what this page always showed, now at half the width.
+        ScrollView {
+          LazyVStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+              Image(systemName: icon).font(.title.bold()).frame(width: 32, height: 32)
+                .opacity(operation.isCompleted || operation.isFailed ? 1 : 0.1)
+              Text("Translating \(operation.items.count) rows")
+                .font(.largeTitle.bold())
+                .frame(maxWidth: .infinity)
+            }.foregroundStyle(color)
+            Text("A row travels whole: its settled columns are context for the request, and are never written.")
+              .font(.callout)
+              .foregroundStyle(.tertiary)
+              .padding(.bottom, 8)
+            ForEach(operation.items.enumerated(), id: \.offset) { (rowIndex, item) in
+              VStack(alignment: .leading, spacing: 4) {
+                Text(item.key).font(.headline.monospaced())
+                Translation.VerticalTranslate.StringView(value: item.source)
+                  .font(.callout)
+                  .foregroundStyle(.secondary)
+                ForEach(item.targets.enumerated(), id: \.offset) { (index, slot) in
+                  let outcome = outcome(slot, of: item)
+                  HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Text(slot.language)
+                      .font(.caption.monospaced())
+                      .foregroundStyle(.secondary)
+                      .frame(width: 28, alignment: .leading)
+                    Image(systemName: marker(slot)).foregroundStyle(markerColor(slot))
+                    if slot.target.isEmpty {
+                      Text("…").foregroundStyle(.tertiary)
+                    } else {
+                      Translation.VerticalTranslate.StringView(value: slot.target)
+                    }
+                    // What the column said BEFORE the write, when this pass rewrote it:
+                    // the adjusted column is the change the row pass exists to make, so
+                    // the page shows the change.
+                    if case .adjusted(let previous) = outcome, let previous {
+                      Text("was").font(.caption2).foregroundStyle(.tertiary)
+                      Translation.VerticalTranslate.StringView(value: previous)
+                        .font(.caption2).foregroundStyle(.tertiary).strikethrough()
+                    }
+                    if let tag = tag(outcome) {
+                      Text(tag).font(.caption2).foregroundStyle(.tertiary)
+                    }
+                  }.animation(.smooth.delay(Double(index) / 10), value: slot)
+                }
+              }
+              .foregroundStyle(color)
+              .padding(.vertical, 4)
+              if rowIndex < operation.items.count - 1 {
+                Divider().opacity(0.4)
               }
             }
-            .foregroundStyle(color)
-            .padding(.vertical, 4)
-            if rowIndex < operation.items.count - 1 {
-              Divider().opacity(0.4)
-            }
-          }
-        }.padding(32)
-      }.contentTransition(.symbolEffect)
+          }.padding(32)
+        }.contentTransition(.symbolEffect)
+          .frame(maxWidth: .infinity)
+
+        Divider()
+
+        // The model's RAW reply for this batch, printed as it came back.
+        Translation.RawReplyPane(reply: reply)
+          .frame(maxWidth: .infinity)
+      }
     }
   }
   struct Test: View {
     @State var index = 0
     @State var operations: [Operations] = Test.sample
+    /// The raw replies this sample's batches answered with, PARALLEL to `operations` — the
+    /// right half of every page (8.1). It starts as `Test.replies` and the preview's own
+    /// fake run fills a page in as its batch lands, exactly as `Runner` sets the batch's
+    /// reply when a call returns.
+    @State var replies: [Translation.Run.Reply] = Test.replies
     /// The journal this page reads, and the preview's second half: it starts as the
     /// sample's own values imply and GROWS as the preview's write-back lands, exactly
     /// as the runner's write-back appends one journal row per slot it applies (5.5).
@@ -455,8 +484,100 @@ extension Translation.HorizontalTranslate {
       }
     }
 
+    // MARK: - sample replies
+
+    /// The raw text each batch answered with, aligned with `sample` — the fixture's honest
+    /// replies, not lorem ipsum. A ROW batch is the same shape as a language batch (4.3):
+    /// `{"id": <position>, "text": …}`, one element per item in row order — a row is one
+    /// item per language, settled columns included — and a plural column answers an OBJECT
+    /// of its language's categories. Every text is the value the fixture's own left half
+    /// shows for that column, so the two halves can be read against each other.
+    static let answers: [String] = [
+      // The finished batch: ten rows, three columns each, thirty items — the id order the
+      // request asked for. The ru column is the human's and travels as context; its answer
+      // is discarded (4.6), which is why it repeats the value the row already holds.
+      """
+      [{"id": 0, "text": "Настройки"},
+       {"id": 1, "text": "Einstellungen"},
+       {"id": 2, "text": "設定"},
+       {"id": 3, "text": "Сохранить"},
+       {"id": 4, "text": "Sichern"},
+       {"id": 5, "text": "保存"},
+       {"id": 6, "text": "Отмена"},
+       {"id": 7, "text": "Abbrechen"},
+       {"id": 8, "text": "キャンセル"},
+       {"id": 9, "text": "Удалить"},
+       {"id": 10, "text": "Entfernen"},
+       {"id": 11, "text": "削除"},
+       {"id": 12, "text": "Проекты"},
+       {"id": 13, "text": "Projekte"},
+       {"id": 14, "text": "プロジェクト"},
+       {"id": 15, "text": "Сеансы"},
+       {"id": 16, "text": "Sitzungen"},
+       {"id": 17, "text": "セッション"},
+       {"id": 18, "text": {"one": "%d строка", "few": "%d строки", "many": "%d строк", "other": "%d строки"}},
+       {"id": 19, "text": {"one": "%d Eintrag", "other": "%d Einträge"}},
+       {"id": 20, "text": {"other": "%d件"}},
+       {"id": 21, "text": {"one": "%d файл выбран", "few": "%d файла выбрано", "many": "%d файлов выбрано", "other": "%d файла выбрано"}},
+       {"id": 22, "text": {"one": "%d Datei ausgewählt", "other": "%d Dateien ausgewählt"}},
+       {"id": 23, "text": {"other": "%d件のファイル"}},
+       {"id": 24, "text": {"one": "%d строка выбрана", "few": "%d строки выбрано", "many": "%d строк выбрано", "other": "%d строки выбрано"}},
+       {"id": 25, "text": {"one": "%d Eintrag ausgewählt", "other": "%d Einträge ausgewählt"}},
+       {"id": 26, "text": {"other": "%d件を選択中"}},
+       {"id": 27, "text": "Экспорт %d из %d…"},
+       {"id": 28, "text": "Exportiere %d von %d…"},
+       {"id": 29, "text": "%d / %d を書き出し中…"}]
+      """,
+      // The failed batch, and the reason the pane is worth having: the model stopped
+      // mid-array after three of the ten rows, so this is ALL that came back. A cut reply is
+      // reported as truncation and re-asked in halves (5.3) — the answers it did complete
+      // are the ones a reader can check against the rows.
+      """
+      [{"id": 0, "text": "Произошла ошибка"},
+       {"id": 1, "text": "Ein Fehler ist aufgetreten"},
+       {"id": 2, "text": "エラーが発生しました"},
+       {"id": 3, "text": "Повторить"},
+       {"id": 4, "text": "Wiederholen"},
+       {"id": 5, "text": "再試行"},
+       {"id": 6, "text": "Hermes хранит проекты, сеансы и переводы в одном месте."},
+       {"id": 7, "text": "Projekte, Sitzungen und Übersetzungen — alles an einem Ort."
+      """,
+      // The batch nobody has sent yet: the reply it answers with when the preview's fake run
+      // lands it — built from the sample's OWN text (`lateAnswer`).
+      lateAnswer,
+    ]
+
+    /// The reply the untouched batch answers with, built from the sample's own values rather
+    /// than written out again: a row batch is thirty items of text the left half already
+    /// shows, so the honest fixture is that text, one element per (row, language) in the
+    /// request's id order. A plural column answers the form the artifact reads
+    /// (`StringBody.catalogValue`).
+    static var lateAnswer: String {
+      var id = 0
+      var elements: [String] = []
+      for row in sample[2].items {
+        for slot in row.targets {
+          elements.append("{\"id\": \(id), \"text\": \"\(slot.target.catalogValue)\"}")
+          id += 1
+        }
+      }
+      return "[" + elements.joined(separator: ",\n ") + "]"
+    }
+
+    /// What each page's right half starts with, aligned with `sample`: the finished batch
+    /// carries its reply, the failed one carries the cut-off text that made it fail, and the
+    /// untouched batch has not been sent — so its pane says "no reply yet" instead of showing
+    /// an unexplained empty box.
+    static var replies: [Translation.Run.Reply] {
+      [
+        Translation.Run.Reply(raw: answers[0], phase: .applied),
+        Translation.Run.Reply(raw: answers[1], phase: .failed),
+        Translation.Run.Reply(raw: nil, phase: .pending),
+      ]
+    }
+
     var body: some View {
-      Content(index: index, operations: operations, journal: journal)
+      Content(index: index, operations: operations, replies: replies, journal: journal)
         .task {
           do {
             for i in 0..<operations.count {
@@ -469,6 +590,9 @@ extension Translation.HorizontalTranslate {
                 journal += Test.writes(from: operations[i].items, to: rewritten)
                 operations[i].items = rewritten
                 operations[i].isCompleted = true
+                // The batch answered: its page's right half fills in the same way a live
+                // run fills it in (`Run.Batch.rawReply`).
+                replies[i] = Translation.Run.Reply(raw: Test.answers[i], phase: .applied)
               }
               try await Task.sleep(for: .seconds(1))
             }

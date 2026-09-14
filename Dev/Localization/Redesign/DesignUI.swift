@@ -11,13 +11,17 @@ extension Translation.VerticalTranslate {
   struct Content: View {
     let index: Int
     let operations: [Operations]
+    /// The model's RAW reply for each page, PARALLEL to `operations` (8.1, "stage pages").
+    /// The page shows one batch, so its reply is the entry at the page's own offset; a
+    /// caller that supplies none gets the "no reply yet" reading rather than a crash.
+    var replies: [Translation.Run.Reply] = []
     @State var scrollPosition: Int?
     var body: some View {
       GeometryReader { view in
         ScrollView(.horizontal) {
           LazyHStack(spacing: 0) {
             ForEach(operations.enumerated(), id: \.offset) { (offset, element) in
-              OperationContent(operation: element).frame(width: view.size.width, height: view.size.height)
+              OperationContent(operation: element, reply: reply(at: offset)).frame(width: view.size.width, height: view.size.height)
             }
           }.scrollTargetLayout()
         }.scrollTargetBehavior(.paging).scrollPosition(id: $scrollPosition, anchor: .center)
@@ -27,9 +31,19 @@ extension Translation.VerticalTranslate {
         }
       }
     }
+
+    /// The reply of the batch this page is showing.
+    private func reply(at offset: Int) -> Translation.Run.Reply {
+      replies.indices.contains(offset) ? replies[offset] : Translation.Run.Reply(raw: nil, phase: .pending)
+    }
   }
+  /// The page, SPLIT IN HALF (8.1, "stage pages"): the batch's own items on the left,
+  /// exactly as this page always showed them, and the model's RAW reply for that batch on
+  /// the right.
   struct OperationContent: View {
     let operation: Operations
+    /// The batch's raw reply — what the right half prints, unread.
+    let reply: Translation.Run.Reply
     var color: Color {
       if operation.isFailed {
         .red
@@ -49,22 +63,32 @@ extension Translation.VerticalTranslate {
       }
     }
     var body: some View {
-      ScrollView {
-        LazyVStack(alignment: .leading, spacing: 8) {
-          Text("Translating to \(operation.language)")
-            .font(.largeTitle.bold())
-            .frame(maxWidth: .infinity)
-          ForEach(operation.items.enumerated(), id: \.offset) { (index, item) in
-            HStack {
-              Image(systemName: icon).font(.title.bold()).frame(width: 32, height: 32)
-                .opacity(operation.isCompleted || operation.isFailed ? 1 : 0.1)
-              StringView(value: operation.isCompleted ? item.target : item.source)
-                .fontWeight(operation.isCompleted ? .semibold : .regular)
-                .contentTransition(.numericText())
-            }.foregroundStyle(color).animation(.smooth.delay(Double(index) / 10), value: item)
-          }
-        }.padding(32)
-      }.contentTransition(.symbolEffect)
+      HStack(spacing: 0) {
+        // The batch's own items — what this page always showed, now at half the width.
+        ScrollView {
+          LazyVStack(alignment: .leading, spacing: 8) {
+            Text("Translating to \(operation.language)")
+              .font(.largeTitle.bold())
+              .frame(maxWidth: .infinity)
+            ForEach(operation.items.enumerated(), id: \.offset) { (index, item) in
+              HStack {
+                Image(systemName: icon).font(.title.bold()).frame(width: 32, height: 32)
+                  .opacity(operation.isCompleted || operation.isFailed ? 1 : 0.1)
+                StringView(value: operation.isCompleted ? item.target : item.source)
+                  .fontWeight(operation.isCompleted ? .semibold : .regular)
+                  .contentTransition(.numericText())
+              }.foregroundStyle(color).animation(.smooth.delay(Double(index) / 10), value: item)
+            }
+          }.padding(32)
+        }.contentTransition(.symbolEffect)
+          .frame(maxWidth: .infinity)
+
+        Divider()
+
+        // The model's RAW reply for this batch, printed as it came back.
+        Translation.RawReplyPane(reply: reply)
+          .frame(maxWidth: .infinity)
+      }
     }
   }
   struct StringView: View {
@@ -86,6 +110,11 @@ extension Translation.VerticalTranslate {
   struct Test: View {
     @State var index = 0
     @State var operations: [Operations] = Test.sample
+    /// The raw replies this sample's batches answered with, PARALLEL to `operations` — the
+    /// right half of every page (8.1). It starts as `Test.replies` and the preview's own
+    /// fake run fills each page in as it lands, exactly as `Runner` sets the batch's reply
+    /// when a call returns.
+    @State var replies: [Translation.Run.Reply] = Test.replies
 
     /// Sample batches for the design preview: ten items each, one batch of every
     /// shape the view has to lay out — a settled column, a character-budget split
@@ -260,8 +289,76 @@ extension Translation.VerticalTranslate {
       ]),
     ]
 
+    /// The raw text each batch answered with, aligned with `sample` — the fixture's honest
+    /// replies, not lorem ipsum. A language batch's reply is the JSON array
+    /// `Prompt.languageBatch` asks for (4.3): `{"id": <position>, "text": …}`, one element
+    /// per item in order, and a PLURAL slot answering an object of its language's
+    /// categories. Every text is the value the fixture's own left half shows for that slot,
+    /// so the two halves can be read against each other.
+    static let answers: [String] = [
+      // The settled ru column.
+      """
+      [{"id": 0, "text": "Настройки"},
+       {"id": 1, "text": "Сохранить"},
+       {"id": 2, "text": "Отмена"},
+       {"id": 3, "text": "Удалить"},
+       {"id": 4, "text": {"one": "%d строка", "few": "%d строки", "many": "%d строк", "other": "%d строки"}},
+       {"id": 5, "text": {"one": "%d файл выбран", "few": "%d файла выбрано", "many": "%d файлов выбрано", "other": "%d файла выбрано"}},
+       {"id": 6, "text": {"one": "%d строка выбрана", "few": "%d строки выбрано", "many": "%d строк выбрано", "other": "%d строки выбрано"}},
+       {"id": 7, "text": "Экспорт %d из %d…"},
+       {"id": 8, "text": "Что-то пошло не так"},
+       {"id": 9, "text": "Hermes хранит проекты, сеансы и переводы в одном месте."}]
+      """,
+      // The column's second batch — what a character-budget split looks like.
+      """
+      [{"id": 0, "text": "Проектов пока нет. Добавьте проект, чтобы начать."},
+       {"id": 1, "text": "Основные"},
+       {"id": 2, "text": "Оформление"},
+       {"id": 3, "text": "Дополнительно"},
+       {"id": 4, "text": "Автоматически сохранять изменения"},
+       {"id": 5, "text": "Поиск строк"},
+       {"id": 6, "text": "Ограничение ширины (символы)"},
+       {"id": 7, "text": "Каталог %@ не найден."},
+       {"id": 8, "text": "Требует проверки"},
+       {"id": 9, "text": "Проверено"}]
+      """,
+      // Arabic, whose plural slots answer SIX categories (zero / one / two / few / many /
+      // other) — the plural shape arrives here as an object, and the raw pane is where you
+      // see that it did.
+      """
+      [{"id": 0, "text": "الإعدادات"},
+       {"id": 1, "text": "حفظ"},
+       {"id": 2, "text": "حذف"},
+       {"id": 3, "text": {"zero": "لا ملفات محددة", "one": "ملف واحد محدد", "two": "ملفان محددان", "few": "%d ملفات محددة", "many": "%d ملفاً محدداً", "other": "%d ملف محدد"}},
+       {"id": 4, "text": {"zero": "لا نصوص محددة", "one": "نص واحد محدد", "two": "نصان محددان", "few": "%d نصوص محددة", "many": "%d نصاً محدداً", "other": "%d نص محدد"}},
+       {"id": 5, "text": "جارٍ تصدير %d من %d…"},
+       {"id": 6, "text": "حدث خطأ ما"},
+       {"id": 7, "text": "إعادة المحاولة"},
+       {"id": 8, "text": "يحفظ Hermes مشاريعك وجلساتك وترجماتك في مكان واحد."},
+       {"id": 9, "text": "لا توجد مشاريع بعد. أضف مشروعاً للبدء."}]
+      """,
+      // The failed batch: this is ALL that came back — whitespace. An empty answer is a
+      // defect (5.3), which is exactly why this batch is the failed one, and the pane has
+      // to say "the model answered nothing" rather than show a blank box.
+      "\n   \n",
+    ]
+
+    /// What each page's right half starts with, aligned with `sample`: the three landed
+    /// batches carry their raw reply, the failed one carries what actually came back
+    /// (nothing), and the last batch has not been sent yet — so its pane says "no reply
+    /// yet" instead of showing an unexplained empty box.
+    static var replies: [Translation.Run.Reply] {
+      [
+        Translation.Run.Reply(raw: answers[0], phase: .applied),
+        Translation.Run.Reply(raw: answers[1], phase: .applied),
+        Translation.Run.Reply(raw: answers[2], phase: .applied),
+        Translation.Run.Reply(raw: answers[3], phase: .failed),
+        Translation.Run.Reply(raw: nil, phase: .pending),
+      ]
+    }
+
     var body: some View {
-      Content(index: index, operations: operations)
+      Content(index: index, operations: operations, replies: replies)
         .task {
           do {
             for i in 0..<operations.count {
@@ -272,6 +369,10 @@ extension Translation.VerticalTranslate {
               withAnimation {
                 operations[i].items = operations[i].items.map { $0.resolve($0.source.reversed()) }
                 operations[i].isCompleted = true
+                // The batch answered: its page's right half fills in the same way a live
+                // run fills it in (`Run.Batch.rawReply`), so the fixture covers both the
+                // open batch and the answered one.
+                replies[i] = Translation.Run.Reply(raw: Test.answers[i], phase: .applied)
               }
               try await Task.sleep(for: .seconds(1))
             }
@@ -300,6 +401,129 @@ extension Plurals {
   consuming func reversed() -> Self {
     values = values.map { Plural(rule: $0.rule, value: String($0.value.reversed())) }
     return self
+  }
+}
+
+extension Translation {
+  /// The RIGHT half of a stage page: the model's raw reply for the batch the page is
+  /// showing, printed as it came back (8.1, "stage pages").
+  ///
+  /// RAW means raw. Nothing here parses, validates, summarises or reformats the text: the
+  /// pane exists so that what the validator accepted, what the repair step fixed and what
+  /// the paid gate was asked about is VISIBLE instead of inferred. It is monospaced (a
+  /// reply is JSON, and JSON is easier to check in a fixed pitch), it scrolls, and it is
+  /// selectable — the reason a human reads it is usually to copy a piece of it out. It is
+  /// a `Text`: read-only by construction.
+  ///
+  /// It lives beside `VerticalTranslate.StringView`, the other component every page
+  /// prints, and it is the ONE pane the four stage pages share, so the split reads the same
+  /// on all of them.
+  ///
+  /// The states are a diagnostic surface's, not a blank box's: a batch with no reply yet
+  /// says so, a batch no request was spent on says THAT (`Runner.resolveMemory` answers a
+  /// slot before a request is built), a request that failed says so, a reply that is empty
+  /// or whitespace is reported as the model answering nothing, and everything else is the
+  /// reply itself. `state(of:)` decides which, so the pane and a probe ask the same
+  /// question.
+  struct RawReplyPane: View {
+    let reply: Run.Reply
+
+    /// What the right half shows.
+    enum State: Equatable {
+      /// Nothing has answered this batch yet: it is scanned and in flight.
+      case pending
+      /// No request was ever sent: translation memory answered every item of the batch
+      /// (`Run.resolveMemory`), so there is no reply to show — and no call to regret.
+      case noRequest
+      /// The request failed before any reply arrived.
+      case failed
+      /// The model answered nothing: the reply is empty or whitespace, which the validator
+      /// rejects as an empty answer (5.3).
+      case empty
+      /// The reply, verbatim.
+      case reply(String)
+    }
+
+    /// The state a batch's reply is in. The phase is what separates a batch nobody has sent
+    /// yet from one no model will ever answer, and it comes off the batch rather than off
+    /// the text: an absent reply means four different things.
+    static func state(of reply: Run.Reply) -> State {
+      guard let raw = reply.raw else {
+        switch reply.phase {
+        case .applied: return .noRequest
+        case .failed: return .failed
+        case .pending, .sent, .validated, .repaired: return .pending
+        }
+      }
+      return raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .empty : .reply(raw)
+    }
+
+    var body: some View {
+      VStack(alignment: .leading, spacing: 0) {
+        header
+        Divider()
+        content
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+      .background(.thinMaterial)
+    }
+
+    private var header: some View {
+      HStack(spacing: 8) {
+        Image(systemName: "curlybraces").foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 2) {
+          Text("Model reply").font(.headline)
+          Text("Raw, as it came back for this batch — nothing parsed, nothing summarised.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        Spacer(minLength: 0)
+      }
+      .padding(12)
+    }
+
+    @ViewBuilder
+    private var content: some View {
+      switch Self.state(of: reply) {
+      case .pending:
+        note(
+          icon: "clock.arrow.circlepath", title: "No reply yet",
+          detail: "This batch is in flight — the model's answer appears here when it comes back.")
+      case .noRequest:
+        note(
+          icon: "memorychip", title: "No request was spent",
+          detail: "Translation memory answered every item of this batch, so there is no reply to show (6.2).")
+      case .failed:
+        note(
+          icon: "exclamationmark.triangle", title: "No reply",
+          detail: "The request failed before the model answered. The run's failure report carries the reason.")
+      case .empty:
+        note(
+          icon: "text.badge.xmark", title: "The model answered nothing",
+          detail: "The reply came back empty — whitespace only, which is an empty answer and a defect (5.3).")
+      case .reply(let raw):
+        ScrollView {
+          Text(raw)
+            .font(.system(.callout, design: .monospaced))
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+        }
+      }
+    }
+
+    private func note(icon: String, title: String, detail: String) -> some View {
+      VStack(alignment: .leading, spacing: 6) {
+        Label(title, systemImage: icon).font(.callout.weight(.semibold))
+        Text(detail)
+          .font(.callout)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+        Spacer(minLength: 0)
+      }
+      .padding(12)
+      .frame(maxWidth: .infinity, alignment: .leading)
+    }
   }
 }
 

@@ -181,19 +181,25 @@ extension Translation {
           if binding.prelearn.isEmpty {
             Notice(icon: "wand.and.stars", title: "\(step.title) had nothing to do", detail: "No settled slot is missing its machine record.")
           } else {
-            VerticalPrelearn.Content(index: binding.pageIndex(step), operations: binding.prelearn)
+            VerticalPrelearn.Content(
+              index: binding.pageIndex(step), operations: binding.prelearn,
+              replies: binding.replies(.prelearn))
           }
         case .learn:
           if binding.learn.isEmpty {
             Notice(icon: "graduationcap", title: "\(step.title) had nothing to do", detail: "No correction differs from what the model produced.")
           } else {
-            VerticalLearn.Content(index: binding.pageIndex(step), operations: binding.learn)
+            VerticalLearn.Content(
+              index: binding.pageIndex(step), operations: binding.learn,
+              replies: binding.replies(.learn))
           }
         case .vertical:
           if binding.vertical.isEmpty {
             Notice(icon: "translate", title: "\(step.title) had nothing to do", detail: "Every slot of every column is already settled.")
           } else {
-            VerticalTranslate.Content(index: binding.pageIndex(step), operations: binding.vertical)
+            VerticalTranslate.Content(
+              index: binding.pageIndex(step), operations: binding.vertical,
+              replies: binding.replies(.vertical))
           }
         case .horizontal:
           if binding.rows.isEmpty {
@@ -201,6 +207,7 @@ extension Translation {
           } else {
             HorizontalTranslate.Content(
               index: binding.pageIndex(step), operations: binding.rows,
+              replies: binding.replies(.horizontal),
               journal: HorizontalTranslate.journal(of: run.project))
           }
         }
@@ -382,6 +389,15 @@ extension Translation {
     }
 
     // MARK: - the pages
+
+    /// The model's RAW reply for each page of a step, PARALLEL to the step's pages
+    /// (`prelearn` / `learn` / `vertical` / `rows`) — the right half of every stage page
+    /// reads this and nothing else (8.1, "stage pages"). One shape for all four pages, and
+    /// built over the same batches they are built from, so page n and its reply are the
+    /// same batch by construction. Never parsed here: the pane prints the text as it came.
+    func replies(_ step: Stage) -> [Run.Reply] {
+      batches(step).map(\.reply)
+    }
 
     /// Prelearn's pages: a source and the machine version being produced for a slot a
     /// human already settled. It is never a translation anybody reads (4.1).

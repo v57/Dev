@@ -11,13 +11,17 @@ extension Translation.VerticalPrelearn {
   struct Content: View {
     let index: Int
     let operations: [Operations]
+    /// The model's RAW reply for each page, PARALLEL to `operations` (8.1, "stage pages").
+    /// The page shows one batch, so its reply is the entry at the page's own offset; a
+    /// caller that supplies none gets the "no reply yet" reading rather than a crash.
+    var replies: [Translation.Run.Reply] = []
     @State var scrollPosition: Int?
     var body: some View {
       GeometryReader { view in
         ScrollView(.horizontal) {
           LazyHStack(spacing: 0) {
             ForEach(operations.enumerated(), id: \.offset) { (offset, element) in
-              OperationContent(operation: element).frame(width: view.size.width, height: view.size.height)
+              OperationContent(operation: element, reply: reply(at: offset)).frame(width: view.size.width, height: view.size.height)
             }
           }.scrollTargetLayout()
         }.scrollTargetBehavior(.paging).scrollPosition(id: $scrollPosition, anchor: .center)
@@ -27,13 +31,23 @@ extension Translation.VerticalPrelearn {
         }
       }
     }
+
+    /// The reply of the batch this page is showing.
+    private func reply(at offset: Int) -> Translation.Run.Reply {
+      replies.indices.contains(offset) ? replies[offset] : Translation.Run.Reply(raw: nil, phase: .pending)
+    }
   }
   /// The stage exists so that lessons become possible: a slot the human already
   /// settled has no machine output on record, and nothing can be learned from a
   /// value the model never produced. So this page shows a source and the machine
   /// version being produced for it — never a translation anybody will read.
+  ///
+  /// SPLIT IN HALF (8.1, "stage pages"): those items on the left as they always were,
+  /// and the model's RAW reply for the batch on the right.
   struct OperationContent: View {
     let operation: Operations
+    /// The batch's raw reply — what the right half prints, unread.
+    let reply: Translation.Run.Reply
     var color: Color {
       if operation.isFailed {
         .red
@@ -53,40 +67,55 @@ extension Translation.VerticalPrelearn {
       }
     }
     var body: some View {
-      ScrollView {
-        LazyVStack(alignment: .leading, spacing: 8) {
-          Text("Prelearning \(operation.language)")
-            .font(.largeTitle.bold())
-            .frame(maxWidth: .infinity)
-          Text("Machine versions of slots you already settled. They never replace your value — learn reads the difference.")
-            .font(.callout)
-            .foregroundStyle(.secondary)
-            .padding(.bottom, 8)
-          ForEach(operation.items.enumerated(), id: \.offset) { (index, item) in
-            HStack(alignment: .firstTextBaseline) {
-              Image(systemName: icon).font(.title.bold()).frame(width: 32, height: 32)
-                .opacity(operation.isCompleted || operation.isFailed ? 1 : 0.1)
-              VStack(alignment: .leading, spacing: 2) {
-                Text(item.key).font(.caption.monospaced()).foregroundStyle(.tertiary)
-                Translation.VerticalTranslate.StringView(value: item.source)
-                  .foregroundStyle(.secondary)
-                  .font(.callout)
-                if item.machine.isEmpty {
-                  Text("…").foregroundStyle(.tertiary)
-                } else {
-                  Translation.VerticalTranslate.StringView(value: item.machine)
-                    .fontWeight(.semibold)
+      HStack(spacing: 0) {
+        // The batch's own items — what this page always showed, now at half the width.
+        ScrollView {
+          LazyVStack(alignment: .leading, spacing: 8) {
+            Text("Prelearning \(operation.language)")
+              .font(.largeTitle.bold())
+              .frame(maxWidth: .infinity)
+            Text("Machine versions of slots you already settled. They never replace your value — learn reads the difference.")
+              .font(.callout)
+              .foregroundStyle(.secondary)
+              .padding(.bottom, 8)
+            ForEach(operation.items.enumerated(), id: \.offset) { (index, item) in
+              HStack(alignment: .firstTextBaseline) {
+                Image(systemName: icon).font(.title.bold()).frame(width: 32, height: 32)
+                  .opacity(operation.isCompleted || operation.isFailed ? 1 : 0.1)
+                VStack(alignment: .leading, spacing: 2) {
+                  Text(item.key).font(.caption.monospaced()).foregroundStyle(.tertiary)
+                  Translation.VerticalTranslate.StringView(value: item.source)
+                    .foregroundStyle(.secondary)
+                    .font(.callout)
+                  if item.machine.isEmpty {
+                    Text("…").foregroundStyle(.tertiary)
+                  } else {
+                    Translation.VerticalTranslate.StringView(value: item.machine)
+                      .fontWeight(.semibold)
+                  }
                 }
-              }
-            }.foregroundStyle(color).animation(.smooth.delay(Double(index) / 10), value: item)
-          }
-        }.padding(32)
-      }.contentTransition(.symbolEffect)
+              }.foregroundStyle(color).animation(.smooth.delay(Double(index) / 10), value: item)
+            }
+          }.padding(32)
+        }.contentTransition(.symbolEffect)
+          .frame(maxWidth: .infinity)
+
+        Divider()
+
+        // The model's RAW reply for this batch, printed as it came back.
+        Translation.RawReplyPane(reply: reply)
+          .frame(maxWidth: .infinity)
+      }
     }
   }
   struct Test: View {
     @State var index = 0
     @State var operations: [Operations] = Test.sample
+    /// The raw replies this sample's batches answered with, PARALLEL to `operations` — the
+    /// right half of every page (8.1). It starts as `Test.replies` and the preview's own
+    /// fake run fills a page in as its batch lands, exactly as `Runner` sets the batch's
+    /// reply when a call returns.
+    @State var replies: [Translation.Run.Reply] = Test.replies
 
     /// Sample batches for the design preview: ten items each, in the three states a
     /// batch can be in.
@@ -190,8 +219,67 @@ extension Translation.VerticalPrelearn {
       ]),
     ]
 
+    /// The raw text each batch answered with, aligned with `sample` — the fixture's honest
+    /// replies, not lorem ipsum. Prelearn's request is a language batch, so its reply is the
+    /// JSON array `Prompt.prelearnBatch` asks for (4.3, `{"id": <position>, "text": …}`,
+    /// one element per item in order, plural slots answering an object of categories), and
+    /// every text is the machine version the left half shows for that slot.
+    static let answers: [String] = [
+      // The finished ru batch.
+      """
+      [{"id": 0, "text": "Параметры"},
+       {"id": 1, "text": "Сохранить изменения"},
+       {"id": 2, "text": "Отменить"},
+       {"id": 3, "text": "Удалить"},
+       {"id": 4, "text": "Проекты"},
+       {"id": 5, "text": "Сеансы"},
+       {"id": 6, "text": {"one": "%d строка", "few": "%d строки", "many": "%d строк", "other": "%d строки"}},
+       {"id": 7, "text": {"one": "%d файл выбран", "few": "%d файла выбрано", "many": "%d файлов выбрано", "other": "%d файла выбрано"}},
+       {"id": 8, "text": {"one": "%d строка выбрана", "few": "%d строки выбрано", "many": "%d строк выбрано", "other": "%d строки выбрано"}},
+       {"id": 9, "text": "Экспорт %d из %d…"}]
+      """,
+      // The failed batch, and the reason the pane is worth having: the model stopped
+      // mid-array after five of the ten items, so this is ALL that came back. A cut reply
+      // is reported as truncation and re-asked in halves (5.3) — the machine versions it
+      // did complete are the five the left half shows.
+      """
+      [{"id": 0, "text": "問題が発生しました"},
+       {"id": 1, "text": "再試行"},
+       {"id": 2, "text": "Hermes はプロジェクト、セッション、翻訳を一か所にまとめます。"},
+       {"id": 3, "text": "プロジェクトがまだありません。追加して始めましょう。"},
+       {"id": 4, "text": "一般"},
+       {"id": 5, "text": "外観"
+      """,
+      // The batch nobody has sent yet: the reply it answers with when the preview's fake
+      // run lands it.
+      """
+      [{"id": 0, "text": "Konfiguration"},
+       {"id": 1, "text": "Speichern"},
+       {"id": 2, "text": "Löschen"},
+       {"id": 3, "text": {"one": "%d Zeichenkette", "other": "%d Zeichenketten"}},
+       {"id": 4, "text": "Hermes bewahrt Ihre Projekte, Sitzungen und Übersetzungen an einem Ort auf."},
+       {"id": 5, "text": "Der Katalog %@ wurde nicht gefunden."},
+       {"id": 6, "text": "Prüfung erforderlich"},
+       {"id": 7, "text": "Überprüft"},
+       {"id": 8, "text": "Erneut versuchen"},
+       {"id": 9, "text": "Drücken Sie ⌘F, um zu suchen"}]
+      """,
+    ]
+
+    /// What each page's right half starts with, aligned with `sample`: the finished batch
+    /// carries its reply, the failed one carries the cut-off text that made it fail, and
+    /// the untouched batch has not been sent — so its pane says "no reply yet" instead of
+    /// showing an unexplained empty box.
+    static var replies: [Translation.Run.Reply] {
+      [
+        Translation.Run.Reply(raw: answers[0], phase: .applied),
+        Translation.Run.Reply(raw: answers[1], phase: .failed),
+        Translation.Run.Reply(raw: nil, phase: .pending),
+      ]
+    }
+
     var body: some View {
-      Content(index: index, operations: operations)
+      Content(index: index, operations: operations, replies: replies)
         .task {
           do {
             for i in 0..<operations.count {
@@ -202,6 +290,9 @@ extension Translation.VerticalPrelearn {
               withAnimation {
                 operations[i].items = operations[i].items.map { $0.resolve($0.source.reversed()) }
                 operations[i].isCompleted = true
+                // The batch answered: its page's right half fills in the same way a live
+                // run fills it in (`Run.Batch.rawReply`).
+                replies[i] = Translation.Run.Reply(raw: Test.answers[i], phase: .applied)
               }
               try await Task.sleep(for: .seconds(1))
             }

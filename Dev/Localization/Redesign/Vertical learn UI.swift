@@ -11,13 +11,17 @@ extension Translation.VerticalLearn {
   struct Content: View {
     let index: Int
     let operations: [Operations]
+    /// The model's RAW reply for each page, PARALLEL to `operations` (8.1, "stage pages").
+    /// The page shows one batch, so its reply is the entry at the page's own offset; a
+    /// caller that supplies none gets the "no reply yet" reading rather than a crash.
+    var replies: [Translation.Run.Reply] = []
     @State var scrollPosition: Int?
     var body: some View {
       GeometryReader { view in
         ScrollView(.horizontal) {
           LazyHStack(spacing: 0) {
             ForEach(operations.enumerated(), id: \.offset) { (offset, element) in
-              OperationContent(operation: element).frame(width: view.size.width, height: view.size.height)
+              OperationContent(operation: element, reply: reply(at: offset)).frame(width: view.size.width, height: view.size.height)
             }
           }.scrollTargetLayout()
         }.scrollTargetBehavior(.paging).scrollPosition(id: $scrollPosition, anchor: .center)
@@ -27,13 +31,24 @@ extension Translation.VerticalLearn {
         }
       }
     }
+
+    /// The reply of the batch this page is showing.
+    private func reply(at offset: Int) -> Translation.Run.Reply {
+      replies.indices.contains(offset) ? replies[offset] : Translation.Run.Reply(raw: nil, phase: .pending)
+    }
   }
   /// A lesson is a DIFFERENCE: what the model produced against what the human
   /// settled on. There is no value to watch being written here — the output of this
   /// stage is a line in the language document, so each row shows the lesson and the
   /// line it becomes.
+  ///
+  /// SPLIT IN HALF (8.1, "stage pages"): those lessons on the left as they always were,
+  /// and the model's RAW reply for the batch on the right — here a DOCUMENT, not a set of
+  /// candidates, which is exactly why the raw text is worth seeing.
   struct OperationContent: View {
     let operation: Operations
+    /// The batch's raw reply — what the right half prints, unread.
+    let reply: Translation.Run.Reply
     var color: Color {
       if operation.isFailed {
         .red
@@ -53,50 +68,65 @@ extension Translation.VerticalLearn {
       }
     }
     var body: some View {
-      ScrollView {
-        LazyVStack(alignment: .leading, spacing: 8) {
-          Text("Learning \(operation.language)")
-            .font(.largeTitle.bold())
-            .frame(maxWidth: .infinity)
-          Text("Your corrections against the model's own output. They fold into the language document and memory — never into a value.")
-            .font(.callout)
-            .foregroundStyle(.secondary)
-            .padding(.bottom, 8)
-          ForEach(operation.items.enumerated(), id: \.offset) { (index, item) in
-            HStack(alignment: .firstTextBaseline) {
-              Image(systemName: icon).font(.title.bold()).frame(width: 32, height: 32)
-                .opacity(operation.isCompleted || operation.isFailed ? 1 : 0.1)
-              VStack(alignment: .leading, spacing: 2) {
-                Text(item.key).font(.caption.monospaced()).foregroundStyle(.tertiary)
-                Translation.VerticalTranslate.StringView(value: item.source)
-                  .foregroundStyle(.secondary)
-                  .font(.callout)
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                  Translation.VerticalTranslate.StringView(value: item.machine)
+      HStack(spacing: 0) {
+        // The batch's own lessons — what this page always showed, now at half the width.
+        ScrollView {
+          LazyVStack(alignment: .leading, spacing: 8) {
+            Text("Learning \(operation.language)")
+              .font(.largeTitle.bold())
+              .frame(maxWidth: .infinity)
+            Text("Your corrections against the model's own output. They fold into the language document and memory — never into a value.")
+              .font(.callout)
+              .foregroundStyle(.secondary)
+              .padding(.bottom, 8)
+            ForEach(operation.items.enumerated(), id: \.offset) { (index, item) in
+              HStack(alignment: .firstTextBaseline) {
+                Image(systemName: icon).font(.title.bold()).frame(width: 32, height: 32)
+                  .opacity(operation.isCompleted || operation.isFailed ? 1 : 0.1)
+                VStack(alignment: .leading, spacing: 2) {
+                  Text(item.key).font(.caption.monospaced()).foregroundStyle(.tertiary)
+                  Translation.VerticalTranslate.StringView(value: item.source)
                     .foregroundStyle(.secondary)
-                    .strikethrough()
-                  Image(systemName: "arrow.right").font(.caption).foregroundStyle(.tertiary)
-                  Translation.VerticalTranslate.StringView(value: item.target)
-                    .fontWeight(.semibold)
+                    .font(.callout)
+                  HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Translation.VerticalTranslate.StringView(value: item.machine)
+                      .foregroundStyle(.secondary)
+                      .strikethrough()
+                    Image(systemName: "arrow.right").font(.caption).foregroundStyle(.tertiary)
+                    Translation.VerticalTranslate.StringView(value: item.target)
+                      .fontWeight(.semibold)
+                  }
+                  // The line this lesson becomes in the language document:
+                  // KEY, SOURCE, VALUE, tab separated.
+                  if operation.isCompleted {
+                    Text("\(item.key)\t\(item.source.catalogValue)\t\(item.target.catalogValue)")
+                      .font(.caption.monospaced())
+                      .foregroundStyle(.tertiary)
+                      .transition(.opacity)
+                  }
                 }
-                // The line this lesson becomes in the language document:
-                // KEY, SOURCE, VALUE, tab separated.
-                if operation.isCompleted {
-                  Text("\(item.key)\t\(item.source.catalogValue)\t\(item.target.catalogValue)")
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.tertiary)
-                    .transition(.opacity)
-                }
-              }
-            }.foregroundStyle(color).animation(.smooth.delay(Double(index) / 10), value: operation.isCompleted)
-          }
-        }.padding(32)
-      }.contentTransition(.symbolEffect)
+              }.foregroundStyle(color).animation(.smooth.delay(Double(index) / 10), value: operation.isCompleted)
+            }
+          }.padding(32)
+        }.contentTransition(.symbolEffect)
+          .frame(maxWidth: .infinity)
+
+        Divider()
+
+        // The model's RAW reply for this batch, printed as it came back.
+        Translation.RawReplyPane(reply: reply)
+          .frame(maxWidth: .infinity)
+      }
     }
   }
   struct Test: View {
     @State var index = 0
     @State var operations: [Operations] = Test.sample
+    /// The raw replies this sample's batches answered with, PARALLEL to `operations` — the
+    /// right half of every page (8.1). It starts as `Test.replies` and the preview's own
+    /// fake run fills a page in as its batch lands, exactly as `Runner` sets the batch's
+    /// reply when a fold returns.
+    @State var replies: [Translation.Run.Reply] = Test.replies
 
     /// Sample batches for the design preview: ten lessons each, in the three states a
     /// fold can be in.
@@ -220,8 +250,65 @@ extension Translation.VerticalLearn {
       ]),
     ]
 
+    /// The raw text each fold answered with, aligned with `sample` — the fixture's honest
+    /// replies, not lorem ipsum.
+    ///
+    /// Learn's reply is NOT a set of candidates: it is DOCUMENT TEXT, the canonical line(s)
+    /// to append to the language document — `KEY<TAB>SOURCE<TAB>VALUE`, three fields — or
+    /// the single word `NO_CHANGE` (3.7, 5.3). So the fixture answers with exactly those
+    /// lines, one per lesson folded, and with prose where the fold failed: the runner
+    /// reports a reply whose lines are not lesson lines rather than folding it (5.5).
+    static let answers: [String] = [
+      // The folded ru batch: one line per lesson, tab separated.
+      """
+      settings.title\tSettings\tНастройки
+      button.save\tSave\tСохранить
+      button.cancel\tCancel\tОтмена
+      button.delete\tDelete\tУдалить
+      sidebar.projects\tProjects\tПроекты
+      sidebar.sessions\tSessions\tСеансы
+      items.count\t%d strings\tНайдено: %d строк
+      files.selected\t%d files selected\t%d файлов выбрано
+      export.progress\tExporting %d of %d…\tЭкспортировано %d из %d…
+      alert.title\tSomething went wrong\tПроизошла ошибка
+      """,
+      // The failed fold: the model answered prose. It cannot be folded — a language
+      // document's line is three tab-separated fields — so the run reports the lines that
+      // are not lesson lines and leaves the document alone. This is the reply a reader
+      // wants to see, and it is the reason the raw pane exists.
+      "Your settled values are shorter and less formal than the machine's: I kept the "
+        + "terminology and dropped the honorifics, and I would rather not guess the "
+        + "gender agreement of each verb form.",
+      // The batch nobody has folded yet: the reply it answers with when the preview's fake
+      // run lands it.
+      """
+      settings.title\tSettings\tEinstellungen
+      button.save\tSave\tSichern
+      button.delete\tDelete\tEntfernen
+      items.count\t%d strings\t%d Einträge
+      onboarding.body\tHermes keeps your projects, sessions and translations in one place.\tProjekte, Sitzungen und Übersetzungen — alles an einem Ort.
+      error.fileMissing\tThe catalog %@ could not be found.\tKatalog %@ konnte nicht gefunden werden.
+      status.needsReview\tNeeds Review\tPrüfung nötig
+      status.reviewed\tReviewed\tGeprüft
+      button.retry\tRetry\tWiederholen
+      help.shortcutHint\tPress ⌘F to search\tZum Suchen ⌘F drücken
+      """,
+    ]
+
+    /// What each page's right half starts with, aligned with `sample`: the folded batch
+    /// carries the lines it folded, the failed one carries the prose that made it fail, and
+    /// the batch nobody has reached has not been sent — so its pane says "no reply yet"
+    /// instead of showing an unexplained empty box.
+    static var replies: [Translation.Run.Reply] {
+      [
+        Translation.Run.Reply(raw: answers[0], phase: .applied),
+        Translation.Run.Reply(raw: answers[1], phase: .failed),
+        Translation.Run.Reply(raw: nil, phase: .pending),
+      ]
+    }
+
     var body: some View {
-      Content(index: index, operations: operations)
+      Content(index: index, operations: operations, replies: replies)
         .task {
           do {
             for i in 0..<operations.count {
@@ -233,6 +320,9 @@ extension Translation.VerticalLearn {
               // value. Folding the batch is the whole visible effect.
               withAnimation {
                 operations[i].isCompleted = true
+                // The fold answered: its page's right half fills in the same way a live
+                // run fills it in (`Run.Batch.rawReply`).
+                replies[i] = Translation.Run.Reply(raw: Test.answers[i], phase: .applied)
               }
               try await Task.sleep(for: .seconds(1))
             }
