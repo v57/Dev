@@ -125,6 +125,7 @@ struct ScanStringsView: View {
           banner(message)
         }
         summary(report)
+        commentSection
         if let plan = store.scan.plan, !plan.added.isEmpty {
           newKeysSection(plan)
         }
@@ -154,7 +155,116 @@ struct ScanStringsView: View {
         row("Merge", "\(plan.addedCount) new · \(plan.existingKeyCount) already in the catalog")
         row("Catalog size", "\(plan.catalogKeyCount) → \(plan.totalAfterMerge) keys")
       }
+      if let comments = store.scan.comments, comments.didRun {
+        row("Comments", "\(comments.generatedCount) generated · \(comments.skippedCount) skipped"
+          + String(format: " · %.2fs each", comments.secondsPerComment))
+      }
     }
+  }
+
+  // MARK: - comments
+
+  /// The on-device comment pass: what it generated, why it skipped the rest,
+  /// and its own control. Nothing here writes the file — a generated comment
+  /// is an app-side edit until the user saves (5.8).
+  @ViewBuilder
+  private var commentSection: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      sectionTitle("Comments", "on-device, from the scan's own source files")
+      if store.scan.isCommenting {
+        VStack(alignment: .leading, spacing: 6) {
+          HStack(spacing: 8) {
+            ProgressView()
+              .controlSize(.small)
+            Text("\(store.scan.commentDone)/\(store.scan.commentTotal) — \(store.scan.commentKey)")
+              .font(.callout)
+              .lineLimit(1)
+            Spacer()
+            Button("Stop") { store.scan.cancelCommentPass() }
+              .help("Stops after the comment in flight; everything already generated stays")
+          }
+          ProgressView(
+            value: Double(store.scan.commentDone),
+            total: Double(max(store.scan.commentTotal, 1)))
+        }
+      } else if let comments = store.scan.comments {
+        commentOutcome(comments)
+      } else {
+        Text("Not run yet.")
+          .font(.callout)
+          .foregroundStyle(.secondary)
+      }
+      HStack(alignment: .firstTextBaseline, spacing: 8) {
+        Button("Generate Comments") { store.scan.startCommentPass() }
+          .disabled(!canGenerateComments)
+        Text("Only keys without a comment are touched; a generated comment lands in the catalog's own comment field (the toolbar's comment toggle shows it under the row) and reaches the file only on Save.")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+    }
+    .padding(8)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+  }
+
+  private var canGenerateComments: Bool {
+    store.scan.report?.cancelled == false
+      && !store.scan.isRunning
+      && !store.scan.isCommenting
+  }
+
+  @ViewBuilder
+  private func commentOutcome(_ comments: CommentPassOutcome) -> some View {
+    if let reason = comments.unavailableReason {
+      VStack(alignment: .leading, spacing: 2) {
+        Text("Skipped — \(reason).")
+          .font(.callout)
+        Text("The scan is unaffected: no comment was generated and nothing was changed.")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+    } else {
+      VStack(alignment: .leading, spacing: 3) {
+        Text("\(comments.targetCount) key(s) had no comment · \(comments.generatedCount) generated · \(comments.skippedCount) skipped"
+          + (comments.cancelled ? " · cancelled" : "")
+          + String(format: " · %.2fs per comment", comments.secondsPerComment))
+          .font(.callout)
+        ForEach(Array(comments.skipLines.enumerated()), id: \.offset) { _, line in
+          Text("skipped — \(line.reason.label): \(line.count)")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        if comments.unlocatedCount > 0 {
+          Text("no call site at all — the scan never located \(comments.unlocatedCount) comment-less key(s)")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        if !comments.generated.isEmpty {
+          generatedComments(comments)
+        }
+      }
+    }
+  }
+
+  private func generatedComments(_ comments: CommentPassOutcome) -> some View {
+    VStack(alignment: .leading, spacing: 3) {
+      Text("Generated (\(comments.generatedCount))")
+        .font(.caption)
+        .foregroundStyle(.secondary)
+      ForEach(comments.generated.sorted(by: { $0.key < $1.key }), id: \.key) { entry in
+        VStack(alignment: .leading, spacing: 1) {
+          Text(entry.key)
+            .font(.system(.caption, design: .monospaced))
+            .textSelection(.enabled)
+            .lineLimit(2)
+          Text(entry.value)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .textSelection(.enabled)
+        }
+      }
+    }
+    .padding(.top, 2)
   }
 
   private func row(_ label: String, _ value: String) -> some View {
@@ -319,7 +429,7 @@ struct ScanStringsView: View {
 
       Spacer()
 
-      if store.scan.isRunning {
+      if store.scan.isRunning || store.scan.isCommenting {
         Button("Cancel") { store.scan.cancel() }
       } else {
         Button("Scan Again") { store.scan.rescan() }
@@ -345,7 +455,8 @@ struct ScanStringsView: View {
   }
 
   private var mergeDisabled: Bool {
-    store.scan.appliedCount != nil
+    store.scan.isCommenting
+      || store.scan.appliedCount != nil
       || (store.scan.plan?.addedCount ?? 0) == 0
       || (store.scan.report?.cancelled ?? true)
   }

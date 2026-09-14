@@ -54,6 +54,11 @@ nonisolated struct ScanModuleOutcome: Identifiable, Sendable {
   var directory: String
   var fileCount: Int
   var keys: [String: Set<String>] = [:]
+  /// Key -> the module's OWN source files that emitted it (resolved from the
+  /// `.stringsdata` document's `source`). The comment pass reads a call site
+  /// out of one of these; an empty entry means the format named a file this
+  /// module does not carry (or named none at all).
+  var keyFiles: [String: Set<String>] = [:]
   var skippedTableKeys: Int = 0
   /// Source files dropped from the compile because they failed to typecheck
   /// (their keys are lost; every other file still contributed).
@@ -121,6 +126,7 @@ nonisolated enum ScanExtractor {
     try? FileManager.default.createDirectory(at: stringsOut, withIntermediateDirectories: true)
 
     var keys: [String: Set<String>] = [:]
+    var keyFiles: [String: Set<String>] = [:]
     var skippedTableKeys = 0
     var excluded: [String] = []
     var failureDetail = ""
@@ -138,6 +144,12 @@ nonisolated enum ScanExtractor {
         let parsed = ScanStringsData.parse(directory: stringsOut)
         for (key, comments) in parsed.keys {
           keys[key, default: []].formUnion(comments)
+        }
+        for (key, sources) in parsed.files {
+          let paths = resolveSourceFiles(sources, in: unit.files)
+          if !paths.isEmpty {
+            keyFiles[key, default: []].formUnion(paths)
+          }
         }
         skippedTableKeys = max(skippedTableKeys, parsed.skippedTableKeys)
 
@@ -187,6 +199,7 @@ nonisolated enum ScanExtractor {
     }
 
     module.keys = keys
+    module.keyFiles = keyFiles
     module.skippedTableKeys = skippedTableKeys
     module.skippedFiles = excluded.map { URL(fileURLWithPath: $0).lastPathComponent }.sorted()
     module.failed = failed
@@ -211,6 +224,34 @@ nonisolated enum ScanExtractor {
     var detail: String
     /// stderr + stdout of the decisive attempt, for blame extraction.
     var output: String
+  }
+
+  /// The real paths behind a `.stringsdata` document's `source` value(s),
+  /// resolved against the module's OWN source list.
+  ///
+  /// The compiler records the file it read as a name (`Localization view.swift`)
+  /// or, under an Xcode build, as a path (`Sources/App/View.swift`); a name is
+  /// ambiguous on its own and a path is relative to a directory the scan does
+  /// not know. The unit's `files` are the only files that could have produced
+  /// the document, so they are the authority: a path source matches by path
+  /// suffix, and anything that matches nothing contributes nothing (the key
+  /// then has no file, and the comment pass reports it as skipped).
+  static func resolveSourceFiles(_ sources: Set<String>, in files: [URL]) -> [String] {
+    var byName: [String: [String]] = [:]
+    for file in files {
+      byName[file.lastPathComponent, default: []].append(file.path)
+    }
+    var resolved: Set<String> = []
+    for source in sources {
+      guard var candidates = byName[(source as NSString).lastPathComponent] else { continue }
+      if source.contains("/") {
+        let suffix = source.hasPrefix("/") ? source : "/" + source
+        let exact = candidates.filter { $0.hasSuffix(suffix) }
+        if !exact.isEmpty { candidates = exact }
+      }
+      resolved.formUnion(candidates)
+    }
+    return resolved.sorted()
   }
 
   /// One compile of `files` with the argument ladder: `-parse-as-library`

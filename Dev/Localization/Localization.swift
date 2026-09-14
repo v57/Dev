@@ -1272,6 +1272,34 @@ final class LocalizationStore {
     catalog?.strings[key]?.comment ?? ""
   }
 
+  /// Writes one on-device generated comment onto a catalog entry (notes 2.8).
+  ///
+  /// A comment is the artifact's own field and has no home in the store (7.2),
+  /// so the open catalog is where the pass puts it — exactly like any other
+  /// app-side edit: rows are rebuilt for the UI, the store goes dirty, and the
+  /// FILE still waits for Save, which stays the only writer of the .xcstrings
+  /// (5.8). Nothing here writes a source path anywhere durable either: the
+  /// pass reads its call sites from the scan's in-memory result.
+  ///
+  /// Refused when the entry is gone, when the comment is empty, or when the
+  /// entry has GAINED a comment since the pass chose its targets — a human's
+  /// comment is never rewritten, not even by that race.
+  @discardableResult
+  func setGeneratedComment(_ comment: String, for key: String) -> Bool {
+    guard var catalog, let entry = catalog.strings[key] else { return false }
+    let trimmed = comment.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return false }
+    guard (entry.comment ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+      return false
+    }
+    catalog.strings[key]?.comment = trimmed
+    self.catalog = catalog
+    saveError = nil
+    buildRows()
+    markDirty()
+    return true
+  }
+
   /// Commits one plural form: human edit -> .manual/.reviewed + a
   /// user-confirmed edit row on the per-form record, then writes the form
   /// back into the variation. Clearing a form to empty removes its file unit

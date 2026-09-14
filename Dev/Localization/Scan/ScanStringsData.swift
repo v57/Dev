@@ -30,17 +30,27 @@ nonisolated enum ScanStringsData {
   /// Reads every `*.stringsdata` file in `directory` and folds the entries
   /// of the Localizable table into `key -> comments`. Entries in any other
   /// table (custom `tableName:`s) are counted and reported separately.
-  static func parse(directory: URL) -> (keys: [String: Set<String>], skippedTableKeys: Int) {
+  ///
+  /// The document's own `source` is kept too, as `files: key -> sources`: it
+  /// is the ONLY place a key's source FILE is recorded (the format carries no
+  /// line number), so the on-device comment pass reads its call site from
+  /// here. The spelling is whatever the compiler emitted (usually a file
+  /// name), and the caller resolves it against the module's own sources —
+  /// see `ScanExtractor.compile`.
+  static func parse(
+    directory: URL
+  ) -> (keys: [String: Set<String>], files: [String: Set<String>], skippedTableKeys: Int) {
     var keys: [String: Set<String>] = [:]
+    var files: [String: Set<String>] = [:]
     var skipped = 0
-    guard let files = try? FileManager.default.contentsOfDirectory(
+    guard let contents = try? FileManager.default.contentsOfDirectory(
       at: directory,
       includingPropertiesForKeys: nil,
       options: [.skipsHiddenFiles]
     ) else {
-      return (keys, skipped)
+      return (keys, files, skipped)
     }
-    for file in files where file.pathExtension == "stringsdata" {
+    for file in contents where file.pathExtension == "stringsdata" {
       guard let data = try? Data(contentsOf: file),
             let document = try? JSONDecoder().decode(ScanStringsDataDocument.self, from: data),
             let tables = document.tables
@@ -54,9 +64,12 @@ nonisolated enum ScanStringsData {
         }
         for entry in entries {
           keys[entry.key, default: []].insert(entry.comment ?? "")
+          if let source = document.source, !source.isEmpty {
+            files[entry.key, default: []].insert(source)
+          }
         }
       }
     }
-    return (keys, skipped)
+    return (keys, files, skipped)
   }
 }

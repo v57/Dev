@@ -31,6 +31,13 @@ nonisolated struct ScanReport: Sendable {
   var extracted: [String: Set<String>]
   /// Key -> the modules it was found in (sorted), for the diff UI.
   var keyOwners: [String: [String]]
+  /// Key -> the source FILE(S) that emitted it (sorted, absolute paths),
+  /// resolved inside the module that produced the `.stringsdata` document.
+  /// The scan's own in-memory answer to "where is this key used", and the
+  /// only reason the on-device comment pass needs no stored path: it reads a
+  /// call site out of these files and then forgets them (nothing here is
+  /// written anywhere — there is no column for it and none is added).
+  var keyFiles: [String: [String]]
   var skippedTableKeys: Int
   var warnings: [String]
   var cancelled: Bool
@@ -129,6 +136,7 @@ nonisolated enum ScanMerge {
   static func plan(
     extracted: [String: Set<String>],
     keyOwners: [String: [String]],
+    generatedComments: [String: String] = [:],
     catalog: StringCatalog,
     catalogURL: URL
   ) -> ScanMergePlan {
@@ -139,10 +147,17 @@ nonisolated enum ScanMerge {
         existing += 1
         continue
       }
-      let comment = (extracted[key] ?? [])
+      let compiler = (extracted[key] ?? [])
         .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         .sorted()
         .joined(separator: "\n")
+      // The compiler's own comment wins where it carried one; the on-device
+      // pass's sentence is what a key the compiler left bare is added with,
+      // so a key the scan has just discovered arrives commented instead of
+      // waiting for a second scan.
+      let generated = generatedComments[key]?
+        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+      let comment = compiler.isEmpty ? generated : compiler
       added.append(
         ScanAddedKey(
           key: key,

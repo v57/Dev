@@ -64,7 +64,7 @@ nonisolated enum ScanEngine {
       return ScanReport(
         root: config.root, startedAt: startedAt,
         duration: Date().timeIntervalSince(startedAt),
-        packages: [], modules: [], extracted: [:], keyOwners: [:],
+        packages: [], modules: [], extracted: [:], keyOwners: [:], keyFiles: [:],
         skippedTableKeys: 0, warnings: [],
         cancelled: false,
         errorMessage: "Nothing to scan in \(config.root.path) — no Package.swift and no .xcodeproj found.")
@@ -322,12 +322,16 @@ nonisolated enum ScanEngine {
 
     var extracted: [String: Set<String>] = [:]
     var keyOwners: [String: Set<String>] = [:]
+    var keyFiles: [String: Set<String>] = [:]
     var skippedTotal = 0
     for module in modules {
       skippedTotal += module.skippedTableKeys
       for (key, comments) in module.keys {
         extracted[key, default: []].formUnion(comments)
         keyOwners[key, default: []].insert(module.id)
+      }
+      for (key, files) in module.keyFiles {
+        keyFiles[key, default: []].formUnion(files)
       }
     }
 
@@ -351,6 +355,7 @@ nonisolated enum ScanEngine {
       modules: modules,
       extracted: extracted,
       keyOwners: keyOwners.mapValues { $0.sorted() },
+      keyFiles: keyFiles.mapValues { $0.sorted() },
       skippedTableKeys: skippedTotal,
       warnings: warnings,
       cancelled: cancellation.isCancelled,
