@@ -518,8 +518,18 @@ The operation classes know what to send, nothing knows how to send it.
 
 5.3 Validation, in this order and none of it paid: echoed ids must match the
     request exactly, the placeholder multiset per item must survive, an
-    untranslated echo (reply == source) is rejected, an empty reply is rejected,
-    a truncated reply is reported as truncation and re-asked in halves. Only
+    untranslated echo (the reply IS the source, compared EXACTLY, case included —
+    see below) is rejected, an empty reply is rejected,
+    a truncated reply is reported as truncation and re-asked in halves.
+
+    THE ECHO TEST IS CASE-SENSITIVE (reader, 2026-09-14, from a live run: input
+    `%lld bytes`, the model answered `%lld Bytes` for `de`, "looks good but marked as
+    failure"). The reference compares case-insensitively, and that threw away a
+    correct German answer — German capitalizes its nouns, and the batch failed on it.
+    An echo is the reply BEING the source; a case difference is a change the target
+    language may have required, and whether it is enough is the human's call when they
+    review the slot. So: exact comparison, trimming preserved, the length guard (>4)
+    kept, and every form of a plural still has to echo to count. Only
     ids that survive are repaired, and each rejected id is repaired in its own
     language, singly. The ids that MUST be answered are the writable slots —
     resolved from the slot's status, the same check the write-back makes; a settled

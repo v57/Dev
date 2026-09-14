@@ -1992,13 +1992,20 @@ extension Translation {
     /// An answer left in the source language. Only meaningful for a string long enough
     /// that an unchanged copy is not a legitimate loanword or acronym (the reference's
     /// own guard), and a plural answer has to echo EVERY form it fills to count.
+    ///
+    /// The comparison is EXACT, case included (reader, 2026-09-14). The reference
+    /// compares case-INSENSITIVELY and that threw away good answers: German capitalizes
+    /// its nouns, so `%lld bytes` -> `%lld Bytes` was reported as "untranslated
+    /// (identical to source)" and its whole batch failed on a correct translation. An
+    /// echo is the reply BEING the source; a difference in case is a change the target
+    /// language may have required, and whether it is enough is the human's call when
+    /// they review the slot, not this check's.
     private static func echoes(_ answer: StringBody, _ source: StringBody) -> Bool {
       let sourceText = source.catalogValue.trimmingCharacters(in: .whitespacesAndNewlines)
       guard sourceText.count > 4 else { return false }
       switch answer {
       case .value(let text):
-        return text.trimmingCharacters(in: .whitespacesAndNewlines)
-          .caseInsensitiveCompare(sourceText) == .orderedSame
+        return text.trimmingCharacters(in: .whitespacesAndNewlines) == sourceText
       case .plural(let plural):
         let filled = plural.values.filter { !$0.value.isEmpty }
         guard !filled.isEmpty else { return false }
@@ -2007,15 +2014,13 @@ extension Translation {
         // have to be a copy of that text.
         guard case .plural(let reference) = source else {
           return filled.allSatisfy {
-            $0.value.trimmingCharacters(in: .whitespacesAndNewlines)
-              .caseInsensitiveCompare(sourceText) == .orderedSame
+            $0.value.trimmingCharacters(in: .whitespacesAndNewlines) == sourceText
           }
         }
         return filled.allSatisfy { form in
           let expected = reference.value(for: form.rule).trimmingCharacters(in: .whitespacesAndNewlines)
           guard !expected.isEmpty else { return false }
-          return form.value.trimmingCharacters(in: .whitespacesAndNewlines)
-            .caseInsensitiveCompare(expected) == .orderedSame
+          return form.value.trimmingCharacters(in: .whitespacesAndNewlines) == expected
         }
       }
     }
