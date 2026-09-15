@@ -224,5 +224,15 @@ animation thirty seconds out and the transaction stream never drained.
         longest wave a reader notices. Commit `cb922a6`, notes 8.1.
   - [x] `grep '\.delay('` over the app now shows those four sites and no unbounded stagger anywhere
         else — this class is closed.
-  - [ ] The reader re-samples while a run works to confirm; the deeper frames of the sample (the
-        bodies under `Attribute.init`) were cut off, and would name any second source.
+  - [x] The reader confirmed the sample's shape: the overlay WAS open and the run was the redesign's
+        `Start`, so the cost was inside the overlay and the old pipeline's `project.records` walks
+        (`PipelineRunContext.allRecords`, `TranslateRunController.ids`) are not the suspect they were
+        priced as. They stay unfixed, and unurgent: the redesign is what runs.
+  - [x] A sweep of the overlay's OTHER transactions found none unbounded: the pager's scroll runs on
+        a per-index pacing budget (`Translation.pagePacing`), a row's follow-scroll is one `.smooth`
+        per landing, the status bar reads a small `workspace.status` value and keeps no timer, and
+        the backdrop reads two flags. The stagger was the only standing animation in the tree.
+  - [ ] The reader re-samples while a run works to confirm. If the core is still busy, the next
+        candidate is structural and NAMED rather than fixed: a page re-derives its whole page set
+        from `run.batches` on each published burst, so a run with hundreds of batches pays O(all
+        items) per burst. That needs the trace to say so before it is worth the refactor.
