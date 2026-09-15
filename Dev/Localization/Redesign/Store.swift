@@ -313,22 +313,58 @@ extension Translation {
 
     // MARK: - rows and slots
 
-    /// Every slot record of a project.
+    /// Every slot record of a project, UNORDERED.
     ///
     /// ONE fetch, never `project.records`: SwiftData faults a to-many one object at
     /// a time (the mirror measured 4.2 s to iterate 48 420 records that way, against
-    /// 0.7 s for the same rows through this fetch). Sorted (key, language, category)
-    /// so a caller sees a row's slots together and the order is stable — the
-    /// redesign's own row order comes from the CATALOG, not from here.
+    /// 0.7 s for the same rows through this fetch).
+    ///
+    /// The order is not part of the contract, deliberately: every caller indexes the result by
+    /// (key, language, category) — `Project.loadData`, `Project.saveData`, `Runner.slotRecord`,
+    /// `Workspace.records(of:)` — so the tuple-of-`String` sort this used to pay for bought
+    /// nothing and cost almost everything. Measured on the reader's own store (26 156 records
+    /// for one project, 2026-09-15): the sort was 1.4 s of this call's 1.9 s, and `records` sat
+    /// on the LAUNCH path (`loadProject` -> `loadLanguages` -> `records` -> `sorted(by:)`, the
+    /// reader's own profile). A caller that wants an order sorts the few rows it is about, never
+    /// the project; and a caller that only wants the COLUMN SET asks `languages` below instead.
     func records(project: String) throws -> [TranslationRecord] {
       guard let owner = try projectRow(id: project)?.persistentModelID else { return [] }
       let descriptor = FetchDescriptor<TranslationRecord>(
         predicate: #Predicate { $0.project?.persistentModelID == owner })
-      return try context.fetch(descriptor).sorted {
-        ($0.key, $0.language, $0.category ?? "")
-          < ($1.key, $1.language, $1.category ?? "")
-      }
+      return try context.fetch(descriptor)
     }
+
+    /// The languages this project holds records for — the column set a project's rows are built
+    /// from, and the one thing an open needs before it can build a single row.
+    ///
+    /// Asked as ONE `LIMIT 1` fetch per language, excluding the codes already found, rather than
+    /// as a walk over every record: the answer is a few dozen codes however large the project is,
+    /// so the work scales with the ANSWER instead of with the table. Measured on the reader's own
+    /// store (26 156 records, 33 languages): 0.02 s, against 2.0 s for `records` + a distinct
+    /// pass over it — and fetching every row while materialising only the `language` column is no
+    /// better (0.50 s), because SwiftData still builds a row object per record.
+    ///
+    /// The loop is bounded by a ceiling no real language list reaches, so a store that answered
+    /// the same code for ever would stop rather than spin.
+    func languages(project: String) throws -> [String] {
+      guard let owner = try projectRow(id: project)?.persistentModelID else { return [] }
+      var codes: [String] = []
+      while codes.count < Self.languageCeiling {
+        var descriptor = FetchDescriptor<TranslationRecord>(
+          predicate: #Predicate { record in
+            record.project?.persistentModelID == owner && !codes.contains(record.language)
+          })
+        descriptor.fetchLimit = 1
+        descriptor.propertiesToFetch = [\.language]
+        guard let record = try context.fetch(descriptor).first else { break }
+        codes.append(record.language)
+      }
+      return codes.sorted()
+    }
+
+    /// How many distinct languages one project may report: far above any CLDR list (a couple of
+    /// hundred at most), far below the point where a wrong answer would cost anything.
+    private static let languageCeiling = 512
 
     /// Persists one slot record, inserting it when the store does not hold it yet.
     ///

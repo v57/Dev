@@ -505,8 +505,12 @@ enum Translation {
     /// holds no record for; what it cannot do is appear for a language nothing in the
     /// store knows.
     private func loadLanguages() throws {
-      for code in Set(try global.store.records(project: id).map(\.language)).sorted()
-      where languages[code] == nil {
+      // The COLUMN SET, not the rows: this runs on every open, and asking for the records to
+      // then throw all but one column away was the launch hang the reader's profiler caught
+      // (`loadProject` -> `loadLanguages` -> `Store.records` -> `sorted(by:)`: 2.0 s for one
+      // project, 10.5 s for the largest, against 0.02 s for this — measured on the reader's own
+      // store, 2026-09-15).
+      for code in try global.store.languages(project: id) where languages[code] == nil {
         languages[code] = try Language(id: code, project: self)
       }
     }
