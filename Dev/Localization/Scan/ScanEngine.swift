@@ -255,6 +255,7 @@ nonisolated enum ScanEngine {
         //      route that works when resolution cannot run at all.
         var projectPackageIncludes: [String] = []
         var projectPackageMaps: [String] = []
+        var projectPackageClangIncludes: [String] = []
         var dependencyModules: [ScanDependencyModules] = []
         if !targets.isEmpty, !cancellation.isCancelled {
           let imported = importedModules(in: targets)
@@ -281,6 +282,7 @@ nonisolated enum ScanEngine {
             }
             projectPackageIncludes = packagePaths.includeDirs
             projectPackageMaps = packagePaths.moduleMapFiles
+            projectPackageClangIncludes = packagePaths.clangIncludeDirs
             dependencyModules = packagePaths.dependencies
           }
         }
@@ -307,10 +309,22 @@ nonisolated enum ScanEngine {
               directory: roots.isEmpty ? "listed sources" : roots.joined(separator: ", "),
               files: files,
               workingDirectory: projectURL.deletingLastPathComponent(),
-              includeDirs: Array(Set(setup.1).union(derivedData).union(
-                setup.0.platform == toolchain.platform ? projectPackageIncludes : [])).sorted(),
+              // FRESHEST FIRST, and never an alphabetical sort: the first directory holding a
+              // module is the one the compiler reads. `setup.1` is this run's own `swift build`
+              // products, `projectPackageIncludes` are the scans' builds of the project's package
+              // dependencies, and `derivedData` is Xcode's — which on this reader's machine held
+              // yesterday's `VijoUI`, so `Vijo` failed on `Notifications.text(_:icon:)` and
+              // `VijoAlert.cancel(action:)` after the sources had both (2026-09-15).
+              includeDirs: ScanExtractor.uniqueDirs(
+                setup.1
+                  + (setup.0.platform == toolchain.platform ? projectPackageIncludes : [])
+                  + derivedData.sorted()),
               moduleMapFiles: ScanExtractor.uniqueModuleMaps(
                 projectPackageMaps + setup.2.sorted()),
+              // The project's package dependencies' C headers: their clang modules only resolve
+              // with these (`avifc` → `avif/avif.h`), and only for the platform this run built.
+              clangIncludeDirs: setup.0.platform == toolchain.platform
+                ? projectPackageClangIncludes : [],
               toolchain: setup.0,
               settingsArguments: settingsArguments,
               dependencies: dependencyModules))

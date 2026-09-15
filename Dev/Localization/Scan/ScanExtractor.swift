@@ -25,6 +25,16 @@ nonisolated struct ScanCompileUnit {
   var workingDirectory: URL
   var includeDirs: [String]
   var moduleMapFiles: [String]
+  /// Header search paths for the CLANG importer (`-Xcc -I`), which is a different channel from
+  /// `includeDirs` (`-I`, Swift modules).
+  ///
+  /// A dependency's clang module is only usable if its HEADERS resolve: avif.swift's `avifc` map
+  /// includes `AVIFDataDecoder.h`, which includes `avif/avif.h` — a header of that package's own
+  /// `libavif` target, found only under its `include/` directory. With the map passed and the path
+  /// missing the compile fails inside the header ("'avif/avif.h' file not found"), which takes the
+  /// whole module with it (reader, 2026-09-15: "Make Vijo target compile. It's the most important
+  /// one" — playgra's app imports `avifnuke`, which re-exports `avifc`).
+  var clangIncludeDirs: [String] = []
   /// The SDK/triple/conditions this unit is compiled with — the platform the
   /// tree's own build products belong to (see `ScanToolchain`).
   var toolchain: ScanToolchain = .host()
@@ -286,6 +296,11 @@ nonisolated enum ScanExtractor {
     for mapFile in unit.moduleMapFiles {
       args += ["-Xcc", "-fmodule-map-file=\(mapFile)"]
     }
+    for dir in unit.clangIncludeDirs {
+      // ONE `-Xcc` per clang argument: `-Xcc -I <dir>` hands the PATH back to swiftc as an input
+      // file ("error: unexpected input file: …/include"), so the flag and its value travel joined.
+      args += ["-Xcc", "-I\(dir)"]
+    }
 
     let first = ScanShell.swiftc(args, currentDirectory: unit.workingDirectory, timeout: 900)
     if first.succeeded {
@@ -531,6 +546,23 @@ nonisolated enum ScanExtractor {
   /// `client-sdk-swift` next to the package's own maps → `LKObjCHelpers` twice,
   /// which failed all four project targets). Pass the list whose maps belong to
   /// the build the units actually type-check against FIRST.
+  /// The same idea for `-I` directories: first occurrence wins, order preserved.
+  ///
+  /// ORDER IS THE POINT for search paths, where it is not for module maps. The FIRST directory
+  /// holding a module is the one the compiler reads, and a machine that also builds the project in
+  /// Xcode has THREE copies of the same modules: the scan's own fresh products, its scratch builds
+  /// of the project's package dependencies, and Xcode's DerivedData — which can be a day older than
+  /// the sources. Sorted alphabetically the oldest one came first (`/Users/v57/Library` sorts before
+  /// `/Users/v57/github`), so playgra's `Vijo` type-checked against yesterday's `VijoUI` and failed
+  /// on APIs the current sources already have (reader, 2026-09-15: "Make Vijo target compile. It's
+  /// the most important one").
+  static func uniqueDirs(_ paths: [String]) -> [String] {
+    var seen: Set<String> = []
+    var unique: [String] = []
+    for path in paths where seen.insert(path).inserted { unique.append(path) }
+    return unique
+  }
+
   static func uniqueModuleMaps(_ paths: [String]) -> [String] {
     var seen: Set<String> = []
     var unique: [String] = []

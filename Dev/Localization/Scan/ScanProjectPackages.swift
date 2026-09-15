@@ -103,18 +103,20 @@ nonisolated enum ScanProjectPackages {
     cancellation: ScanCancellation,
     report: (ScanPackageBuildOutcome) -> Void
   ) -> (
-    includeDirs: [String], moduleMapFiles: [String], dependencies: [ScanDependencyModules]
+    includeDirs: [String], moduleMapFiles: [String], clangIncludeDirs: [String],
+    dependencies: [ScanDependencyModules]
   ) {
-    guard !pins.isEmpty, !importedModules.isEmpty else { return ([], [], []) }
+    guard !pins.isEmpty, !importedModules.isEmpty else { return ([], [], [], []) }
     guard let triple = toolchain.targetTriple, let sdk = toolchain.sdkPath else {
       // A host scan reads the same products from the project's derived data
       // (see `ScanExtractor.derivedDataIncludeDirs`); building a UIKit-free
       // package for the host is what `swift build` already does.
-      return ([], [], [])
+      return ([], [], [], [])
     }
 
     var includeDirs: [String] = []
     var moduleMapFiles: [String] = []
+    var clangIncludeDirs: [String] = []
     var dependencies: [ScanDependencyModules] = []
     for pin in pins {
       if cancellation.isCancelled { break }
@@ -133,6 +135,7 @@ nonisolated enum ScanProjectPackages {
           atPath: marker.productsDirectory) {
         includeDirs.append(marker.productsDirectory)
         moduleMapFiles += marker.moduleMapFiles
+        clangIncludeDirs += marker.clangIncludeDirs
         dependencies.append(ScanDependencyModules(
           identity: pin.identity, products: marker.modules, targets: marker.targets))
         report(ScanPackageBuildOutcome(
@@ -171,6 +174,14 @@ nonisolated enum ScanProjectPackages {
           detail: result.firstErrorLine))
         continue
       }
+      // The package's own C/C++ targets ship their modulemaps under `include/` (avif.swift's
+      // `avifc`), and a swiftbuild tree does NOT regenerate them: the scratch holds maps for the C
+      // targets the Swift build itself compiles (`avif`, `avifnuke`, `Nuke`) and none for `avifc`,
+      // whose map is the checkout's own file. A Swift module that REQUIRES such a clang module fails
+      // outright — playgra's `Vijo` imports `avifnuke`, which requires `avifc` — and the salvage path
+      // drops every importing file, so the app the scan exists for came back with 44 keys from 171
+      // files (reader, 2026-09-15: "Make Vijo target compile. It's the most important one").
+      let shippedMaps = shippedModuleMaps(checkout: checkout)
       let searchPaths = ScanExtractor.moduleSearchPaths(
         buildRoot: scratch, toolchain: toolchain)
       guard let productsDirectory = searchPaths.includeDirs.first else {
@@ -184,17 +195,42 @@ nonisolated enum ScanProjectPackages {
           revision: pin.revision, triple: triple, productsDirectory: productsDirectory,
           swiftVersion: ScanToolchain.compilerVersion(),
           modules: wanted, targets: packageModules.targets,
-          moduleMapFiles: searchPaths.moduleMapFiles),
+          moduleMapFiles: searchPaths.moduleMapFiles + shippedMaps.maps,
+          clangIncludeDirs: shippedMaps.includes),
         slot: slot)
       includeDirs += searchPaths.includeDirs
       moduleMapFiles += searchPaths.moduleMapFiles
+      moduleMapFiles += shippedMaps.maps
+      clangIncludeDirs += shippedMaps.includes
       dependencies.append(ScanDependencyModules(
         identity: pin.identity, products: wanted, targets: packageModules.targets))
       report(ScanPackageBuildOutcome(
         identity: pin.identity, status: .built, modules: wanted,
         targets: packageModules.targets, detail: productsDirectory))
     }
-    return (includeDirs, moduleMapFiles, dependencies)
+    return (includeDirs, moduleMapFiles, clangIncludeDirs, dependencies)
+  }
+
+  /// The `include/module.modulemap` files a package's own C/C++ targets ship.
+  ///
+  /// One per target directory, sorted so the marker is stable. A target with no map of its own is
+  /// skipped rather than invented: the products directory already carries clang's implicit one.
+  private static func shippedModuleMaps(checkout: URL) -> (maps: [String], includes: [String]) {
+    let sources = checkout.appendingPathComponent("Sources", isDirectory: true)
+    guard
+      let entries = try? FileManager.default.contentsOfDirectory(
+        at: sources, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
+    else { return ([], []) }
+    var maps: [String] = []
+    var includes: [String] = []
+    for entry in entries.sorted(by: { $0.path < $1.path }) {
+      let include = entry.appendingPathComponent("include", isDirectory: true)
+      let map = include.appendingPathComponent("module.modulemap")
+      guard FileManager.default.fileExists(atPath: map.path) else { continue }
+      maps.append(map.path)
+      includes.append(include.path)
+    }
+    return (maps, includes)
   }
 
   // MARK: - build cache
@@ -212,8 +248,9 @@ nonisolated enum ScanProjectPackages {
   private struct BuildMarker: Codable {
     /// Bumped whenever the way products/maps are collected changes: an old
     /// marker would otherwise hand out search paths that miss whatever the new
-    /// logic adds (a real miss: `avifc`'s public-header modulemap).
-    static let currentFormat = 2
+    /// logic adds (a real miss: `avifc`'s public-header modulemap — and again when that map started
+    /// being collected AT ALL, from the checkout rather than the scratch).
+    static let currentFormat = 4
     var format: Int = BuildMarker.currentFormat
     var revision: String
     var triple: String
@@ -223,6 +260,9 @@ nonisolated enum ScanProjectPackages {
     var modules: [String]
     var targets: [String] = []
     var moduleMapFiles: [String]
+    /// `-Xcc -I` paths of the packages' own C targets: a clang module's headers do not resolve
+    /// without them (`avifc` → `avif/avif.h`).
+    var clangIncludeDirs: [String] = []
   }
 
   /// Where built dependencies live between scans. A user cache, not the repo

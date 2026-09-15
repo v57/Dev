@@ -365,3 +365,38 @@ Reader: "only build on ios. Make Dev app to also prioritize building on iOS." Th
   - Cost, stated: a macOS-only target in an iOS tree is now compiled for iOS rather than against host
         products — and the host products cannot be made for playgra's package anyway
         (`swift build` on the host: BUILD FAILED after 77 s, measured).
+
+### Vijo compiles: four walls, in the order they fell (2026-09-15)
+
+Reader: "Make Vijo target compile. It's the most important one." Started at `Vijo: FAILED 0 key(s)`,
+ended at **`Vijo: ok 1057 key(s)`** — 1231 keys from 88 modules and **0 of 88 failed** (from 228 keys
+with a failed app target). Each wall was measured, not guessed:
+
+  1. THE CACHE WAS NOT KEYED BY THE COMPILER. The Xcode-package builds under
+     `~/Library/Caches/dev.v57.dev/scan-packages/` are reused between scans, and a `.swiftmodule` is
+     readable only by a compiler that can read its format: `error: compiled module was created by a
+     different version of the compiler '6.4.0.33.1'; rebuild 'Nuke' and try again`, the toolchain
+     being `6.4.0.34.1` and the cached modules a day old. The marker now carries
+     `ScanToolchain.compilerVersion()`. Commit `6cc2af9`. → `Vijo` 0 → 44 keys, `Broadcast` fixed.
+  2. A PACKAGE'S OWN C MODULEMAP IS NOT IN THE BUILD TREE. avif.swift ships
+     `Sources/avifc/include/module.modulemap`; swiftbuild generates maps only for the C targets the
+     Swift build itself compiles, and `avifc` (required by `avifnuke`, imported by the app) had none.
+     The build now collects the checkouts' own maps (and their `include` dirs), with the marker format
+     bumped — its own doc says a format bump is exactly for a change in how maps are collected.
+  3. A CLANG MODULE'S HEADERS ARE A DIFFERENT CHANNEL. `avifc`'s map includes `AVIFDataDecoder.h`,
+     which includes `avif/avif.h` — that package's `libavif` target — so the compile needs
+     `-Xcc -I <include>` (Swift's `-I` does not carry it), one `-Xcc` per clang argument (`-Xcc -I
+     <dir>` hands the path back to swiftc as an input file: "error: unexpected input file").
+     `ScanCompileUnit.clangIncludeDirs` is that channel. → `Vijo` 156 keys.
+  4. THE FRESHEST MODULE HAS TO WIN. Three copies of `VijoUI.swiftmodule` exist on a machine that
+     also builds the project in Xcode — the scan's own products (Sep 15 21:37), its scratch builds,
+     and `DerivedData` (**Sep 14 16:03**, before the reader's edits to `Notifications.swift` and
+     `VijoMenu.swift`). The first `-I` directory holding a module wins, and the list was
+     alphabetically sorted, so `/Users/v57/Library` beat `/Users/v57/github` and `Vijo` type-checked
+     against yesterday's API: `Notifications.text(_:icon:)` and `VijoAlert.cancel(action:)` "did not
+     exist". Search paths are now ordered freshest-first (`ScanExtractor.uniqueDirs`): the run's own
+     products, then the scan's package builds, then DerivedData. → `Vijo` 1057 keys, nothing failed.
+
+  - [x] Probes: the fixture probe still 9/9 (the host path is untouched), and every real-tree run
+        logged under /tmp/dev-scan-probe/playgra-vijo-*.log.
+  - [x] The reader's own tree was never left changed: the cold-run backup was restored.
