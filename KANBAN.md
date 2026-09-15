@@ -180,3 +180,32 @@ OPEN DECISIONS (notes section 10) — a worker who meets one asks instead of cho
   Unanswered by the user, and therefore also askable: does prelearn's request carry
   maxWidth (today only the column translate does)? Does the row pass's per-item field set
   differ from the column pass's?
+
+## The counts and the marks stopped paying per frame (2026-09-15)
+
+The reader reported 100% CPU while a run works, after having optimised the needs-review count a
+little. What was measured on a COPY of the real store (never the real one), for the `Dev` project:
+
+  the sidebar's count, as it was: walking `project.records` (relationship)   2.87 s per read
+  the same walk on the largest project (97 languages)                        ~5x that
+  one row of a run's write path: memory hint + one transaction per row       0.2 ms per row
+  the OLD pipeline's shape: `project.records` walk + its tuple sort          2.87 s + sort
+
+So the write path was never the cost — a WALK THAT A VIEW BODY PAID was: the count was a computed
+property read from the sidebar's status line, and every re-render re-paid it.
+
+  - [x] `LocalizationStore.needsReviewKeyCount` is STORED, rebuilt where records change
+        (`markDirty` — a run's publish and finish funnel through it — and the load path) from ONE
+        fetch of three fields and no object graph. Commit `03f2350`.
+  - [x] A batch's mid-flight state is published to the run's own copy at most every 150 ms
+        (`Runner.publishWindow`) instead of once per row, because a page re-derives its whole page
+        set per change; failures are never delayed. Commit `d1babd7`, notes 8.1.
+  - [x] The realtime probe still passes 11/11 with the coalescing: rows land one at a time, the
+        marks grow row by row, the failed row lands immediately.
+
+Still open, and named as an open question rather than fixed: what else a LONG run pays in the UI.
+The stage page maps every batch of its step on each change, so a run with hundreds of batches pays
+O(all items) per published burst; making that lazy is a design change and needs a trace that says it
+is the cost. The reader was asked for a 10 s Time Profiler sample taken WHILE the CPU is pegged, and
+for which button drives the run (the redesign's `Start` or the old pipeline's `Translate`), because
+the two share no code.

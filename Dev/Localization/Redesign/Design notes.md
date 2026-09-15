@@ -1037,6 +1037,25 @@ The operation classes know what to send, nothing knows how to send it.
                      No pacing here, unlike the batch pager: a row that has landed is
                      already written, so there is nothing to wait for — a page opened
                      mid-batch lands on the newest one at once.
+                     WHAT A PAGE PAYS for that mark is measured by what it reads: a
+                     page re-derives its WHOLE page set from `run.batches` on every
+                     change of it, so publishing once per row cost one full page
+                     mapping per row. The publish is therefore COALESCED to at most
+                     one change per 150 ms — `Runner.publishWindow` — which is below
+                     what a reader notices, while a FAILURE is never delayed because
+                     it is the row a reader is looking for. The batch's own end writes
+                     the whole value back regardless, so nothing can lose a phase.
+                     THE SAME READING APPLIES TO THE COUNTS the shell shows: the
+                     sidebar's badge/status line counted distinct review keys by
+                     WALKING `project.records` — the SwiftData to-many RELATIONSHIP,
+                     faulting one object at a time — from a VIEW BODY, so every
+                     re-render of that line re-paid the walk. Measured on the reader's
+                     own store before the fix: 2.87 s for the `Dev` project's 26 156
+                     records, i.e. seconds of CPU per frame while a run was working.
+                     It is now a STORED `LocalizationStore.needsReviewKeyCount`,
+                     rebuilt only where records change (`markDirty` — which a run's
+                     publish and finish funnel through — and the load path) from ONE
+                     fetch of three fields and no object graph.
                      A failed row carries its own xmark and its siblings keep their ticks, and the
                      batch's own mark appears only when the batch wrote nothing. One request is one batch, so a
                      page shows exactly one exchange: a batch still in flight says so
