@@ -271,5 +271,5 @@ moment it closes, but with `saving: false`, and the BATCH's end pays the one sav
         setup write) — `RUNNER=HEAD` runs the committed runner to show the before. 13/13 checks.
   - Cost, stated plainly: a crash mid-batch now loses the rows that batch had shown as landed, where
         one save per row lost at most one row. This is the one place the reader's earlier choice
-        ("one store write per row") was traded away — the per-row WITE and the realtime marks are
+        ("one store write per row") was traded away — the per-row WRITE and the realtime marks are
         unchanged; only the flush is batched.
