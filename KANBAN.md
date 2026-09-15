@@ -243,3 +243,33 @@ Reader: "Disable that delay as we are already updating in realtime." Right — t
 make a batch's marks land in reading order, and rows now land one at a time as the model writes them.
 The four row marks animate on the MARK's colour and carry no delay, and `Translation.stagger` is
 deleted rather than left unused. `grep '\.delay('` over the app returns nothing. Commits `7774124` (the delay) and `cb922a6` (the clamp it replaces).
+
+### The trace was right and my replica was wrong: a save costs ~200 ms (2026-09-15)
+
+The second sample (overlay closed) put 91,5 % of the core inside `Runner.writeBack`. My earlier
+"0.2 ms per row" reading had measured a save on a FRESH context with nothing registered — which
+measures nothing. Priced properly, on a copy of the reader's own store:
+
+    20 saves, COLD context (one pending row each)      3.552 s   178 ms per save
+    warm context registers 168 822 record(s), 38 671 edit(s), 32 059 memory entry(ies)
+    20 saves, WARM context (same rows pending)         4.553 s   228 ms per save
+    COW of `project.data`: 200 slot writes, with a second holder   0.000 s   (idea dead)
+
+The streamed path saved once per row, so a 30-row request burned ~6 s of the main thread inside the
+write-back. Fixed by the shape the design already prescribed (7.6): the row is still written the
+moment it closes, but with `saving: false`, and the BATCH's end pays the one save.
+
+  - [x] `Runner.performOne` is a wrapper: the body performs, `Runner.commit` saves what the batch's
+        rows left pending. `apply`/`writeBack` take `saving:` (the per-row call passes false).
+  - [x] A write that throws mid-batch no longer rolls the context back (that would take the rows the
+        page already shows as landed); it saves best-effort and reports the row. A save that throws
+        leaves the rows pending for the next batch's commit.
+  - [x] The run's store IS the app's context (`Store(context: TranslationStore.shared.context)`), so
+        rows written but not yet flushed are still visible to the app's own reads.
+  - [x] Probe: the batch's rows still land one at a time, the store still holds them afterwards, and
+        a 3-row batch costs 4 saves before this change and 2 after (the batch's own, plus the run's
+        setup write) — `RUNNER=HEAD` runs the committed runner to show the before. 13/13 checks.
+  - Cost, stated plainly: a crash mid-batch now loses the rows that batch had shown as landed, where
+        one save per row lost at most one row. This is the one place the reader's earlier choice
+        ("one store write per row") was traded away — the per-row WITE and the realtime marks are
+        unchanged; only the flush is batched.

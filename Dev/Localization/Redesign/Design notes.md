@@ -599,13 +599,29 @@ The operation classes know what to send, nothing knows how to send it.
     2026-09-14): a batch that wrote some of its rows is applied, and the rows that went
     wrong say so themselves — only a batch that wrote NOTHING and failed is marked
     failed. The batch is a request; the row is the unit a human reads.
-    ONE ROW IS NOW ITS OWN UNIT OF WRITE (reader, 2026-09-15 — see 5.12): a row that
-    closes mid-stream is written there and then, which is one transaction per row, and
-    the batch's end-of-batch pass then writes only what the per-row pass did not
-    (nothing, in the ordinary case). The rule that a failed batch leaves nothing
-    half-written still holds for the pass at the end of a batch — that write is still
-    gathered and applied as one unit — but a row already written is not un-written by a
-    later failure, because it was never part of a batch-sized transaction.
+    ONE ROW IS ITS OWN UNIT OF WRITE (reader, 2026-09-15 — see 5.12): a row that
+    closes mid-stream is written there and then — its record, its journal row and its
+    memory hint all land the moment its text is complete — and the batch's end-of-batch
+    pass then writes only what the per-row pass did not (nothing, in the ordinary case).
+    The rule that a failed batch leaves nothing half-written still holds for the pass at
+    the end of a batch — that write is still gathered and applied as one unit — but a row
+    already written is not un-written by a later failure, because it was never part of a
+    batch-sized transaction.
+    The TRANSACTION, though, is the batch's, not the row's (reader, 2026-09-15, from the
+    profile of §8.1's first finding): the streamed path writes each row with `saving:
+    false` and the batch's own end pays ONE `context.save()` (`Runner.commit`). A save is
+    not the row. Measured on the reader's own store — 168 822 records, 38 671 edits,
+    32 059 memory entries, and this is the number the earlier "0.2 ms per row" reading
+    missed, because it was taken on a FRESH context with nothing in it — one
+    `context.save()` costs 178 ms cold and 228 ms warm. Per row, a 30-row request burned
+    ~6 s of the main thread for nothing; the profiler put 91,5 % of a working core inside
+    `writeBack`, and the probe counts 4 saves for a 3-row batch before this and 2 after.
+    What it costs is crash durability inside one batch: a crash loses the rows that batch
+    had already shown as landed, where one save per row lost at most one row. A write that
+    throws mid-batch does NOT roll the context back — the rows already landed are saved
+    best-effort instead, because a rollback would take them away while the page still
+    shows them — and a save that throws leaves the rows pending for the NEXT batch's
+    commit, reporting the error.
 
 5.6 Control. Start / pause / cancel, with the batch cursor persisted as a `RunCursor`
     row (7.2) so a paused or interrupted run resumes at the next unstarted batch instead
@@ -956,9 +972,11 @@ The operation classes know what to send, nothing knows how to send it.
     The change gate stays, for a different reason than it was written for: skipping a record
     that already matches keeps `updatedAt` meaning when the slot last MOVED, not when a
     save last ran.
-    The same shape survives in the RUNNER's write-back — `persist` per applied write, so one
-    save per slot of a batch. It should adopt the same flag (one save per batch), and it is
-    left to whoever owns `Runner.swift` next because that file is in flight.
+    The same shape now holds in the RUNNER's write-back, which is where this note said it
+    should land (2026-09-15): the streamed path writes its rows with `saving: false` and
+    the batch's own end pays the one `Store.save()` (`Runner.commit`, and 5.5 for the
+    measurement that forced it — 178-228 ms per save, so one per row was the whole of a
+    working core).
 
 7.7 A READ SCALES WITH ITS ANSWER, NOT WITH THE TABLE (reader, 2026-09-15: a profiler trace of
     the LAUNCH — `Shell.focus` -> `Global.loadProject` -> `Project.init` -> `loadLanguages` ->

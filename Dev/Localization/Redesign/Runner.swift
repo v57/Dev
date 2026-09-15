@@ -492,6 +492,9 @@ extension Translation {
     private static let publishWindow: TimeInterval = 0.15
     /// When the run last published a batch's mid-flight state.
     private var lastPublish: Date = .distantPast
+    /// True while a batch's rows are written but not yet flushed: the streamed path writes each row
+    /// as it closes with `saving: false`, and the batch's end pays the one save (`commit`).
+    private var pendingWrites = false
 
     /// The word a fold answers when the document already covers every lesson.
     private static let noChange = "NO_CHANGE"
@@ -1125,7 +1128,39 @@ extension Translation {
     /// One request's whole life, from the prompt to the row. A re-ask of a cut reply
     /// is this same pipeline on a subset of items, which is why it takes the batch by
     /// value and answers with the batch it produced.
+    /// One batch, performed, with its rows COMMITTED at the end.
+    ///
+    /// The streamed path writes each row the moment it closes (5.5) but does NOT flush it: a save
+    /// is not the row. Measured on the reader's own store (168 822 records, 38 671 edits, 32 059
+    /// memory entries), one `context.save()` costs 178 ms cold and 228 ms warm, so a request of 30
+    /// rows saving per row burned ~6 s of the main thread per batch — which is exactly what a
+    /// profiler saw (91,5 % of a working core inside `writeBack`, reader 2026-09-15). The batch
+    /// owns its transaction (`writeBack`), so this is the one place its rows are committed.
+    ///
+    /// The tradeoff is explicit: a crash mid-batch loses the rows it had already shown as landed,
+    /// where one save per row lost at most one row.
     private func performOne(_ origin: Run.Batch, in run: Run) async throws -> Run.Batch {
+      let batch = try await performOneBody(origin, in: run)
+      commit(in: run)
+      return batch
+    }
+
+    /// Commits whatever a batch's rows left pending (`saving: false`, one save per batch).
+    ///
+    /// A save that throws leaves those rows PENDING rather than dropping them — the next batch's
+    /// commit is the same `context.save()` and will carry them — and reports the error, because a
+    /// run that cannot write its rows has to say so.
+    private func commit(in run: Run) {
+      guard pendingWrites else { return }
+      do {
+        try store.save()
+        pendingWrites = false
+      } catch {
+        fail(run, message: error.localizedDescription, retryable: true)
+      }
+    }
+
+    private func performOneBody(_ origin: Run.Batch, in run: Run) async throws -> Run.Batch {
       var batch = origin
       // A batch memory emptied has nothing to ask: no request, no admission, and no
       // failure — the scan already wrote what it answered (5.1).
@@ -1474,7 +1509,9 @@ extension Translation {
     /// The batch applies as ONE unit: what to write is resolved for every item first,
     /// so a slot that stopped being writable between validation and here cannot leave
     /// half a batch on the rows.
-    private func apply(_ results: [String: String], of batch: inout Run.Batch, in run: Run) {
+    private func apply(
+      _ results: [String: String], of batch: inout Run.Batch, in run: Run, saving: Bool = true
+    ) {
       var writes: [SlotWrite] = []
       var positions: [Int] = []
       for position in results.keys.compactMap(Int.init).sorted() {
@@ -1521,7 +1558,7 @@ extension Translation {
             memory: nil))
         positions.append(position)
       }
-      if writeBack(writes, of: batch, in: run) {
+      if writeBack(writes, of: batch, in: run, saving: saving) {
         for position in positions { batch.items[position].phase = .applied }
       } else {
         // Rolled back: the batch wrote NOTHING, so every row it carried is work again — the
@@ -1562,7 +1599,7 @@ extension Translation {
           retryable: false)
         return
       }
-      apply([row.id: row.text], of: &batch, in: run)
+      apply([row.id: row.text], of: &batch, in: run, saving: false)
     }
 
     /// Publishes what this batch has decided onto the RUN's own copy of it — every item's phase and
@@ -1640,7 +1677,9 @@ extension Translation {
     /// and failed IS a failed batch (5.5), and its rows stay work — and a batch with nothing to
     /// write at all pays no transaction either, because a save with nothing pending is a price
     /// with no product.
-    private func writeBack(_ writes: [SlotWrite], of batch: Run.Batch, in run: Run) -> Bool {
+    private func writeBack(
+      _ writes: [SlotWrite], of batch: Run.Batch, in run: Run, saving: Bool = true
+    ) -> Bool {
       // A batch with nothing to write opens no transaction at all.
       guard !writes.isEmpty else { return true }
       var before: [SlotPosition: LocalizationString] = [:]
@@ -1655,10 +1694,24 @@ extension Translation {
           }
           try persist(write, of: batch, in: run)
         }
-        try store.save()
+        if saving {
+          try store.save()
+        } else {
+          // The rows are written but not flushed: the batch's own end commits them (`commit`).
+          pendingWrites = true
+        }
         return true
       } catch {
-        store.rollback()
+        // A write that threw mid-batch leaves the rows ALREADY landed where they are: they are
+        // saved and this row is reported failed. Rolling the context back here would take the
+        // batch's pending rows with it while the page still shows them as landed, so what is
+        // pending is committed instead, best effort.
+        if !saving, pendingWrites {
+          try? store.save()
+          pendingWrites = false
+        } else {
+          store.rollback()
+        }
         for (position, slot) in before
         where run.project.data.indices.contains(position.row)
           && run.project.data[position.row].targets.indices.contains(position.slot) {
