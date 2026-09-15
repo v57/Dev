@@ -36,7 +36,7 @@ enum Translation {
     /// small on purpose.
     static let languageContext = 1_000
     /// Source characters per translate request (vertical and horizontal).
-    static let batch = 20_000
+    static let batch = 10_000
     /// Model-response RETRIES after a batch's first attempt (5.9): a retryable failure
     /// re-asks the same request, so one batch costs at most `retries + 1` sends.
     ///
