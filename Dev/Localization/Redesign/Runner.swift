@@ -2030,15 +2030,22 @@ extension Translation {
     /// Everything wrong with one answer. Empty means it is acceptable.
     enum Defect: Equatable {
       case empty
-      /// Placeholder multiset differs from the source's.
-      case placeholders(expected: [String], got: [String])
+      /// Placeholder multiset differs from the source's, in ONE form of the answer
+      /// (`category` names it; nil when the answer is a flat value).
+      case placeholders(category: String?, expected: [String], got: [String])
+      /// A form the reply left empty while the source text that form answers says
+      /// something: the artifact would keep a form that cannot be rendered.
+      case emptyForm(category: String)
 
       var description: String {
         switch self {
         case .empty:
           return "empty response"
-        case .placeholders(let expected, let got):
-          return "placeholders changed (expected \(expected.joined(separator: " ")), got \(got.joined(separator: " ")))"
+        case .emptyForm(let category):
+          return "form `\(category)` is empty"
+        case .placeholders(let category, let expected, let got):
+          let form = category.map { " in `\($0)`" } ?? ""
+          return "placeholders changed\(form) (expected \(expected.joined(separator: " ")), got \(got.joined(separator: " ")))"
         }
       }
     }
@@ -2105,22 +2112,86 @@ extension Translation {
       return scanner.isCut
     }
 
-    /// What is wrong with one item's answer, deterministically and for free: nothing
-    /// to judge in an empty answer, a placeholder multiset that did not survive (5.3).
+    /// What is wrong with one item's answer, deterministically and for free: nothing to judge
+    /// in an empty answer, and — FORM BY FORM — a placeholder multiset that did not survive, or
+    /// a form the reply left empty (5.3).
+    ///
+    /// PER FORM, not over the whole body (reader, 2026-09-15, after a real Arabic batch failed
+    /// 11 of 11 rows that were all correct). The languages pluralize differently: a two-form
+    /// source and a six-form Arabic answer are not the same list of texts, so comparing their
+    /// tokens as ONE multiset can only agree when the two languages happen to have the same
+    /// number of forms — measured, that rejected every plural key into ar (6), ru/pl/cs/lt (4)
+    /// and even zh/ja/ko (1) while accepting de/es/fr (2). What the check is FOR is a
+    /// placeholder that went missing or changed, and that question is asked of each form,
+    /// against the source text that form answers:
+    ///
+    ///   · the source's OWN form of the same category (`one` against `one`, `other` against
+    ///     `other`),
+    ///   · otherwise the source's `other` — the form that carries the number in every language
+    ///     that has one, and the form a category the source language lacks is a variation of,
+    ///   · otherwise (a source with no `other` at all) everything the source says.
+    ///
+    /// A form whose source text is EMPTY is not required to say anything, and a form the reply
+    /// left empty where its source says nothing is not a defect either.
     ///
     /// An answer IDENTICAL to its source is NOT a defect (reader, 2026-09-14: "Start is
     /// start in danish, symbol is symbol"). A language reuses a source word far more
     /// often than a check can tell, and the reviewer sees the slot — so sameness is
     /// written as `.translated` and judged by a human, never thrown away here.
     static func defects(_ answer: StringBody, of item: Run.Item) -> [Defect] {
+      defects(answer, of: item.payloadSource)
+    }
+
+    /// The same check against the body an answer MIRRORS, with no item around it: the item is
+    /// only ever read for its source text (which is its key when nothing was authored), so a
+    /// probe can ask this question without building one.
+    static func defects(_ answer: StringBody, of source: StringBody) -> [Defect] {
       guard !answer.isEmpty else { return [.empty] }
       var defects: [Defect] = []
-      let expected = placeholders(in: item.payloadSource).sorted()
-      let got = placeholders(in: answer).sorted()
-      if expected != got {
-        defects.append(.placeholders(expected: expected, got: got))
+      for (category, text) in forms(of: answer) {
+        let reference = category.map { self.reference($0, of: source) } ?? whole(source)
+        let expected = placeholders(in: reference).sorted()
+        let got = placeholders(in: text).sorted()
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !expected.isEmpty {
+          // Nothing was answered for a form whose source says something: a placeholder check
+          // would call this "changed" (no tokens against some), which is not what happened.
+          defects.append(.emptyForm(category: category ?? "other"))
+        } else if expected != got {
+          defects.append(.placeholders(category: category, expected: expected, got: got))
+        }
       }
       return defects
+    }
+
+    /// The texts one answer carries: one entry with no category for a flat value, one per
+    /// category — in the language's own rule order — for a plural body.
+    private static func forms(of body: StringBody) -> [(category: String?, text: String)] {
+      switch body {
+      case .value(let text):
+        return [(nil, text)]
+      case .plural(let plural):
+        return plural.values.map { ($0.rule.rawValue, $0.value) }
+      }
+    }
+
+    /// The source text one form answers.
+    private static func reference(_ category: String, of source: StringBody) -> String {
+      guard case .plural(let plural) = source else { return whole(source) }
+      if let own = plural.values.first(where: { $0.rule.rawValue == category }) { return own.value }
+      if let other = plural.values.first(where: { $0.rule == .other }) { return other.value }
+      return whole(source)
+    }
+
+    /// Everything a source body says: its text for a flat value, its `other` form for a plural
+    /// (the form a flat target, and every category the language itself does not have, reads as
+    /// a variation of), or all of its forms when it has no `other` at all.
+    private static func whole(_ source: StringBody) -> String {
+      guard case .plural(let plural) = source else {
+        guard case .value(let text) = source else { return "" }
+        return text
+      }
+      if let other = plural.values.first(where: { $0.rule == .other }) { return other.value }
+      return plural.values.map(\.value).joined(separator: " ")
     }
 
     /// The same defects as a sentence, for a failure report.
@@ -2164,18 +2235,6 @@ extension Translation {
       if case .plural = item.target { return true }
       if case .plural = item.source { return true }
       return false
-    }
-
-    /// The placeholder tokens of a body: the tokens of every text it carries, in
-    /// order. A plural body's forms are all compared, because a form that dropped a
-    /// placeholder is a defect of the same kind.
-    static func placeholders(in body: StringBody) -> [String] {
-      switch body {
-      case .value(let text):
-        return placeholders(in: text)
-      case .plural(let plural):
-        return plural.values.flatMap { placeholders(in: $0.value) }
-      }
     }
 
     /// Placeholder / format-specifier tokens, in order of appearance: printf-style

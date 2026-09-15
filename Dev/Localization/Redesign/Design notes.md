@@ -526,12 +526,30 @@ The operation classes know what to send, nothing knows how to send it.
     way to see that nothing else ever answered.
 
 5.3 Validation, in this order and none of it paid: echoed ids must match the
-    request exactly, the placeholder multiset per item must survive, an
+    request exactly, the placeholder multiset of each FORM must survive, an
     empty reply is rejected,
     a truncated reply is reported as truncation and re-asked in halves.
     A row is decided the moment it CLOSES, on the stream (5.12): the per-row pass asks
     this same list of questions, and the batch's own pass then reads the whole reply once
     more and skips what was already decided, so the two can never disagree.
+
+    THE PLACEHOLDER CHECK IS PER FORM (reader, 2026-09-15 — a real `ars` batch failed 11 of
+    11 rows that were all correct). The languages pluralize differently: a two-form English
+    source and a six-form Arabic answer are not the same list of texts, so comparing their
+    tokens as ONE multiset can only agree when the two languages happen to have the same
+    number of forms — measured: that rejected every plural key into ar (6 forms), ru/pl/cs/lt
+    (4) and even zh/ja/ko (1), and accepted only the two-form languages (de/es/fr/…), while
+    printing a wall of tokens as the reason. What the check is FOR is a placeholder that went
+    missing or changed, and that question is asked of each form of the answer, against the
+    source text that form answers:
+      · the source's OWN form of the same category (`one` against `one`, `other` against
+        `other`);
+      · otherwise the source's `other` — the form that carries the number in every language
+        that has one, and the form a category the source language lacks is a variation of;
+      · otherwise (a source with no `other`) everything the source says.
+    A form the reply left empty where its source says something is its OWN defect ("form `x`
+    is empty") — the placeholder check would have called it "changed", which is not what
+    happened — and a form whose source text is empty requires nothing.
 
     NO ECHO GUARD (reader, 2026-09-14: "Remove that guard. Start is start in danish,
     symbol is symbol"). An answer IDENTICAL to its source is not a defect and is no
