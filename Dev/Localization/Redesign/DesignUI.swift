@@ -52,6 +52,19 @@ extension Translation {
     }
   }
 
+  /// The LAST row of a page's list the run has ANSWERED — written or failed (8.1: the mark
+  /// belongs to the row, never to its batch).
+  ///
+  /// What a page's list follows, and it follows the ROW rather than the batch (reader,
+  /// 2026-09-15): a row is written the moment the model finishes writing it (5.12), so a list
+  /// that followed only its batch would sit still through every row of a 33-row request and then
+  /// jump at the end. The list keeps the last landed row CENTRED — the row the model has just
+  /// finished is the one being read — and a page opened mid-batch lands on it at once, because a
+  /// row that has landed is already written and saved.
+  static func lastLanded<T: Operation>(in items: [T]) -> Int? {
+    items.lastIndex { $0.phase == .applied || $0.phase == .failed }
+  }
+
   /// How long a stage page waits before it follows the run to a NEWER batch (8.1, "PACING").
   ///
   /// The pause belongs to the SCROLL, never to the run: the pipeline never waits for a view. It
@@ -113,6 +126,11 @@ extension Translation.VerticalTranslate {
     let operation: Operations
     /// Both sides of this batch's exchange — what the right half prints, unread.
     let exchange: Translation.Run.Exchange
+    /// The row the list is showing, bound to the list's own scroll position exactly as the batch
+    /// pager above is bound to the batch (8.1, "PACING"): the page follows the last row the run
+    /// ANSWERED rather than the batch it belongs to (reader, 2026-09-15), because rows are written
+    /// one at a time now (5.12).
+    @State var rowPosition: Int?
     /// The mark THIS row carries (8.1, "stage pages"): the row's own state, never the batch's.
     /// The batch's flags are not read here at all — a batch that wrote some of its rows is
     /// applied, and the row that went wrong is the only thing that carries the failure.
@@ -135,9 +153,18 @@ extension Translation.VerticalTranslate {
                   .fontWeight(operation.isCompleted ? .semibold : .regular)
                   .contentTransition(.numericText())
               }.foregroundStyle(mark(item).color).animation(.smooth.delay(Double(index) / 10), value: item)
+                .id(index)
             }
           }.padding(32)
+            .scrollTargetLayout()
         }.contentTransition(.symbolEffect)
+          .scrollPosition(id: $rowPosition, anchor: .center)
+          .task(id: Translation.lastLanded(in: operation.items)) {
+            // The list follows the row that just landed, centred: it is the row the model has
+            // finished and the one being read. A page opened mid-batch lands on it at once — no
+            // pacing, unlike the batch pager, because a row that has landed is already written.
+            rowPosition = Translation.lastLanded(in: operation.items)
+          }
           .frame(maxWidth: .infinity)
 
         Divider()

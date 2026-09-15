@@ -64,6 +64,11 @@ extension Translation.VerticalLearn {
     let operation: Operations
     /// Both sides of this batch's exchange — what the right half prints, unread.
     let exchange: Translation.Run.Exchange
+    /// The row the list is showing, bound to the list's own scroll position exactly as the batch
+    /// pager above is bound to the batch (8.1, "PACING"): the page follows the last row the run
+    /// ANSWERED rather than the batch it belongs to (reader, 2026-09-15), because rows are written
+    /// one at a time now (5.12).
+    @State var rowPosition: Int?
     /// The mark THIS row carries (8.1, "stage pages"): the row's own state, never the batch's.
     /// The batch's flags are not read here at all — a batch that wrote some of its rows is
     /// applied, and the row that went wrong is the only thing that carries the failure.
@@ -109,9 +114,17 @@ extension Translation.VerticalLearn {
                   }
                 }
               }.foregroundStyle(mark(item).color).animation(.smooth.delay(Double(index) / 10), value: item)
+                .id(index)
             }
           }.padding(32)
+            .scrollTargetLayout()
         }.contentTransition(.symbolEffect)
+          .scrollPosition(id: $rowPosition, anchor: .center)
+          .task(id: Translation.lastLanded(in: operation.items)) {
+            // The list follows the row that just landed, centred (reader, 2026-09-15): rows are
+            // written one at a time (5.12), so the page follows the ROW rather than the batch.
+            rowPosition = Translation.lastLanded(in: operation.items)
+          }
           .frame(maxWidth: .infinity)
 
         Divider()

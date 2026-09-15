@@ -1381,6 +1381,12 @@ enum Translation {
     /// batch that is already in flight.
     var index: Int { get }
     var characters: Int { get }
+    /// Where the ROW this came from is in the run's life.
+    ///
+    /// It belongs to the operation rather than to its batch (8.1, "stage pages"): a page marks
+    /// the row from its own state, and the list follows the last row the run has ANSWERED
+    /// (reader, 2026-09-15) — both of which need the phase here rather than on the batch's flags.
+    var phase: Run.Phase { get }
   }
 
   /// A per-language unit: one source body translated into one target body in one

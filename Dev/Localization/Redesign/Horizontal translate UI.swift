@@ -108,6 +108,11 @@ extension Translation.HorizontalTranslate {
     let operation: Operations
     /// Both sides of this batch's exchange — what the right half prints, unread.
     let exchange: Translation.Run.Exchange
+    /// The row the list is showing, bound to the list's own scroll position exactly as the batch
+    /// pager above is bound to the batch (8.1, "PACING"): the page follows the last row the run
+    /// ANSWERED rather than the batch it belongs to (reader, 2026-09-15), because rows are written
+    /// one at a time now (5.12).
+    @State var rowPosition: Int?
     /// The journal, so the page can tell a column this pass FILLED from one it
     /// REWROTE (`outcome(_:)`). Empty claims nothing.
     var journal: [Write] = []
@@ -300,12 +305,21 @@ extension Translation.HorizontalTranslate {
               // the heading's, and a row reads red or green for its OWN state.
               .foregroundStyle(mark(item).color)
               .padding(.vertical, 4)
+              .id(rowIndex)
               if rowIndex < operation.items.count - 1 {
                 Divider().opacity(0.4)
               }
             }
           }.padding(32)
+            .scrollTargetLayout()
         }.contentTransition(.symbolEffect)
+          .scrollPosition(id: $rowPosition, anchor: .center)
+          .task(id: Translation.lastLanded(in: operation.items)) {
+            // The list follows the ROW that just landed, centred (reader, 2026-09-15): a row is
+            // written the moment its columns are decided (5.12), so the page follows the row the
+            // model has finished rather than the batch.
+            rowPosition = Translation.lastLanded(in: operation.items)
+          }
           .frame(maxWidth: .infinity)
 
         Divider()

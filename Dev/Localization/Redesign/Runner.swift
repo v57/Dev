@@ -1548,6 +1548,7 @@ extension Translation {
       let body = Validator.decode(row.text, for: item, language: language)
       guard Validator.defects(body, of: item).isEmpty else {
         batch.items[position].phase = .failed
+        publish(.failed, at: position, of: batch, in: run)
         fail(
           run, key: item.key, language: language,
           message: "no usable translation: \(Validator.describe(row.text, of: item, language: language))",
@@ -1555,6 +1556,25 @@ extension Translation {
         return
       }
       apply([row.id: row.text], of: &batch, in: run)
+      // The row is written: say so ON THE RUN's copy, which is the one a page reads. Without this
+      // the page would keep showing a row the model has finished, and saved, as one still waiting
+      // (reader, 2026-09-15: rows are marked as they land, not when the batch ends).
+      publish(batch.items[position].phase, at: position, of: batch, in: run)
+    }
+
+    /// Publishes ONE item's phase on the RUN's own copy of its batch, the moment it is decided.
+    ///
+    /// `performOne` works on a VALUE of its batch and only writes it back when it returns, so
+    /// everything decided mid-stream would stay invisible to every reader until the whole batch
+    /// ended — a page would show a dimmed "waiting" symbol for rows that are already written and
+    /// saved, and a reader watching a 33-row request would see nothing land until the last row
+    /// did. The request and the reply are published the same way and for the same reason
+    /// (`retain`, 5.12).
+    private func publish(_ phase: Run.Phase, at position: Int, of batch: Run.Batch, in run: Run) {
+      guard let index = run.batches.firstIndex(where: { $0.id == batch.id }),
+        run.batches[index].items.indices.contains(position)
+      else { return }
+      run.batches[index].items[position].phase = phase
     }
 
     /// One slot write, gathered before anything is written so a batch applies as one
