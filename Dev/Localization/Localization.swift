@@ -1350,7 +1350,9 @@ final class LocalizationStore {
     self.catalog = catalog
     saveError = nil
     buildRows()
-    markDirty()
+    // A COMMENT is not record state: the count cannot have moved, and the comment pass calls this
+    // once per key (ScanController's on-device pass), so it must not pay a whole-project fetch.
+    markDirty(records: false)
     return true
   }
 
@@ -1366,7 +1368,7 @@ final class LocalizationStore {
       self.catalog = catalog
       saveError = nil
       buildRows()
-      markDirty()
+      markDirty(records: false)
       return
     }
     let context = TranslationStore.shared.context
@@ -2090,11 +2092,21 @@ final class LocalizationStore {
   /// Every catalog mutation funnels here instead of writing: the artifact is
   /// only written by `save()`, so an edit is durable in the DB (records) and
   /// pending on disk until the user saves.
-  private func markDirty() {
+  /// The one funnel every mutation goes through: the dirty flag Save reads, and the needs-review
+  /// count the sidebar badge shows.
+  ///
+  /// The count is rebuilt HERE — where records change — and never on a render (2026-09-15: as a
+  /// computed property it walked `project.records` from a view body and cost seconds of CPU per
+  /// frame on a real project, which is what pegged a core while a run worked).
+  ///
+  /// `records: false` is for a mutation that touches ONLY the catalog — a generated comment, a
+  /// source form — where the count cannot have moved. It matters because the rebuild is a FETCH over
+  /// the whole project (0.50 s for 26 156 rows, measured), so a pass that writes one comment PER KEY
+  /// paid that fetch per key: reader, 2026-09-15, "Generating comments taking very long time caused
+  /// by `markDirty()` inside `setGeneratedComment`".
+  private func markDirty(records changed: Bool = true) {
     isDirty = true
-    // The sidebar badge and the status line COUNT records, so the count is rebuilt here — where
-    // they change — and never on a render (2026-09-15: the render-path walk cost seconds of CPU
-    // per frame on a real project, which is what pegged a core while a run worked).
+    guard changed else { return }
     recountNeedsReviewKeys()
   }
 

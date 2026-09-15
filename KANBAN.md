@@ -400,3 +400,25 @@ with a failed app target). Each wall was measured, not guessed:
   - [x] Probes: the fixture probe still 9/9 (the host path is untouched), and every real-tree run
         logged under /tmp/dev-scan-probe/playgra-vijo-*.log.
   - [x] The reader's own tree was never left changed: the cold-run backup was restored.
+
+### A comment is not record state (2026-09-15)
+
+Reader: "Generating comments taking very long time caused by `markDirty()` inside
+`setGeneratedComment`." Mine, and worse than one wasted fetch: the needs-review count I moved into
+`markDirty()` is rebuilt from a FETCH of the whole project — measured on a copy of the reader's store,
+project `Dev` (26 156 records): **0.682 s and +34.9 MB per call** — and `setGeneratedComment` marks the
+store dirty once per KEY, while the on-device pass in `ScanController` writes one comment per key. A
+pass over 1000 keys therefore paid ~680 s of fetching, for a count a COMMENT cannot change: comments
+are catalog data, and the count asks which keys hold a filled `needs_review` RECORD.
+
+  - [x] `markDirty(records:)` — `false` for a mutation that only touches the catalog. Passed by
+        `setGeneratedComment` and by `setPluralValue`'s SOURCE branch ("authored text: straight to
+        the file, no records"). Every other call site still rebuilds the count, so the badge keeps
+        following runs, merges, deletes and confirms.
+  - [x] Verified the classification by reading all fourteen `markDirty` call sites rather than
+        guessing: the merge/delete/confirm/publish paths genuinely change records and still pay it.
+  - [ ] OPEN, and named rather than fixed: that 0.682 s is still paid ONCE per user action that does
+        change records — a confirm, a merge, a run's publish — on the main actor. On the largest
+        project it will be seconds. The fix for that is a recount on a background context with the
+        count published back (a badge may lag a tick); it is a new concurrency path, so it waits for
+        the reader's word rather than arriving unasked.
