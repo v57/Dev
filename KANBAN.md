@@ -236,3 +236,10 @@ animation thirty seconds out and the transaction stream never drained.
         candidate is structural and NAMED rather than fixed: a page re-derives its whole page set
         from `run.batches` on each published burst, so a run with hundreds of batches pays O(all
         items) per burst. That needs the trace to say so before it is worth the refactor.
+
+### The stagger is gone entirely (2026-09-15)
+
+Reader: "Disable that delay as we are already updating in realtime." Right — the wave was there to
+make a batch's marks land in reading order, and rows now land one at a time as the model writes them.
+The four row marks animate on the MARK's colour and carry no delay, and `Translation.stagger` is
+deleted rather than left unused. `grep '\.delay('` over the app returns nothing. Commit `ca7f0f7`.

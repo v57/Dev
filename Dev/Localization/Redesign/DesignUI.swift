@@ -52,18 +52,6 @@ extension Translation {
     }
   }
 
-  /// How long a row's mark waits before settling, by its position in the list — the wave that
-  /// makes a page's marks land in READING order rather than all at once.
-  ///
-  /// BOUNDED, and that bound is the whole point (reader, 2026-09-15: "still uses 100% cpu while
-  /// translation is working", with the sample showing 87,6 % of the core inside SwiftUI's own view
-  /// graph updates). The stagger used to be `Double(index) / 10` with NO ceiling, and the modifier
-  /// it hangs off animated on ANY change to the row's value: a row 300 rows down scheduled its
-  /// animation THIRTY SECONDS out, and since rows land continuously during a run, transactions kept
-  /// arriving — a permanently busy animation pipeline, which is exactly the shape the sample showed.
-  /// Twelve rows is the longest wave a reader notices; past it a landing row marks at once.
-  static func stagger(_ index: Int) -> Double { min(Double(index), 12) / 10 }
-
   /// The LAST row of a page's list the run has ANSWERED — written or failed (8.1: the mark
   /// belongs to the row, never to its batch).
   ///
@@ -164,7 +152,7 @@ extension Translation.VerticalTranslate {
                 StringView(value: operation.isCompleted ? item.target : item.source)
                   .fontWeight(operation.isCompleted ? .semibold : .regular)
                   .contentTransition(.numericText())
-              }.foregroundStyle(mark(item).color).animation(.smooth.delay(Double(index) / 10), value: item)
+              }.foregroundStyle(mark(item).color).animation(.smooth, value: mark(item).color)
                 .id(index)
             }
           }.padding(32)

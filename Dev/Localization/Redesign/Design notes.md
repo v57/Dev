@@ -1044,9 +1044,13 @@ The operation classes know what to send, nothing knows how to send it.
                      it lands — with a stagger of `index / 10` and NO ceiling, so a row
                      300 rows down scheduled its animation thirty seconds out and, with
                      rows landing continuously, transactions never stopped arriving.
-                     The animation now hangs on the MARK's own colour and the stagger is
-                     CLAMPED (`Translation.stagger`, twelve rows), so a burst of rows
-                     settles as one short wave and never as a standing animation.
+                     The animation now hangs on the MARK's own colour and carries NO
+                     DELAY AT ALL (reader, same day: "Disable that delay as we are
+                     already updating in realtime"). The wave existed to make a batch's
+                     marks land in reading order — and with rows landing one at a time as
+                     the model writes them (5.12), there is nothing left for a wave to
+                     pace: each landing settles on its own, at once, and no transaction
+                     is ever scheduled into the future.
                      WHAT A PAGE PAYS for that mark is measured by what it reads: a
                      page re-derives its WHOLE page set from `run.batches` on every
                      change of it, so publishing once per row cost one full page

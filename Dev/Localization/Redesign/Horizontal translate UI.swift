@@ -298,7 +298,7 @@ extension Translation.HorizontalTranslate {
                     if let tag = tag(outcome) {
                       Text(tag).font(.caption2).foregroundStyle(.tertiary)
                     }
-                  }.animation(.smooth.delay(Translation.stagger(index)), value: mark(item).color)
+                  }.animation(.smooth, value: mark(item).color)
                 }
               }
               // The row's own colour, taken from the row's own mark: the batch's colour is

@@ -115,9 +115,9 @@ extension Translation.VerticalLearn {
                 }
               }.foregroundStyle(mark(item).color)
               // The mark settles when the MARK changes — never on a change to the row's value or
-              // the phase, which a run moves on every row it lands (8.1) — and the wave is bounded
-              // (`Translation.stagger`).
-              .animation(.smooth.delay(Translation.stagger(index)), value: mark(item).color)
+              // the phase, which a run moves on every row it lands (8.1) — and it does so at once:
+              // rows land in realtime, so there is no wave to pace.
+              .animation(.smooth, value: mark(item).color)
                 .id(index)
             }
           }.padding(32)
