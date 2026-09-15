@@ -64,6 +64,31 @@ nonisolated enum ScanPlatform: String, Sendable {
 /// does: the SDK/target triple, the platform's product + modulemap directories,
 /// and the compilation conditions its Debug products were built with.
 nonisolated struct ScanToolchain: Sendable {
+
+  /// The compiler's own version line — the identity a cached dependency build is valid under.
+  ///
+  /// A `.swiftmodule` is readable only by a compiler that can read its format, and the diagnostic
+  /// that follows a mismatch names nothing a reader can act on: "module 'Nuke' was compiled with a
+  /// different version of Swift: '…0.33.1'; rebuild 'Nuke' and try again". The dependency cache in
+  /// `ScanProjectPackages` was keyed by revision and triple alone, so a TOOLCHAIN update left those
+  /// builds stale and every project target importing them failed — playgra's `Vijo`, the app the
+  /// scan exists for, went to zero keys while its own sources were untouched (reader, 2026-09-15:
+  /// "Make Vijo target compile. It's the most important one").
+  ///
+  /// Measured on that machine: the cached modules were written Sep 11 by `swiftlang-6.4.0.33.1`,
+  /// the toolchain in use is `swiftlang-6.4.0.34.1` — one build apart, and unreadable across.
+  static func compilerVersion() -> String {
+    if let cachedCompilerVersion { return cachedCompilerVersion }
+    let result = ScanShell.swiftc(
+      ["-version"], currentDirectory: URL(fileURLWithPath: NSTemporaryDirectory()), timeout: 120)
+    let text = result.stdout + result.stderr
+    let version = text.split(separator: "\n").first.map(String.init) ?? text
+    cachedCompilerVersion = version
+    return version
+  }
+
+  /// The once-read compiler version (`compilerVersion`).
+  private static var cachedCompilerVersion: String?
   var platform: ScanPlatform
   /// `-sdk` path for a cross-platform build; nil for the host.
   var sdkPath: String?
@@ -195,6 +220,7 @@ nonisolated enum ScanPlatformResolver {
     }
     return false
   }
+
 
   /// True when the manifest DECLARES an iOS platform — `platforms: [.iOS(.v17), …]`.
   ///

@@ -128,6 +128,7 @@ nonisolated enum ScanProjectPackages {
       if let marker = readMarker(slot), marker.format == BuildMarker.currentFormat,
          marker.revision == pin.revision,
          marker.triple == triple,
+         marker.swiftVersion == ScanToolchain.compilerVersion(),
          FileManager.default.fileExists(
           atPath: marker.productsDirectory) {
         includeDirs.append(marker.productsDirectory)
@@ -181,6 +182,7 @@ nonisolated enum ScanProjectPackages {
       writeMarker(
         BuildMarker(
           revision: pin.revision, triple: triple, productsDirectory: productsDirectory,
+          swiftVersion: ScanToolchain.compilerVersion(),
           modules: wanted, targets: packageModules.targets,
           moduleMapFiles: searchPaths.moduleMapFiles),
         slot: slot)
@@ -198,8 +200,15 @@ nonisolated enum ScanProjectPackages {
   // MARK: - build cache
 
   /// What a previous build of one dependency wrote, so a later scan can reuse
-  /// it. The build is keyed by revision + triple: a different pin or platform
-  /// builds again.
+  /// it. The build is keyed by revision + triple + THE COMPILER: a different pin, platform or
+  /// toolchain builds again.
+  ///
+  /// The compiler is the one that was missing, and it is not fussiness: a `.swiftmodule` is
+  /// readable only by a compiler that can read its format, and an Xcode/Swift update leaves every
+  /// cached module stale — the reader's `Vijo` lost every key to "module 'Nuke' was compiled with a
+  /// different version of Swift", with its own sources untouched (2026-09-15). A marker written
+  /// before this field existed decodes as nil, which is not equal to any version, so it rebuilds
+  /// once.
   private struct BuildMarker: Codable {
     /// Bumped whenever the way products/maps are collected changes: an old
     /// marker would otherwise hand out search paths that miss whatever the new
@@ -209,6 +218,8 @@ nonisolated enum ScanProjectPackages {
     var revision: String
     var triple: String
     var productsDirectory: String
+    /// `ScanToolchain.compilerVersion()` of the build that wrote these products.
+    var swiftVersion: String?
     var modules: [String]
     var targets: [String] = []
     var moduleMapFiles: [String]
