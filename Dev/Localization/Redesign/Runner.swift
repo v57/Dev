@@ -486,6 +486,13 @@ extension Translation {
     private var slotRecords: [SlotKey: TranslationRecord]?
     /// The open catalog's rows by key: what every result is applied by (1.2).
     private var rowPositions: [String: Int] = [:]
+    /// How often a batch may publish its mid-flight state to the run's own copy. A page re-derives
+    /// its whole page set per change, so this is the difference between one page mapping per burst
+    /// of rows and one per row (5.12, `publish`); it is well below what a reader notices.
+    private static let publishWindow: TimeInterval = 0.15
+    /// When the run last published a batch's mid-flight state.
+    private var lastPublish: Date = .distantPast
+
     /// The word a fold answers when the document already covers every lesson.
     private static let noChange = "NO_CHANGE"
     /// Who a value memory answered with is attributed to, in the record the app's own
@@ -1181,8 +1188,9 @@ extension Translation {
           raw += chunk
           let closed = perRow ? scanner.feed(chunk) : []
           guard !closed.isEmpty else { continue }
-          retain(raw, of: batch, in: run)
           for row in closed { applyRow(row, of: &batch, in: run) }
+          // What just landed, onto the run's own copy — coalesced (see `publish`).
+          publish(batch, raw: raw, in: run)
         }
       } catch is CancellationError {
         throw CancellationError()
@@ -1548,7 +1556,6 @@ extension Translation {
       let body = Validator.decode(row.text, for: item, language: language)
       guard Validator.defects(body, of: item).isEmpty else {
         batch.items[position].phase = .failed
-        publish(.failed, at: position, of: batch, in: run)
         fail(
           run, key: item.key, language: language,
           message: "no usable translation: \(Validator.describe(row.text, of: item, language: language))",
@@ -1556,25 +1563,31 @@ extension Translation {
         return
       }
       apply([row.id: row.text], of: &batch, in: run)
-      // The row is written: say so ON THE RUN's copy, which is the one a page reads. Without this
-      // the page would keep showing a row the model has finished, and saved, as one still waiting
-      // (reader, 2026-09-15: rows are marked as they land, not when the batch ends).
-      publish(batch.items[position].phase, at: position, of: batch, in: run)
     }
 
-    /// Publishes ONE item's phase on the RUN's own copy of its batch, the moment it is decided.
+    /// Publishes what this batch has decided onto the RUN's own copy of it — every item's phase and
+    /// the reply as far as it has arrived — so a page marks rows as they land instead of when the
+    /// batch ends (reader, 2026-09-15).
     ///
-    /// `performOne` works on a VALUE of its batch and only writes it back when it returns, so
-    /// everything decided mid-stream would stay invisible to every reader until the whole batch
-    /// ended — a page would show a dimmed "waiting" symbol for rows that are already written and
-    /// saved, and a reader watching a 33-row request would see nothing land until the last row
-    /// did. The request and the reply are published the same way and for the same reason
-    /// (`retain`, 5.12).
-    private func publish(_ phase: Run.Phase, at position: Int, of batch: Run.Batch, in run: Run) {
+    /// COALESCED to at most one change per `publishWindow`, because the cost is on the far side:
+    /// `performOne` works on a VALUE of its batch, so nothing is visible to a reader until it is
+    /// written here, and a page re-derives its WHOLE page set from `run.batches` on every change —
+    /// publishing 33 times for a 33-row request would cost 33 full page mappings for a batch whose
+    /// rows landed in one burst. The window is below what a reader notices, and a FAILURE is never
+    /// delayed: it is the row a reader is looking for. The batch's own end writes the whole value
+    /// back regardless, so nothing here can lose a phase.
+    private func publish(_ batch: Run.Batch, raw: String, in run: Run) {
+      let failed = batch.items.contains { $0.phase == .failed }
+      let now = Date.now
+      guard failed || now.timeIntervalSince(lastPublish) >= Self.publishWindow else { return }
       guard let index = run.batches.firstIndex(where: { $0.id == batch.id }),
-        run.batches[index].items.indices.contains(position)
+        run.batches[index].items.count == batch.items.count
       else { return }
-      run.batches[index].items[position].phase = phase
+      lastPublish = now
+      for position in batch.items.indices {
+        run.batches[index].items[position].phase = batch.items[position].phase
+      }
+      run.batches[index].rawReply = raw.isEmpty ? nil : raw
     }
 
     /// One slot write, gathered before anything is written so a batch applies as one
