@@ -221,7 +221,7 @@ animation thirty seconds out and the transaction stream never drained.
 
   - [x] The mark animates on the MARK's own colour, not on the row's value.
   - [x] The stagger is CLAMPED: `Translation.stagger` = twelve rows (`min(index, 12) / 10`), the
-        longest wave a reader notices. Commit `TBD`, notes 8.1.
+        longest wave a reader notices. Commit `cb922a6`, notes 8.1.
   - [x] `grep '\.delay('` over the app now shows those four sites and no unbounded stagger anywhere
         else — this class is closed.
   - [ ] The reader re-samples while a run works to confirm; the deeper frames of the sample (the
