@@ -242,4 +242,4 @@ animation thirty seconds out and the transaction stream never drained.
 Reader: "Disable that delay as we are already updating in realtime." Right — the wave was there to
 make a batch's marks land in reading order, and rows now land one at a time as the model writes them.
 The four row marks animate on the MARK's colour and carry no delay, and `Translation.stagger` is
-deleted rather than left unused. `grep '\.delay('` over the app returns nothing. Commit `ca7f0f7`.
+deleted rather than left unused. `grep '\.delay('` over the app returns nothing. Commits `7774124` (the delay) and `cb922a6` (the clamp it replaces).
