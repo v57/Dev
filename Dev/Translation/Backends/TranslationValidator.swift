@@ -52,9 +52,12 @@ nonisolated enum TranslationValidator {
   ///
   /// Covers printf-style specifiers (`%@`, `%lld`, `%1$@`, `%.2f`) and
   /// brace-style tokens (`{name}`, `{{name}}`). A bare percent such as
-  /// "50% off" is not a match because a letter or `@` must follow.
+  /// "50% off" is not a match because a conversion must follow — and printf's SPACE flag is not
+  /// honoured, so a space against the percent keeps prose out of the list (see `Runner.swift`'s
+  /// own copy of this pattern for the reasoning). A specifier ends at its CONVERSION, so `%lldd`
+  /// is `%lld` followed by a literal `d`, not one token.
   static func placeholders(_ text: String) -> [String] {
-    matches(#"%(\d+\$)?[@a-zA-Z][a-zA-Z0-9]*"#, in: text)
+    matches(#"%(?:\d+\$)?[-+#0']*(?:\d+|\*)?(?:\.(?:\d+|\*))?(?:hh|h|ll|l|q|z|j|t|L|w)?[diouxXeEfgGaAcCsSpn@]"#, in: text)
       + matches(#"\{\{?[A-Za-z_][A-Za-z0-9_]*\}?\}"#, in: text)
   }
 

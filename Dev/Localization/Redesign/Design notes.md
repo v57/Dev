@@ -551,6 +551,24 @@ The operation classes know what to send, nothing knows how to send it.
     is empty") — the placeholder check would have called it "changed", which is not what
     happened — and a form whose source text is empty requires nothing.
 
+    A SPECIFIER ENDS AT ITS CONVERSION (reader, 2026-09-15: "`%lldd` translated as `%lld d`"
+    was rejected). The tokenizer ended a specifier with a greedy `[a-zA-Z0-9]*`, so a letter
+    written AGAINST the specifier in the source came back glued to it: `%lldd`, `%lldh`,
+    `%lldm` — a number with its unit, which is how a catalog spells "5d"/"5h"/"5m" — read as
+    ONE token, while the same specifier with a space in the answer read as `%lld`. Two
+    different lists over a placeholder that was never lost, and the row rejected. The
+    pattern now parses a real printf specifier (`%`, optional positional index, flags, width,
+    precision, length modifier, conversion) and stops at the conversion, so everything after
+    it is LITERAL TEXT on both sides — which is what printf says it is. Two consequences,
+    both intended: a specifier with a precision or a width (`%.2f`, `%5.2f`, `%*d`) is now
+    VISIBLE to the check — the old pattern required a letter straight after the `%`, so such
+    a specifier was no token at all and a translation that dropped one was accepted (measured:
+    the greedy pattern reads `%.2f` as nothing) — and a letter stuck after a specifier in the
+    ANSWER is literal too, so `%@s` no longer reads as a changed placeholder. The SPACE flag
+    is deliberately NOT honoured: prose beats it ("50% off" would read as `% o`). Both copies
+    of the pattern — this one and `TranslationValidator`'s, which the old pipeline and the
+    browser's own verify use — carry the same text, byte for byte.
+
     NO ECHO GUARD (reader, 2026-09-14: "Remove that guard. Start is start in danish,
     symbol is symbol"). An answer IDENTICAL to its source is not a defect and is no
     longer rejected: a target language reuses a source word far more often than any

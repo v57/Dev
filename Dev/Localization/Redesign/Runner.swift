@@ -2325,14 +2325,30 @@ extension Translation {
 
     /// Placeholder / format-specifier tokens, in order of appearance: printf-style
     /// specifiers (`%@`, `%lld`, `%1$@`, `%.2f`) and brace-style tokens (`{name}`,
-    /// `{{name}}`). A bare percent such as "50% off" is not a match because a letter
-    /// or `@` must follow. The two patterns are `TranslationValidator`'s own.
+    /// `{{name}}`). A bare percent such as "50% off" is not a match because a
+    /// conversion must follow. The two patterns are `TranslationValidator`'s own.
+    ///
+    /// A SPECIFIER ENDS AT ITS CONVERSION CHARACTER (reader, 2026-09-15: "`%lldd`
+    /// translated as `%lld d`" was rejected because the verifier read the source as ONE
+    /// token). The pattern it replaces ended in a greedy `[a-zA-Z0-9]*`, so every letter
+    /// stuck to the specifier in the source — `%lldd`, `%lldh`, `%lldm` (a number with a
+    /// unit written against it, which is how a catalog actually spells durations) — came
+    /// back as one token, while the same specifier with a space in the answer came back
+    /// as `%lld`: two different lists, and a row rejected for a placeholder that was
+    /// never lost. Letters after a conversion are LITERAL TEXT on both sides, which is
+    /// what printf says they are.
+    ///
+    /// ONE FLAG IS DELIBERATELY NOT HONOURED: printf's SPACE flag (`% d`, a signed number with a
+    /// leading space). Prose beats it — "50% off" and "100% sure" would tokenize as `% o` and
+    /// `% s`, which the check was written never to see, and a catalog writes `%d` when it means a
+    /// number. A specifier with a space against it is therefore still no token, exactly as it was
+    /// before this change (probed: both readings).
     ///
     /// `StringBody.placeholders` in `Design.swift` is the container's accessor and is
     /// still a stub; the validator tokenizes here, once, and both sides of every
     /// comparison go through this function.
     static func placeholders(in text: String) -> [String] {
-      matches(#"%(\d+\$)?[@a-zA-Z][a-zA-Z0-9]*"#, in: text)
+      matches(#"%(?:\d+\$)?[-+#0']*(?:\d+|\*)?(?:\.(?:\d+|\*))?(?:hh|h|ll|l|q|z|j|t|L|w)?[diouxXeEfgGaAcCsSpn@]"#, in: text)
         + matches(#"\{\{?[A-Za-z_][A-Za-z0-9_]*\}?\}"#, in: text)
     }
 

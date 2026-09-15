@@ -273,3 +273,31 @@ moment it closes, but with `saving: false`, and the BATCH's end pays the one sav
         one save per row lost at most one row. This is the one place the reader's earlier choice
         ("one store write per row") was traded away — the per-row WRITE and the realtime marks are
         unchanged; only the flush is batched.
+
+### `%lldd` is `%lld` and a `d` (2026-09-15)
+
+Reader: "`%lldd` translated as `%lld d` but looks like verifier sees that number value as `%lldd`
+instead of `%lld` + `d`. Same for %lldh, %lldm and other sticked values." It did, in both copies of
+the pattern (`Runner.swift`'s validator and `TranslationValidator`'s, which the old pipeline and the
+browser's own verify use):
+
+    %(\d+\$)?[@a-zA-Z][a-zA-Z0-9]*        ->  %lldd as ONE token
+
+The tail was greedy, so every letter written against a specifier joined it. Now the pattern parses a
+real printf specifier and stops at the conversion:
+
+    %(?:\d+\$)?[-+#0']*(?:\d+|\*)?(?:\.(?:\d+|\*))?(?:hh|h|ll|l|q|z|j|t|L|w)?[diouxXeEfgGaAcCsSpn@]
+
+  - [x] Both copies fixed, and the two pattern lines are byte-identical (checked).
+  - [x] Probe `/tmp/dev-placeholder-probe`: **64/64 GREEN** (32 existing + 32 new about the
+        specifier's end). The control has teeth: `STUCK=1 bash sync.sh` puts the greedy pattern back
+        and the run drops to **47/64**, failing exactly the sticky cases (`%lldd` reads as `%lldd`)
+        and "the answer's spacing changes nothing" (["%lldd"] vs ["%lld"]). The older `RED=1` control
+        still fails its own checks.
+  - [x] Found while probing, and fixed by the same parse: a specifier with a precision or a width
+        (`%.2f`, `%5.2f`, `%*d`, `%02lld`, `%-5d`) was NO TOKEN AT ALL before — the old pattern
+        required a letter straight after the `%` — so a translation that dropped one was accepted.
+  - Behaviour change, stated: a letter stuck after a specifier in the ANSWER (`%@s`) is now literal
+        text too, so it no longer reads as a changed placeholder; and printf's space flag is
+        deliberately not honoured, because "50% off" and "100% sure" are prose and `% o`/`% s` are
+        not specifiers a catalog writes.
