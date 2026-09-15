@@ -301,3 +301,20 @@ real printf specifier and stops at the conversion:
         text too, so it no longer reads as a changed placeholder; and printf's space flag is
         deliberately not honoured, because "50% off" and "100% sure" are prose and `% o`/`% s` are
         not specifiers a catalog writes.
+
+### The reader turned animations off (2026-09-15)
+
+Reader: "I have disabled animations. Update comments if needed and commit." The four redesign pages
+lost the row marks' `.animation(.smooth, value: mark(item).color)` and the `withAnimation` wrappers
+the design FIXTURES used; the column page (DesignUI) also lost its
+`contentTransition(.symbolEffect)`.
+
+  - [x] Comments now say what the code does: a mark carries NO animation, and the history that led
+        there (unbounded stagger -> clamped wave -> no delay -> nothing) is in notes 8.1, because
+        that history is why the shape is what it is.
+  - [x] What is still animated, named in 8.1: the pager's pacing scroll, the overlay's presentation,
+        and `contentTransition(.symbolEffect)` on the learn/prelearn/row-pass rows.
+  - [ ] OPEN: that last one is uneven. The column page has no symbol transition and the other three
+        do, because the reader's edit removed it in DesignUI only. Left as they wrote it — one line
+        per page either way — and flagged rather than silently evened out.
+  - [x] Build green. The commit carries the reader's staged change plus the comment updates.

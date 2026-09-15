@@ -298,7 +298,7 @@ extension Translation.HorizontalTranslate {
                     if let tag = tag(outcome) {
                       Text(tag).font(.caption2).foregroundStyle(.tertiary)
                     }
-                  }.animation(.smooth, value: mark(item).color)
+                  }
                 }
               }
               // The row's own colour, taken from the row's own mark: the batch's colour is
@@ -312,7 +312,11 @@ extension Translation.HorizontalTranslate {
             }
           }.padding(32)
             .scrollTargetLayout()
-        }.contentTransition(.symbolEffect)
+        }
+          // The ONE transition left on a page's rows (the reader turned animations off, 2026-09-15):
+          // a mark's SF Symbol still swaps with its effect, which is a per-CHANGE animation on the
+          // mark itself rather than the standing wave 8.1 profiled.
+          .contentTransition(.symbolEffect)
           .scrollPosition(id: $rowPosition, anchor: .center)
           .task(id: Translation.lastLanded(in: operation.items)) {
             // The list follows the ROW that just landed, centred (reader, 2026-09-15): a row is
@@ -655,32 +659,28 @@ extension Translation.HorizontalTranslate {
         .task {
           do {
             for i in 0..<operations.count {
-              withAnimation {
-                index = i
-              }
+              index = i
               try await Task.sleep(for: .seconds(2))
-              withAnimation {
-                let rewritten = operations[i].items.map { $0.resolve($0.source.reversed()) }
-                journal += Test.writes(from: operations[i].items, to: rewritten)
-                // The ROWS' own state, the way the runner leaves it (`Runner.settle`): a batch
-                // that wrote its rows applied them one by one, and the batch this fixture marks
-                // failed wrote nothing, so its rows carry the failure themselves — which is what
-                // the page marks, and never the batch's own flag.
-                let failed = operations[i].isFailed
-                operations[i].items = rewritten.map { item in
-                  var item = item
-                  item.phase = failed ? .failed : .applied
-                  return item
-                }
-                operations[i].isCompleted = true
-                // The batch went out and was answered: its page's right half fills in the same
-                // way a live run fills it in — the input when the request is built
-                // (`Run.Batch.request`), then the reply when the call returns
-                // (`Run.Batch.rawReply`).
-                exchanges[i] = Translation.Run.Exchange(
-                  request: Test.requests[i],
-                  reply: Translation.Run.Reply(raw: Test.answers[i], phase: .applied))
+              let rewritten = operations[i].items.map { $0.resolve($0.source.reversed()) }
+              journal += Test.writes(from: operations[i].items, to: rewritten)
+              // The ROWS' own state, the way the runner leaves it (`Runner.settle`): a batch
+              // that wrote its rows applied them one by one, and the batch this fixture marks
+              // failed wrote nothing, so its rows carry the failure themselves — which is what
+              // the page marks, and never the batch's own flag.
+              let failed = operations[i].isFailed
+              operations[i].items = rewritten.map { item in
+                var item = item
+                item.phase = failed ? .failed : .applied
+                return item
               }
+              operations[i].isCompleted = true
+              // The batch went out and was answered: its page's right half fills in the same
+              // way a live run fills it in — the input when the request is built
+              // (`Run.Batch.request`), then the reply when the call returns
+              // (`Run.Batch.rawReply`).
+              exchanges[i] = Translation.Run.Exchange(
+                request: Test.requests[i],
+                reply: Translation.Run.Reply(raw: Test.answers[i], phase: .applied))
               try await Task.sleep(for: .seconds(1))
             }
           } catch { }

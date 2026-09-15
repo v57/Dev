@@ -152,12 +152,12 @@ extension Translation.VerticalTranslate {
                 StringView(value: operation.isCompleted ? item.target : item.source)
                   .fontWeight(operation.isCompleted ? .semibold : .regular)
                   .contentTransition(.numericText())
-              }.foregroundStyle(mark(item).color).animation(.smooth, value: mark(item).color)
+              }.foregroundStyle(mark(item).color)
                 .id(index)
             }
           }.padding(32)
             .scrollTargetLayout()
-        }.contentTransition(.symbolEffect)
+        }
           .scrollPosition(id: $rowPosition, anchor: .center)
           .task(id: Translation.lastLanded(in: operation.items)) {
             // The list follows the row that just landed, centred: it is the row the model has
@@ -483,31 +483,27 @@ extension Translation.VerticalTranslate {
         .task {
           do {
             for i in 0..<operations.count {
-              withAnimation {
-                index = i
-              }
+              index = i
               try await Task.sleep(for: .seconds(2))
-              withAnimation {
-                operations[i].items = operations[i].items.map { $0.resolve($0.source.reversed()) }
-                // The ROWS' own state, the way the runner leaves it (`Runner.settle`): a batch
-                // that wrote its rows applied them one by one, and the batch this fixture marks
-                // failed wrote nothing, so its rows carry the failure themselves — which is what
-                // the page marks, and never the batch's own flag.
-                let failed = operations[i].isFailed
-                operations[i].items = operations[i].items.map { item in
-                  var item = item
-                  item.phase = failed ? .failed : .applied
-                  return item
-                }
-                operations[i].isCompleted = true
-                // The batch went out and was answered: its page's right half fills in the same
-                // way a live run fills it in — the input when the request is built
-                // (`Run.Batch.request`), then the reply when the call returns
-                // (`Run.Batch.rawReply`).
-                exchanges[i] = Translation.Run.Exchange(
-                  request: Test.requests[i],
-                  reply: Translation.Run.Reply(raw: Test.answers[i], phase: .applied))
+              operations[i].items = operations[i].items.map { $0.resolve($0.source.reversed()) }
+              // The ROWS' own state, the way the runner leaves it (`Runner.settle`): a batch
+              // that wrote its rows applied them one by one, and the batch this fixture marks
+              // failed wrote nothing, so its rows carry the failure themselves — which is what
+              // the page marks, and never the batch's own flag.
+              let failed = operations[i].isFailed
+              operations[i].items = operations[i].items.map { item in
+                var item = item
+                item.phase = failed ? .failed : .applied
+                return item
               }
+              operations[i].isCompleted = true
+              // The batch went out and was answered: its page's right half fills in the same
+              // way a live run fills it in — the input when the request is built
+              // (`Run.Batch.request`), then the reply when the call returns
+              // (`Run.Batch.rawReply`).
+              exchanges[i] = Translation.Run.Exchange(
+                request: Test.requests[i],
+                reply: Translation.Run.Reply(raw: Test.answers[i], phase: .applied))
               try await Task.sleep(for: .seconds(1))
             }
           } catch { }

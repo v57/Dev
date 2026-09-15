@@ -104,15 +104,21 @@ extension Translation.VerticalPrelearn {
                   }
                 }
               }.foregroundStyle(mark(item).color)
-              // The mark settles when the MARK changes — never on a change to the row's value or
-              // the phase, which a run moves on every row it lands (8.1) — and it does so at once:
-              // rows land in realtime, so there is no wave to pace.
-              .animation(.smooth, value: mark(item).color)
+              // THE MARK CARRIES NO ANIMATION (reader, 2026-09-15: "I have disabled
+              // animations"): a landing row's mark is a STATE, and it reads as one the moment it
+              // lands. The animation it had — first `value: item` with an UNBOUNDED `index / 10`
+              // stagger, then the mark's colour on a clamped wave, then that wave with the delay
+              // dropped — is gone with the rest of them, because each change was a SwiftUI
+              // transaction, and a run moves this row on every landing (8.1).
                 .id(index)
             }
           }.padding(32)
             .scrollTargetLayout()
-        }.contentTransition(.symbolEffect)
+        }
+          // The ONE transition left on a page's rows (the reader turned animations off, 2026-09-15):
+          // a mark's SF Symbol still swaps with its effect, which is a per-CHANGE animation on the
+          // mark itself rather than the standing wave 8.1 profiled.
+          .contentTransition(.symbolEffect)
           .scrollPosition(id: $rowPosition, anchor: .center)
           .task(id: Translation.lastLanded(in: operation.items)) {
             // The list follows the row that just landed, centred (reader, 2026-09-15): rows are
@@ -325,31 +331,27 @@ extension Translation.VerticalPrelearn {
         .task {
           do {
             for i in 0..<operations.count {
-              withAnimation {
-                index = i
-              }
+              index = i
               try await Task.sleep(for: .seconds(2))
-              withAnimation {
-                operations[i].items = operations[i].items.map { $0.resolve($0.source.reversed()) }
-                // The ROWS' own state, the way the runner leaves it (`Runner.settle`): a batch
-                // that wrote its rows applied them one by one, and the batch this fixture marks
-                // failed wrote nothing, so its rows carry the failure themselves — which is what
-                // the page marks, and never the batch's own flag.
-                let failed = operations[i].isFailed
-                operations[i].items = operations[i].items.map { item in
-                  var item = item
-                  item.phase = failed ? .failed : .applied
-                  return item
-                }
-                operations[i].isCompleted = true
-                // The batch went out and was answered: its page's right half fills in the same
-                // way a live run fills it in — the input when the request is built
-                // (`Run.Batch.request`), then the reply when the call returns
-                // (`Run.Batch.rawReply`).
-                exchanges[i] = Translation.Run.Exchange(
-                  request: Test.requests[i],
-                  reply: Translation.Run.Reply(raw: Test.answers[i], phase: .applied))
+              operations[i].items = operations[i].items.map { $0.resolve($0.source.reversed()) }
+              // The ROWS' own state, the way the runner leaves it (`Runner.settle`): a batch
+              // that wrote its rows applied them one by one, and the batch this fixture marks
+              // failed wrote nothing, so its rows carry the failure themselves — which is what
+              // the page marks, and never the batch's own flag.
+              let failed = operations[i].isFailed
+              operations[i].items = operations[i].items.map { item in
+                var item = item
+                item.phase = failed ? .failed : .applied
+                return item
               }
+              operations[i].isCompleted = true
+              // The batch went out and was answered: its page's right half fills in the same
+              // way a live run fills it in — the input when the request is built
+              // (`Run.Batch.request`), then the reply when the call returns
+              // (`Run.Batch.rawReply`).
+              exchanges[i] = Translation.Run.Exchange(
+                request: Test.requests[i],
+                reply: Translation.Run.Reply(raw: Test.answers[i], phase: .applied))
               try await Task.sleep(for: .seconds(1))
             }
           } catch { }

@@ -1073,20 +1073,35 @@ The operation classes know what to send, nothing knows how to send it.
                      No pacing here, unlike the batch pager: a row that has landed is
                      already written, so there is nothing to wait for — a page opened
                      mid-batch lands on the newest one at once.
-                     A MARK SETTLES WITH A BOUNDED WAVE (reader, 2026-09-15, from a
-                     Time Profiler sample: 87,6 % of the core inside SwiftUI's own view
-                     graph updates while a run was working). Each row's mark animated on
-                     ANY change to the row's value — which a run now moves on every row
-                     it lands — with a stagger of `index / 10` and NO ceiling, so a row
-                     300 rows down scheduled its animation thirty seconds out and, with
-                     rows landing continuously, transactions never stopped arriving.
-                     The animation now hangs on the MARK's own colour and carries NO
-                     DELAY AT ALL (reader, same day: "Disable that delay as we are
-                     already updating in realtime"). The wave existed to make a batch's
-                     marks land in reading order — and with rows landing one at a time as
-                     the model writes them (5.12), there is nothing left for a wave to
-                     pace: each landing settles on its own, at once, and no transaction
-                     is ever scheduled into the future.
+                     THE MARKS CARRY NO ANIMATION (reader, 2026-09-15: "I have
+                     disabled animations"). It took three passes to get there and the
+                     history is the reason the design is what it is:
+                       · first the mark animated on ANY change to the row's value, with a
+                         stagger of `index / 10` and NO ceiling — a row 300 rows down
+                         scheduled its animation thirty seconds out, and with rows landing
+                         continuously (5.12) transactions never stopped arriving. A Time
+                         Profiler sample put 87,6 % of a working core inside SwiftUI's own
+                         view graph updates, which is that backlog and nothing else;
+                       · then the animation hung on the MARK's own colour with the stagger
+                         clamped (`Translation.stagger`, twelve rows) — the wave a batch's
+                         marks used to land in, bounded;
+                       · then the delay was dropped (reader: "Disable that delay as we are
+                         already updating in realtime"): a wave paces marks that arrive
+                         together, and rows arrive one at a time, so each landing settled on
+                         its own;
+                       · and now there is no animation at all, because every one of those
+                         changes was still a SwiftUI transaction and a run moves this row on
+                         every landing.
+                     A mark is a STATE. It reads as one the moment it lands.
+                     What is still animated on these pages is deliberate and small: the
+                     pager's own pacing scroll (`withAnimation(.smooth)`, one per index
+                     change, 8.1's pacing budget), the overlay's presentation
+                     (`WorkspaceView`, one per open/close), and — on the learn, prelearn and
+                     row-pass pages — `contentTransition(.symbolEffect)` on the rows, so a
+                     mark's SF Symbol still swaps with its effect. That last one is a
+                     per-CHANGE transition on the mark itself, not a standing wave; the
+                     column page (DesignUI) no longer carries it, which is an INCONSISTENCY
+                     the reader has been told about rather than quietly evened out.
                      WHAT A PAGE PAYS for that mark is measured by what it reads: a
                      page re-derives its WHOLE page set from `run.batches` on every
                      change of it, so publishing once per row cost one full page
