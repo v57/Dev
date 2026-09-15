@@ -52,6 +52,17 @@ LANDED COMMITS (local — not pushed)
   real streamed batch against Command Code — the vendor's docs do confirm `stream: true`
   and `stream_options.include_usage`, but no run has been watched on the live provider.
 
+  2026-09-15 (later): 422242c "Redesign: the placeholder check asks each form, so a six-form
+  language passes" — the reader's real `ars` pair (request.txt / response.json) had failed 11
+  of 11 rows, all of them correct: the check compared the placeholder multiset of EVERY form of
+  the source against EVERY form of the answer, which can only agree when both languages have
+  the same number of forms (it rejected ar/ru/pl/cs and even zh/ja/ko, and printed six-token
+  walls as the reason). The check is now asked FORM BY FORM — the source's own form of that
+  category, else its `other`, else everything the source says — plus a defect of its own for a
+  form the reply left empty where its source says something, and the report names the form.
+  Proved with a probe over the reader's own pair (/tmp/dev-placeholder-probe, 32 checks GREEN
+  and 14/32 RED with the aggregate rule put back).
+
 BOARD COMMANDS (always pass --board — the switch pointer does not persist)
   hermes kanban --board dev-translation-redesign list --json
   hermes kanban --board dev-translation-redesign show <id>
