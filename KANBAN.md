@@ -37,6 +37,21 @@ LANDED COMMITS (local — not pushed)
   The working tree is clean and the committed tree is the tree that built green
   (BUILD SUCCEEDED, zero warnings) before these commits.
 
+  LATEST (2026-09-15): 388f01b "Redesign: replies stream, and a row is written the moment
+  its object closes" — the runner now reads the reply AS IT ARRIVES (5.12): the request
+  goes out with `stream: true` (Stream.swift, `Translation.ChatStream`), an incremental
+  scanner turns the deltas into rows the moment each one closes (ReplyScanner.swift,
+  `Validator.Scanner` — tolerant of a fence, prose, an id-keyed object, a wrapper, JSONL,
+  a plural answer, a trailing comma, and a reply that was cut), and `Runner.applyRow`
+  writes each closed row immediately, one transaction, with the batch's own write rules.
+  A stream that breaks after delivering rows is treated as a cut reply (the rows stay, the
+  rest is re-asked in halves) and does NOT park Muse; a call that delivered nothing still
+  retries the whole request and still parks. Verified by a standalone probe against a local
+  SSE server (63 checks: every reply shape, a cut reply, a frame split across writes, a
+  provider that ignores `stream`, and the `stream_options` 400 fallback). STILL OWED: one
+  real streamed batch against Command Code — the vendor's docs do confirm `stream: true`
+  and `stream_options.include_usage`, but no run has been watched on the live provider.
+
 BOARD COMMANDS (always pass --board — the switch pointer does not persist)
   hermes kanban --board dev-translation-redesign list --json
   hermes kanban --board dev-translation-redesign show <id>
