@@ -504,8 +504,8 @@ The operation classes know what to send, nothing knows how to send it.
     stage may work it out for itself by reaching into the store or the file.
 
 5.1 Execution order per batch: admission (per-provider rate budget) -> prompt
-    assembly -> send through the model chain -> deterministic validation ->
-    write-back -> checkpoint -> telemetry.
+    assembly -> send through Muse as a STREAM -> deterministic validation -> write-back
+    (per row, as each row closes — 5.12) -> checkpoint -> telemetry.
 
 5.2 Model routing. ONE model: Muse, for every call (see the rules above) — with ONE
     named exception, the on-device model that writes comments after a scan (2.8). It
@@ -529,6 +529,9 @@ The operation classes know what to send, nothing knows how to send it.
     request exactly, the placeholder multiset per item must survive, an
     empty reply is rejected,
     a truncated reply is reported as truncation and re-asked in halves.
+    A row is decided the moment it CLOSES, on the stream (5.12): the per-row pass asks
+    this same list of questions, and the batch's own pass then reads the whole reply once
+    more and skips what was already decided, so the two can never disagree.
 
     NO ECHO GUARD (reader, 2026-09-14: "Remove that guard. Start is start in danish,
     symbol is symbol"). An answer IDENTICAL to its source is not a defect and is no
@@ -578,6 +581,13 @@ The operation classes know what to send, nothing knows how to send it.
     2026-09-14): a batch that wrote some of its rows is applied, and the rows that went
     wrong say so themselves — only a batch that wrote NOTHING and failed is marked
     failed. The batch is a request; the row is the unit a human reads.
+    ONE ROW IS NOW ITS OWN UNIT OF WRITE (reader, 2026-09-15 — see 5.12): a row that
+    closes mid-stream is written there and then, which is one transaction per row, and
+    the batch's end-of-batch pass then writes only what the per-row pass did not
+    (nothing, in the ordinary case). The rule that a failed batch leaves nothing
+    half-written still holds for the pass at the end of a batch — that write is still
+    gathered and applied as one unit — but a row already written is not un-written by a
+    later failure, because it was never part of a batch-sized transaction.
 
 5.6 Control. Start / pause / cancel, with the batch cursor persisted as a `RunCursor`
     row (7.2) so a paused or interrupted run resumes at the next unstarted batch instead
@@ -629,6 +639,10 @@ The operation classes know what to send, nothing knows how to send it.
         survives the retry.
       - the BATCH is still the unit that fails, and a failed batch still leaves nothing
         half-applied (5.5).
+      - a retry is a WHOLE-REQUEST re-ask, which is only right while the attempt wrote
+        nothing. An attempt whose stream broke AFTER delivering rows is not retried this
+        way: the rows it delivered stay, and the rows it lost are re-asked in halves — the
+        same recovery a cut reply gets (5.3, 5.12).
     Retries are a floor, not a chain: they exist so one flaky answer does not cost a
     batch, and they end — after them the batch fails exactly as it does today.
 
@@ -673,6 +687,67 @@ The operation classes know what to send, nothing knows how to send it.
         cancelled one does not). The original completion has already saved, so without
         this the retried results would sit app-side with only the dirty flag to show for
         them.
+
+5.12 THE REPLY IS READ AS IT IS WRITTEN (reader, 2026-09-15: "Can we implement some
+    partial result and json parsing from llm response on translations?"). The request
+    goes out with `stream: true` and the reply is consumed as it arrives, so a row is
+    written the moment its object CLOSES rather than when the batch ends. Landed in
+    three pieces:
+
+      the transport (`Stream.swift`, `Translation.ChatStream`)   one SSE request:
+                  `stream: true`, `stream_options.include_usage` so the last frame still
+                  carries the token counts 5.7 needs (`prompt_tokens`,
+                  `completion_tokens`, and the cache hit either at the top level or under
+                  `prompt_tokens_details`). A provider that IGNORES `stream` answers one
+                  whole JSON body instead — detected from the response's content type and
+                  read as a single delta, so an unstreaming provider behaves exactly as it
+                  did before. A provider that rejects `stream_options` answers 400 before
+                  writing a byte, so the attempt is repeated once without the flag: the
+                  run loses the token numbers, not the batch. A call that produces no
+                  text throws `emptyResult`, the same reading the non-streamed client made.
+
+      the reading (`ReplyScanner.swift`, `Validator.Scanner`)   an INCREMENTAL scan: feed
+                  it what has been written since the last call, take the rows that just
+                  closed, in order. A row is found whatever shape the model wrapped it in —
+                  a plain array, a markdown fence (the MARKER is skipped, not the line, so
+                  an array that starts on the fence's own line is still read), prose around
+                  the JSON, an id-keyed object, a wrapper (`{"translations": [...]}`), one
+                  object per line, a plural answer (an object of categories under `text`,
+                  carried as its own JSON so `decode` reads it back), an id echoed as a
+                  number or a string, a trailing comma before a closing brace — and a reply
+                  that was CUT keeps every row that completed. `Validator.answers(in:)` and
+                  `Validator.isTruncated` are this same read over a whole reply, which is
+                  what the batch's own validation asks.
+
+      the writing (`Runner.applyRow`)   each closed row is decided ON ITS OWN, with the
+                  batch's own rules: `Run.writable` for the slot, the same decoder, the
+                  same defect check. A row the run may not write is discarded (4.6); a row
+                  with a defect is marked failed with that defect and reported ONCE (the
+                  batch's own pass skips what this already decided — the defect used to
+                  arrive twice); a row that lands is written immediately, one transaction.
+                  Only the stages that answer ROWS do this (`vertical`, `horizontal`,
+                  `prelearn`): a learn fold answers document text, and its reply must move
+                  no slot, so its text is only collected.
+
+    What this changes in the failure paths:
+      - a call that BREAKS before any text arrived is thrown, and 5.9's retry re-asks the
+        same request — nothing was written, so nothing is wasted by trying again.
+      - a call that breaks AFTER rows arrived is a cut reply in every way that matters:
+        the rows it delivered stay written, and the rows the cut lost are re-asked in
+        halves (5.3). No whole-batch re-ask, which would pay a second time for rows that
+        are already on the page.
+      - a broken call does NOT park Muse. A park is evidence about the PROVIDER, and a
+        stream that died mid-answer after delivering text is not: parking it would make
+        the run wait out the cooldown before it may re-ask for the rows it just lost. A
+        call that delivered NOTHING still parks, exactly as before.
+      - the reply's text is kept on the batch as it grows (`retain` per closed row), so a
+        stage page (8.1) shows the answer ARRIVING instead of a box that fills at the end,
+        and a reply that broke keeps what it had.
+
+    What it does not change: the ids are still batch positions, one request is still one
+    batch and one attempt is still one send (5.7/5.9), and the batch's own validation and
+    write-back still run at the end of it — over the rows the per-row pass left, which in
+    the ordinary case is nothing.
 
 ## 6. Memory and the imported database
 
@@ -901,7 +976,10 @@ The operation classes know what to send, nothing knows how to send it.
                      ("Add model input to that model reply view", reader, same day).
                      Raw, not parsed, on purpose — what the validator accepted, what it
                      rejected and how the batch was written is then visible
-                     instead of inferred. The MARK belongs to the ROW: a failed row
+                     instead of inferred. It is also written as it ARRIVES (5.12, reader
+                     2026-09-15): a batch in flight shows the text the model has produced so
+                     far, rather than an empty box until the reply is complete.
+                     The MARK belongs to the ROW: a failed row
                      carries its own xmark and its siblings keep their ticks, and the
                      batch's own mark appears only when the batch wrote nothing. One request is one batch, so a
                      page shows exactly one exchange: a batch still in flight says so

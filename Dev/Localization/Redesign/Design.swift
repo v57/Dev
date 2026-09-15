@@ -119,7 +119,7 @@ enum Translation {
     let store: Store
     /// The client a compression call goes out through. A document does not own a run,
     /// so it takes the client it is handed and otherwise makes its own: a `Router` is
-    /// a model id plus its pacing state, and `Router.send` is the redesign's only
+    /// a model id plus its pacing state, and `Router.stream` is the redesign's only
     /// transport, so there is no second way to make the call. A runner that has a
     /// client of its own hands it in, which is what would put the tokens a
     /// compression spends into that run's tally; until a runner does, the call still
@@ -373,13 +373,14 @@ enum Translation {
     /// `Prompt.compress`, which restates the line format because the reply IS the
     /// document's new body, and the reply is read as TEXT: like the learn fold, this
     /// answers a document rather than a per-id map, so there is nothing to match and
-    /// nothing to validate against ids.
+    /// nothing to validate against ids — the chunks are simply collected.
     private func compressed(language: String) async throws -> String {
       let request = Prompt.compress(language: language, document: context, limit: limit)
       let candidate = try await candidate()
       try await router.admit(candidate)
-      _ = try await router.send(request, using: candidate)
-      return Self.strippingFence(router.lastRawReply ?? "")
+      var text = ""
+      for try await chunk in router.stream(request, using: candidate) { text += chunk }
+      return Self.strippingFence(text)
     }
     /// Muse, or a wait. `next()` answers nil exactly while Muse is parked, and there is
     /// no second candidate to fall back to, so waiting the park out is the only thing

@@ -9,9 +9,10 @@
 //
 //  What this client deliberately does NOT do is parse the reply. A reply's shape is
 //  the payload's shape (10.15), and the party that asked the question is the party
-//  that knows what it asked for, so the answer is read where it is used: `send` leaves
-//  the raw text in `lastRawReply` and `Validator.answers` — the executor's parse, in
-//  Runner.swift — turns it into per-id text. The parse that used to live here keyed on
+//  that knows what it asked for, so the answer is read where it is used: `stream`
+//  hands the TEXT out as the model writes it, chunk by chunk, and the executor's
+//  scanner (`Validator.Scanner`, in ReplyScanner.swift) turns that text into per-id
+//  rows the moment each one closes. The parse that used to live here keyed on
 //  `text as? String`, which silently dropped a PLURAL answer (an object of categories
 //  nested under `text`) and with it the item's whole answer, so the second parser was
 //  not a convenience, it was a second, quietly wrong answer key.
@@ -175,14 +176,6 @@ extension Translation {
     /// property of the model.
     private(set) var cachedTokens = 0
 
-    /// The last answer exactly as the provider sent it, and the only way a reply
-    /// leaves this client: nothing here parses it, and the caller turns the text into
-    /// per-id answers itself (`Validator.answers`). Truncation is a property of the RAW
-    /// text — the model stopping mid-array — so the caller needs the text
-    /// `Validator.isTruncated` asks about, not a dictionary built from it. Nil after a
-    /// failed call.
-    private(set) var lastRawReply: String?
-
     /// Zeroes the request and token counts. These are per-run numbers the run's tally
     /// reads; the cooldowns are deliberately NOT touched here.
     func resetTelemetry() {
@@ -192,67 +185,94 @@ extension Translation {
       cachedTokens = 0
     }
 
-    /// Adds one reply's usage. The run's tally cannot count usage itself — `send`
-    /// answers with values, not with usage — so the numbers are kept where the reply is
-    /// decoded.
-    private func settle(_ reply: ChatReply) {
+    /// Adds one reply's usage. The run's tally cannot count usage itself — a stream answers
+    /// with TEXT, not with usage — so the numbers are kept where the reply is read: here,
+    /// where the stream's last frame carried them. A call that came back at all is one
+    /// request, whether or not the provider numbered it.
+    private func settle(_ usage: ChatStream.Usage?) {
       requests += 1
-      if let prompt = reply.promptTokens { promptTokens += prompt }
-      if let completion = reply.completionTokens { completionTokens += completion }
-      if let cached = reply.cachedTokens { cachedTokens += cached }
+      if let prompt = usage?.promptTokens { promptTokens += prompt }
+      if let completion = usage?.completionTokens { completionTokens += completion }
+      if let cached = usage?.cachedTokens { cachedTokens += cached }
     }
 
     // MARK: - the request
 
-    /// One request, through Muse and nothing else. Parses nothing and answers nothing:
-    /// the reply is left in `lastRawReply` for the caller to read, because only the
-    /// caller knows what it asked for. What the model answered — including the ids it
-    /// never mentioned — is the validator's business, not an error here.
+    /// One request, through Muse and nothing else. Parses nothing and answers nothing: the
+    /// reply leaves as the TEXT the model writes, chunk by chunk, because only the caller
+    /// knows what it asked for — and it is the caller that decides what a chunk means
+    /// (`Validator.Scanner`). What the model answered — including the ids it never
+    /// mentioned — is the validator's business, not an error here.
+    ///
+    /// The reply is STREAMED rather than awaited whole (5.5), so a batch's rows become
+    /// usable while the model is still writing and a call that breaks mid-answer keeps the
+    /// text that already arrived. A call that produced no text at all throws
+    /// `emptyResult` from inside the stream, which is exactly what a non-streamed client
+    /// reported for the same answer.
     ///
     /// The park lives on this method's failure path because this is the only place that
-    /// sees WHY a call failed: the provider's `Retry-After` for a quota answer, the
-    /// quota window when it named none, the fixed window for anything else. The caller's
-    /// next `next()` then answers nil and the run waits instead of hammering a provider
-    /// that has just refused it.
+    /// sees WHY a call failed: the provider's `Retry-After` for a quota answer, the quota
+    /// window when it named none, the fixed window for anything else. The caller's next
+    /// `next()` then answers nil and the run waits instead of hammering a provider that has
+    /// just refused it — but ONLY when nothing arrived: a call that broke after text came
+    /// back is not evidence that the provider is down, and parking Muse for it would make
+    /// the run wait out five minutes before it may re-ask for the rows it lost.
     ///
     /// `request.ids` is deliberately not consulted: filtering the reply against the
     /// expected set would hide an invented id from the validator, whose job (5.3) it is
     /// to report exactly that.
-    func send(
+    func stream(
       _ request: Prompt.Request,
       using candidate: Candidate
-    ) async throws {
-      guard let apiKey = CommandCodeKeychain.apiKey() else {
-        throw BackendError.notConfigured(
-          "Muse is not configured: set \(CommandCodeKeychain.envName) in the login keychain, "
-            + "the environment, or ~/.hermes/.env."
-        )
-      }
-      let client = OpenAIChatClient(
-        endpoint: CommandCodeTranslator.endpoint,
-        apiKey: apiKey,
-        model: candidate.model,
-        timeout: CommandCodeTranslator.requestTimeout)
-      do {
-        let reply = try await client.complete(
-          system: request.system,
-          user: request.user,
-          maxTokens: nil,
-          jsonObject: false)
-        settle(reply)
-        lastRawReply = reply.content
-      } catch {
-        lastRawReply = nil
-        // A cancelled run is not a provider condition, and a park would outlive the
-        // cancel it came from.
-        if Task.isCancelled {
-          throw CancellationError()
+    ) -> AsyncThrowingStream<String, Error> {
+      AsyncThrowingStream { continuation in
+        // The producer is pinned to this actor on purpose: the caller's chunk handler reads
+        // the run and writes the store, so the text has to arrive where that is legal. The
+        // waits inside it are awaits, so nothing here blocks the main actor while a reply
+        // is being read.
+        let task = Task { @MainActor in
+          guard let apiKey = CommandCodeKeychain.apiKey() else {
+            continuation.finish(
+              throwing: BackendError.notConfigured(
+                "Muse is not configured: set \(CommandCodeKeychain.envName) in the login keychain, "
+                  + "the environment, or ~/.hermes/.env."))
+            return
+          }
+          var arrived = false
+          let client = ChatStream(
+            endpoint: CommandCodeTranslator.endpoint,
+            apiKey: apiKey,
+            model: candidate.model,
+            timeout: CommandCodeTranslator.requestTimeout)
+          do {
+            let usage = try await client.send(
+              system: request.system,
+              user: request.user
+            ) { chunk in
+              arrived = true
+              continuation.yield(chunk)
+            }
+            settle(usage)
+            continuation.finish()
+          } catch {
+            // A cancelled run is not a provider condition, and a park would outlive the
+            // cancel it came from.
+            if Task.isCancelled || error is CancellationError {
+              continuation.finish(throwing: CancellationError())
+              return
+            }
+            // Any escape from the error taxonomy still has to park Muse rather than abort
+            // the run.
+            let backendError = (error as? BackendError) ?? .network(error.localizedDescription)
+            if !arrived {
+              coolDown(candidate, retryAfter: Self.cooldown(for: backendError))
+            }
+            continuation.finish(throwing: backendError)
+          }
         }
-        // Any escape from the error taxonomy still has to park Muse rather than abort
-        // the run.
-        let backendError = (error as? BackendError) ?? .network(error.localizedDescription)
-        coolDown(candidate, retryAfter: Self.cooldown(for: backendError))
-        throw backendError
+        // The caller stopped reading — a cancel, a pause, a run going away — and the call
+        // itself is what has to stop: the byte stream is aborted by cancelling its own task.
+        continuation.onTermination = { _ in task.cancel() }
       }
     }
 

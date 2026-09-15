@@ -13,8 +13,10 @@
 //  The stage classes know WHAT to send — the predicate, the per-language grouping
 //  and the character splitting are theirs. This file knows HOW: `scan` turns what a
 //  stage built into the run's own batches, `request(for:)` picks the shape the
-//  batch sends, and `apply` is the ONLY writer of a slot. Every call goes to Muse
-//  (there is no chain to walk), and the run never writes the artifact: results
+//  batch sends, and the write-back is the ONLY writer of a slot — `applyRow` for a row
+//  the moment its text closes on the wire, `apply` for whatever the end of a batch still
+//  holds (5.12). Every call goes to Muse (there is no chain to walk), the reply is READ AS
+//  IT ARRIVES rather than awaited whole, and the run never writes the artifact: results
 //  reach the .xcstrings through the open in-memory catalog and a user Save (5.8).
 //
 //  Nothing here is referenced by the current pipeline and nothing here calls into
@@ -190,12 +192,12 @@ extension Translation {
       /// The model's RAW reply for THIS batch, exactly as the provider sent it: what the
       /// right half of a stage page prints, unread (8.1, "stage pages").
       ///
-      /// Per BATCH, not per run, because a page shows one batch and `Router.lastRawReply`
-      /// keeps only the LAST call's text — a page would show the wrong request's answer for
-      /// every batch but the newest. It is set the moment the call returns and KEPT after
-      /// it, including on a batch that then failed validation or was cut off: a reply that
-      /// failed is exactly the one a human wants to read. Nothing here parses it, and
-      /// nothing decides anything with it: it is printed as it came.
+      /// Per BATCH, not per run, because a page shows one batch and the client keeps no
+      /// reply of its own — it hands the text out chunk by chunk as it arrives (5.12), so
+      /// what a page prints is this batch's own record. It is written as it GROWS and kept
+      /// after the call, including on a batch that then failed validation or was cut off: a
+      /// reply that failed is exactly the one a human wants to read. Nothing here parses it,
+      /// and nothing decides anything with it: it is printed as it came.
       var rawReply: String?
 
       /// The request THIS batch sent, exactly as it went out: the two message BODIES
@@ -1144,46 +1146,107 @@ extension Translation {
       // The request is BUILT here and kept on the run's own copy before the send: it is what
       // this batch asked, and a call that then fails — admission, the cooldown, the network —
       // must still show the reader the input it failed on (8.1). Nothing about sending
-      // changes: the same value goes to `send`.
+      // changes: the same value goes to `Router.stream`.
       let request = request(for: batch, in: run)
       batch.request = request
       retain(request, of: batch, in: run)
 
-      let answer = try await send(request, in: run)
-      batch.model = answer.model
-      // The reply belongs to the BATCH, and it is kept the moment it arrives rather than
-      // when the batch returns: everything after this point — validation,
-      // a cut reply's re-ask — can throw, and a batch whose reply failed
-      // validation is the one a human most wants to read (8.1). `Router.lastRawReply`
-      // keeps only the last call's text, which by then is another batch's.
-      batch.rawReply = answer.raw
-      retain(answer.raw, of: batch, in: run)
+      // MARK: - the request goes out, and is read as it is written
+
+      let candidate = try await candidate()
+      try await router.admit(candidate)
+      // The send is counted BEFORE the call and whatever becomes of it: an attempt that fails
+      // is an attempt the provider was asked for, and a retry only exists because of them
+      // (5.7, 5.9). `readTelemetry`'s `requests` is the client's count of calls that came
+      // back, so the two numbers differ by exactly the attempts that failed.
+      run.tally.sends += 1
+      batch.model = candidate.model
+
+      // The reply is STREAMED, and every row that closes is written there and then (5.5):
+      // a 33-row reply is minutes of writing, and a row nobody has to wait for is a row the
+      // reader can look at, save or correct while the rest arrives. The text is kept on the
+      // BATCH on the run's own copy as it grows, so a stage page shows the answer arriving
+      // instead of a box that fills once at the end (8.1) — and so a reply that breaks keeps
+      // what it had.
+      var scanner = Validator.Scanner()
+      var raw = ""
+      var broke: Error?
+      // Only the stages that answer ROWS have anything to write per row. The learn fold
+      // answers document text: it has no ids, its reply is not a set of candidates, and a
+      // slot must come out of it untouched (5.3/5.4) — so its text is only collected.
+      let perRow = batch.stage == .vertical || batch.stage == .horizontal
+        || batch.stage == .prelearn
+      do {
+        for try await chunk in router.stream(request, using: candidate) {
+          raw += chunk
+          let closed = perRow ? scanner.feed(chunk) : []
+          guard !closed.isEmpty else { continue }
+          retain(raw, of: batch, in: run)
+          for row in closed { applyRow(row, of: &batch, in: run) }
+        }
+      } catch is CancellationError {
+        throw CancellationError()
+      } catch {
+        let failure = (error as? BackendError) ?? .network(error.localizedDescription)
+        // A call that broke before ANY text arrived is the transport's problem, nothing was
+        // written, and `perform`'s retry re-asks the same request (5.9) — so it is thrown.
+        // A call that broke with rows already written is a CUT reply in every way that
+        // matters: what arrived is real output, and the lost rows are re-asked in halves
+        // (5.3) rather than paying for the whole batch again.
+        guard !raw.isEmpty, Self.retryable(failure) else { throw failure }
+        fail(
+          run, key: batch.items.first?.key, language: batch.language,
+          message: failure.localizedDescription, retryable: true)
+        broke = failure
+      }
+      try Task.checkCancellation()
+
+      run.tally.byModel[candidate.model, default: 0] += 1
+      readTelemetry(run)
+      retain(raw, of: batch, in: run)
 
       // The fold answers DOCUMENT TEXT: there is nothing per-id to validate
       // or gate, because the reply is not a set of candidates (5.3/5.4 are about
       // candidates).
       if batch.stage == .learn {
-        await fold(answer.raw ?? "", of: batch, in: run)
+        await fold(raw, of: batch, in: run)
         for index in batch.items.indices { batch.items[index].phase = .applied }
         batch.phase = .applied
         return batch
       }
 
-      let replies = answer.replies
+      // The reply belongs to the BATCH, and it is kept as it arrived rather than when the
+      // batch returns: everything after this point — validation, a cut reply's re-ask — can
+      // throw, and a batch whose reply failed validation is the one a human most wants to
+      // read (8.1).
+      let reply: String? = raw.isEmpty ? nil : raw
+      batch.rawReply = reply
+
+      // Read once more as a whole set: the per-row pass above is what WROTE, and this is what
+      // the batch's own validation reads — the ids it never asked for, and the rows that
+      // never arrived (5.3).
+      let replies = Validator.answers(in: raw)
       // Which slots this run may write, resolved from each slot's OWN status at this
       // moment. An answer for a slot that is already settled is DISCARDED, never
       // rejected: spending a call on a value nobody is allowed to write is
       // paying twice (4.6).
       let writable = writablePositions(of: batch)
       var report = Validator.validate(replies, for: batch.items, writable: writable)
-      report.truncated = answer.raw.map(Validator.isTruncated) ?? false
+      // A reply is CUT when its structure never closed — and a stream that broke mid-answer
+      // is cut whether or not the text it left behind happens to parse: the rows after the
+      // break never arrived.
+      report.truncated = broke != nil || (reply.map(Validator.isTruncated) ?? false)
       for id in report.invented {
         fail(
           run, key: batch.items.first?.key, language: batch.language,
           message: "the reply answered id \(id), which this batch never asked for",
           retryable: false)
       }
-      for id in report.accepted.keys.compactMap(Int.init) where batch.items.indices.contains(id) {
+      // A row the per-row pass already WROTE keeps `.applied`: it is the only record that
+      // this batch has written that slot, and `.validated` would put it back in the write-back
+      // as if it had not been.
+      for id in report.accepted.keys.compactMap(Int.init)
+      where batch.items.indices.contains(id) && batch.items[id].phase != .applied {
         batch.items[id].phase = .validated
       }
 
@@ -1194,8 +1257,14 @@ extension Translation {
       if report.truncated, batch.items.count > 1 {
         let answered = report.accepted
         apply(answered, of: &batch, in: run)
+        // What is left to ask for: the writable rows this reply never answered. A row the
+        // per-row pass already WROTE is not one of them — it is not missing, it is done — and
+        // neither is a row it rejected, which is reported rather than re-asked (5.3).
         let remaining = batch.items.enumerated()
-          .filter { writable.contains($0.offset) && answered[String($0.offset)] == nil }
+          .filter {
+            writable.contains($0.offset) && answered[String($0.offset)] == nil
+              && $0.element.phase != .applied && $0.element.phase != .failed
+          }
           .map(\.element)
         for item in try await reask(remaining, of: batch, in: run) {
           guard let position = batch.items.firstIndex(where: {
@@ -1216,6 +1285,9 @@ extension Translation {
       let resolved = report.accepted
       for id in report.rejected {
         guard let position = Int(id), batch.items.indices.contains(position) else { continue }
+        // A row the per-row pass already rejected carries its defect and is reported ONCE:
+        // it was marked failed the moment it closed, with the same description.
+        guard batch.items[position].phase != .failed else { continue }
         let item = batch.items[position]
         let language = language(of: item, in: batch)
         batch.items[position].phase = .failed
@@ -1360,39 +1432,10 @@ extension Translation {
 
     // MARK: - the model
 
-    /// One answered request: the per-id answers as text, the raw reply, and the model
-    /// that produced them.
-    private struct Answer {
-      var replies: [String: String] = [:]
-      var raw: String?
-      var model: String = ""
-    }
-
-    /// One request, through Muse and nothing else (5.2). Admission suspends on the
-    /// per-minute budget rather than burning a batch on a refusal, and a parked Muse
-    /// is WAITED out — there is no second candidate to fall back to, so waiting is
-    /// the only thing that is not giving up.
-    ///
-    /// The reply is read from the RAW text: `Router.values(in:)` casts `text` to a
-    /// String, which drops a plural answer (an object of categories) and with it the
-    /// whole item, so the runner parses the reply it depends on itself (10.15's
-    /// "a reply's text mirrors the payload body").
-    private func send(_ request: Prompt.Request, in run: Run) async throws -> Answer {
-      let candidate = try await candidate()
-      try await router.admit(candidate)
-      // The send is counted BEFORE the call and whatever becomes of it: an attempt that fails
-      // is an attempt the provider was asked for, and a retry only exists because of them
-      // (5.7, 5.9). `readTelemetry`'s `requests` is the client's count of calls that came
-      // back, so the two numbers differ by exactly the attempts that failed.
-      run.tally.sends += 1
-      _ = try await router.send(request, using: candidate)
-      run.tally.byModel[candidate.model, default: 0] += 1
-      readTelemetry(run)
-      return Answer(
-        replies: router.lastRawReply.map(Validator.answers(in:)) ?? [:],
-        raw: router.lastRawReply,
-        model: candidate.model)
-    }
+    /// The request goes out from `performOne`, because the reply has to be read as it
+    /// ARRIVES: `Router.stream` hands out the text chunk by chunk, and each row that closes
+    /// is written there and then (`applyRow`). What lives here is the pacing around that
+    /// call — who answers, and how long the run waits for them.
 
     /// Muse, or a wait. `next()` answers nil exactly while Muse is parked, so the run
     /// sleeps out the park instead of failing the batch; a park with no readable
@@ -1430,6 +1473,10 @@ extension Translation {
         guard batch.items.indices.contains(position),
           let answer = results[String(position)]
         else { continue }
+        // A row this batch has already written is not written again. It happens for two
+        // reasons, both normal: the per-row pass wrote it the moment it closed (5.5), and a
+        // re-ask carries the ids the first attempt already answered.
+        guard batch.items[position].phase != .applied else { continue }
         let item = batch.items[position]
         let language = language(of: item, in: batch)
         guard let row = rowPositions[item.key], project.data.indices.contains(row),
@@ -1474,6 +1521,40 @@ extension Translation {
         // exactly these batches again (5.11).
         for position in positions { batch.items[position].phase = .failed }
       }
+    }
+
+    /// One row that just CLOSED, decided on its own (5.5): a slot this run may write is
+    /// checked for the row's own defects and written the moment its text is complete — one
+    /// write, one transaction, because a row is now written while the model is still writing
+    /// the rest and there is no single later moment where a batch's rows are all present —
+    /// while a slot the run may not write is discarded exactly as the batch's own write-back
+    /// would have discarded it (4.6).
+    ///
+    /// This is the SAME decision the batch's write-back makes, made earlier and for one row:
+    /// `Run.writable`, the decoder and the defect check are the batch's own, so a row that
+    /// lands here is a row the write-back would have accepted, and a row rejected here is
+    /// marked failed with the defect that rejected it — once. The batch's own pass reads the
+    /// same reply later and skips what this already decided (the guards in `performOne`).
+    ///
+    /// A row whose id no item stands behind is left alone: there is nothing to write and
+    /// nothing to re-ask on its behalf, and the validator reports it as an invented id where
+    /// the whole reply is read.
+    private func applyRow(_ row: Validator.Row, of batch: inout Run.Batch, in run: Run) {
+      guard let position = Int(row.id), batch.items.indices.contains(position) else { return }
+      guard batch.items[position].phase != .applied else { return }
+      let item = batch.items[position]
+      let language = language(of: item, in: batch)
+      guard writable(position, in: batch) else { return }
+      let body = Validator.decode(row.text, for: item, language: language)
+      guard Validator.defects(body, of: item).isEmpty else {
+        batch.items[position].phase = .failed
+        fail(
+          run, key: item.key, language: language,
+          message: "no usable translation: \(Validator.describe(row.text, of: item, language: language))",
+          retryable: false)
+        return
+      }
+      apply([row.id: row.text], of: &batch, in: run)
     }
 
     /// One slot write, gathered before anything is written so a batch applies as one
@@ -1836,15 +1917,24 @@ extension Translation {
     /// exists for is an answer somebody asks for rather than one nobody requires.
     private func writablePositions(of batch: Run.Batch) -> IndexSet {
       var positions = IndexSet()
-      for (position, item) in batch.items.enumerated() {
-        let language = language(of: item, in: batch)
-        guard let row = rowPositions[item.key], project.data.indices.contains(row),
-          let slot = project.data[row].target(language),
-          Run.writable(slot, for: batch.stage)
-        else { continue }
+      for position in batch.items.indices where writable(position, in: batch) {
         positions.insert(position)
       }
       return positions
+    }
+
+    /// Whether this run may write ONE item's slot — the same question
+    /// `writablePositions` asks of the whole batch, asked of one position so the per-row
+    /// write (5.5) and the batch's own write set cannot drift apart.
+    private func writable(_ position: Int, in batch: Run.Batch) -> Bool {
+      guard batch.items.indices.contains(position) else { return false }
+      let item = batch.items[position]
+      let language = language(of: item, in: batch)
+      guard let row = rowPositions[item.key], project.data.indices.contains(row),
+        let slot = project.data[row].target(language),
+        Run.writable(slot, for: batch.stage)
+      else { return false }
+      return true
     }
 
     /// The open catalog's rows by key, read once per run and once more after
@@ -1992,46 +2082,28 @@ extension Translation {
     /// The reply's per-id answers, as TEXT — an object of plural categories as its own
     /// text (10.15: a reply's `text` mirrors the payload body).
     ///
-    /// The runner reads this rather than `Router.send`'s map, because that map casts
-    /// `text` to a String and drops a nested object — and with it the whole plural
-    /// item. The tolerance is the same tolerance the client has: a markdown fence, a
-    /// numeric or string id, `translation` for `text`, and a reply cut off mid-array
-    /// keeps the rows it completed, so a plural batch and a flat one travel one path.
+    /// The reading itself is `Scanner` (ReplyScanner.swift), which reads the same text
+    /// INCREMENTALLY while the reply arrives (5.5); this is that read over a whole reply,
+    /// which is what the batch's own validation asks. Every row the scanner can read is
+    /// here, whatever shape the model used — a fenced array, an id-keyed object, one object
+    /// per line, prose around the JSON — and a reply that was cut keeps the rows it
+    /// completed, so a plural batch and a flat one travel one path.
     static func answers(in raw: String) -> [String: String] {
-      let text = strippingFence(raw)
-      guard let start = text.firstIndex(of: "[") else { return [:] }
-      var rows: [[String: Any]] = []
-      if let end = text.lastIndex(of: "]"), start <= end,
-        let data = String(text[start...end]).data(using: .utf8),
-        let parsed = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
-      {
-        rows = parsed
-      } else {
-        rows = salvage(in: text[start...])
-      }
       var answers: [String: String] = [:]
-      for row in rows {
-        guard let id = idText(row["id"]) else { continue }
-        guard let answer = answerText(row["text"]) ?? answerText(row["translation"]) else { continue }
-        answers[id] = answer
-      }
+      for row in rows(in: raw) { answers[row.id] = row.text }
       return answers
     }
 
-    /// True when the reply holds no complete array at all: the model stopped
-    /// mid-answer, or answered something that is not one. Distinguished from a bad id
-    /// because the right response differs — re-ask in halves instead of id by id (5.3).
+    /// True when the reply's JSON never closed: the model stopped mid-answer, or answered
+    /// something that is not a row set at all — nothing to salvage either way. Distinguished
+    /// from a bad id because the right response differs — re-ask in halves instead of id by
+    /// id (5.3, `Scanner.isCut`).
     static func isTruncated(_ raw: String) -> Bool {
-      let text = strippingFence(raw)
-      guard let start = text.firstIndex(of: "["), let end = text.lastIndex(of: "]"),
-        start <= end,
-        let data = String(text[start...end]).data(using: .utf8),
-        (try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]) != nil
-      else { return true }
-      return false
+      var scanner = Scanner()
+      _ = scanner.feed(raw)
+      _ = scanner.finish()
+      return scanner.isCut
     }
-
-
 
     /// What is wrong with one item's answer, deterministically and for free: nothing
     /// to judge in an empty answer, a placeholder multiset that did not survive (5.3).
@@ -2127,92 +2199,10 @@ extension Translation {
       }
     }
 
-    /// A reply's text as the shape the wire uses: a string as it is, an object of
-    /// plural categories as its own JSON (which `decode` reads back). An empty answer
-    /// is not an answer, so it is dropped here and the id is rejected for it.
-    private static func answerText(_ any: Any?) -> String? {
-      if let text = any as? String {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
-      }
-      if let object = any as? [String: Any],
-        let data = try? JSONSerialization.data(
-          withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes])
-      {
-        let text = String(data: data, encoding: .utf8)?
-          .trimmingCharacters(in: .whitespacesAndNewlines)
-        return (text?.isEmpty ?? true) ? nil : text
-      }
-      return nil
-    }
-
     /// A reply's JSON object of category -> text, when it is one.
     private static func object(from text: String) -> [String: String]? {
       guard text.hasPrefix("{"), let data = text.data(using: .utf8) else { return nil }
       return try? JSONSerialization.jsonObject(with: data) as? [String: String]
-    }
-
-    /// The id a row names, as a string: the model may echo a position as a number or
-    /// as a string, and both mean the same row.
-    private static func idText(_ any: Any?) -> String? {
-      if let text = any as? String { return text }
-      if let number = any as? NSNumber { return number.stringValue }
-      return nil
-    }
-
-    /// Drops a markdown fence around a reply, when the model wrapped it in one.
-    private static func strippingFence(_ raw: String) -> String {
-      let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-      guard text.hasPrefix("```") else { return text }
-      return text.replacingOccurrences(of: "```json", with: "")
-        .replacingOccurrences(of: "```", with: "")
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    /// Decodes as many COMPLETE `{…}` rows as the text holds, in order — the salvage
-    /// path for a cut-off reply. String state is tracked so a brace inside a
-    /// translation cannot end a row early, and the scan stops at the unbalanced object
-    /// where the cut happened. (`Router.completeRows` is the same walk in the client.)
-    private static func salvage(in text: Substring) -> [[String: Any]] {
-      var rows: [[String: Any]] = []
-      var depth = 0
-      var objectStart: String.Index?
-      var inString = false
-      var escaped = false
-
-      for index in text.indices {
-        let character = text[index]
-        if inString {
-          if escaped {
-            escaped = false
-          } else if character == "\\" {
-            escaped = true
-          } else if character == "\"" {
-            inString = false
-          }
-          continue
-        }
-        switch character {
-        case "\"":
-          inString = true
-        case "{":
-          if depth == 0 { objectStart = index }
-          depth += 1
-        case "}":
-          depth -= 1
-          guard depth <= 0, let start = objectStart else { continue }
-          if let data = text[start...index].data(using: .utf8),
-            let row = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-          {
-            rows.append(row)
-          }
-          depth = 0
-          objectStart = nil
-        default:
-          continue
-        }
-      }
-      return rows
     }
   }
 }
