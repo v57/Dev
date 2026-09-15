@@ -111,6 +111,29 @@ nonisolated enum ScanEngine {
     // the run's resolved platform as the default, and each unit is compiled
     // against its own platform's product directories — a host slice in an iOS
     // compile is unusable and vice versa.
+    // MARK: 2a. build the packages — BEFORE a single search path is read
+    //
+    // The ORDER here is the fix (reader, 2026-09-15: "playgra failed to scan after i deleted
+    // Sources/.build", where every library with a dependency reported
+    // `no such module 'SomeCore'`). `moduleSearchPaths` ENUMERATES the package's `.build` for
+    // `*.swiftmodule` products, and it used to run before `buildWarning`'s `swift build`: on a tree
+    // whose `.build` is gone, the enumeration finds nothing, every unit is handed an EMPTY `-I` set
+    // (the per-platform entry exists — as an empty tuple — so `unitCompileSetup` never falls back to
+    // the union), and the refresh then rebuilt 91 cold products into a tree nothing had read. The
+    // build was never the failure; it was the reading that came first.
+    if config.buildRefresh {
+      for packageRoot in packageRoots {
+        if cancellation.isCancelled { break }
+        let name = packageRoot.lastPathComponent
+        emit(.phase("Building \(name) for \(platformLabel)… (module products the extraction typechecks against)"))
+        let buildWarning = ScanExtractor.buildWarning(for: packageRoot, toolchain: toolchain)
+        if !buildWarning.isEmpty {
+          warnings.append("\(name): \(buildWarning)")
+          emit(.log("warning: \(name): \(buildWarning)"))
+        }
+      }
+    }
+
     var platformSearchPaths: [ScanPlatform: (includeDirs: [String], moduleMapFiles: [String])] = [:]
     var hostSearch: (includeDirs: Set<String>, moduleMapFiles: Set<String>) = ([], [])
     var iosSearch: (includeDirs: Set<String>, moduleMapFiles: Set<String>) = ([], [])
@@ -164,15 +187,7 @@ nonisolated enum ScanEngine {
       let name = packageRoot.lastPathComponent
       let manifest = manifests[packageRoot.path]
 
-      if config.buildRefresh, !cancellation.isCancelled {
-        emit(.phase("Building \(name) for \(platformLabel)… (module products the extraction typechecks against)"))
-        let buildWarning = ScanExtractor.buildWarning(for: packageRoot, toolchain: toolchain)
-        if !buildWarning.isEmpty {
-          warnings.append("\(name): \(buildWarning)")
-          emit(.log("warning: \(name): \(buildWarning)"))
-        }
-      }
-
+      // Already built, above: this loop reads what that build produced.
       let searchPaths = ScanExtractor.moduleSearchPaths(
         packageRoot: packageRoot, toolchain: toolchain)
       allIncludeDirs.formUnion(searchPaths.includeDirs)

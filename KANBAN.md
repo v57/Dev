@@ -318,3 +318,24 @@ the design FIXTURES used; the column page (DesignUI) also lost its
         do, because the reader's edit removed it in DesignUI only. Left as they wrote it — one line
         per page either way — and flagged rather than silently evened out.
   - [x] Build green. The commit carries the reader's staged change plus the comment updates.
+
+### The scan read its `-I` paths before the build that fills them (2026-09-15)
+
+Reader: "playgra failed to scan after i deleted Sources/.build. Each library with dependency says:
+`SomeSvg: FAILED — .../SomeSvg/Svg.swift:10:8: error: no such module 'SomeCore'  (1 files)`."
+
+`ScanEngine.moduleSearchPaths` ENUMERATES each package's `.build` for `*.swiftmodule` products to
+build its `-I` sets, and it ran before the `swift build` refresh that produces them. On a cold tree
+the enumeration found nothing, every unit got an empty search path, and the refresh then rebuilt all
+91 products into a tree nothing had read.
+
+  - [x] The refresh now runs before the enumeration (and once per package, not twice). Commit `TBD`,
+        `plans/localization.md` updated.
+  - [x] Probe `/tmp/dev-scan-probe`: a real two-target package (`LibA`, and `LibB` which imports it)
+        whose `.build` is deleted before EVERY run, scanned through the REAL `ScanEngine`.
+        **GREEN 9/9** — LibB extracted with its key. **`RED=1` (the old order) 6/9** — the reader's
+        failure exactly: `LibB: FAILED 0 key(s) — B.swift:2:8: error: no such module 'LibA'`, and its
+        key missing from the union. The build itself succeeded in both.
+  - [x] Acceptance run against the reader's own tree
+        (`./.build/debug/Dev /Users/v57/github/vijo/playgra SomeSvg SomeCombine Managers`): result
+        logged at /tmp/dev-scan-probe/playgra-run.log.
