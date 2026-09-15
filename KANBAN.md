@@ -209,3 +209,20 @@ O(all items) per published burst; making that lazy is a design change and needs 
 is the cost. The reader was asked for a 10 s Time Profiler sample taken WHILE the CPU is pegged, and
 for which button drives the run (the redesign's `Start` or the old pipeline's `Translate`), because
 the two share no code.
+
+### The sample named it: SwiftUI's own graph updates (2026-09-15)
+
+The reader's Time Profiler sample put 87,6 % of a core inside SwiftUI view graph updates
+(`NSHostingView.beginTransaction` -> `ViewGraphRootValueUpdater.updateGraph` -> `GraphHost.flushTransactions`),
+which is an animation/render storm rather than store work. It was mine, and it was introduced by the
+realtime marks: every row's mark animated on ANY change to the row's value, with a stagger of
+`index / 10` and no ceiling. Rows land continuously during a run, so a row 300 rows down scheduled its
+animation thirty seconds out and the transaction stream never drained.
+
+  - [x] The mark animates on the MARK's own colour, not on the row's value.
+  - [x] The stagger is CLAMPED: `Translation.stagger` = twelve rows (`min(index, 12) / 10`), the
+        longest wave a reader notices. Commit `TBD`, notes 8.1.
+  - [x] `grep '\.delay('` over the app now shows those four sites and no unbounded stagger anywhere
+        else — this class is closed.
+  - [ ] The reader re-samples while a run works to confirm; the deeper frames of the sample (the
+        bodies under `Attribute.init`) were cut off, and would name any second source.

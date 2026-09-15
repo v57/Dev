@@ -1037,6 +1037,16 @@ The operation classes know what to send, nothing knows how to send it.
                      No pacing here, unlike the batch pager: a row that has landed is
                      already written, so there is nothing to wait for — a page opened
                      mid-batch lands on the newest one at once.
+                     A MARK SETTLES WITH A BOUNDED WAVE (reader, 2026-09-15, from a
+                     Time Profiler sample: 87,6 % of the core inside SwiftUI's own view
+                     graph updates while a run was working). Each row's mark animated on
+                     ANY change to the row's value — which a run now moves on every row
+                     it lands — with a stagger of `index / 10` and NO ceiling, so a row
+                     300 rows down scheduled its animation thirty seconds out and, with
+                     rows landing continuously, transactions never stopped arriving.
+                     The animation now hangs on the MARK's own colour and the stagger is
+                     CLAMPED (`Translation.stagger`, twelve rows), so a burst of rows
+                     settles as one short wave and never as a standing animation.
                      WHAT A PAGE PAYS for that mark is measured by what it reads: a
                      page re-derives its WHOLE page set from `run.batches` on every
                      change of it, so publishing once per row cost one full page

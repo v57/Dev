@@ -113,7 +113,11 @@ extension Translation.VerticalLearn {
                       .transition(.opacity)
                   }
                 }
-              }.foregroundStyle(mark(item).color).animation(.smooth.delay(Double(index) / 10), value: item)
+              }.foregroundStyle(mark(item).color)
+              // The mark settles when the MARK changes — never on a change to the row's value or
+              // the phase, which a run moves on every row it lands (8.1) — and the wave is bounded
+              // (`Translation.stagger`).
+              .animation(.smooth.delay(Translation.stagger(index)), value: mark(item).color)
                 .id(index)
             }
           }.padding(32)
