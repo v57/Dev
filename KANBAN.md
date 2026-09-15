@@ -75,6 +75,19 @@ LANDED COMMITS (local — not pushed)
   but not fixed: `Workspace.records(of:)` does a whole-project fetch per user action (it is called
   from three review/confirm sites), and the language-document reads.
 
+  2026-09-15 (last): e3fa093 "Redesign: a page marks each row as it lands and follows the last
+  one" — reader: "Mark rows as translated/failed in realtime in UI and automatically scroll to
+  last translated row (center anchor)". The runner now PUBLISHES one item's phase on the RUN's own
+  copy of its batch the moment the row is decided (`Runner.publish`, called from `applyRow`): until
+  now a row written mid-stream stayed invisible, because `performOne` works on a VALUE of its batch
+  and writes it back only when the whole batch returns. The four stage pages' row lists keep the
+  last ANSWERED row centred (`Translation.lastLanded` + the list's own `scrollPosition`, the same
+  binding the batch pager uses; no pacing, a landed row is already written). `Operation` gained
+  `phase` as a protocol requirement so one shared rule serves all four pages. Proved with
+  /tmp/dev-realtime-probe (11 checks GREEN): a real run against a chunked recorded model shows
+  applied counts growing 0 -> 1 -> 2 and a sabotaged row reading FAILED while the batch was still
+  in flight. Visual confirmation is the reader's.
+
 BOARD COMMANDS (always pass --board — the switch pointer does not persist)
   hermes kanban --board dev-translation-redesign list --json
   hermes kanban --board dev-translation-redesign show <id>

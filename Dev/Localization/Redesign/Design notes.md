@@ -1022,8 +1022,22 @@ The operation classes know what to send, nothing knows how to send it.
                      instead of inferred. It is also written as it ARRIVES (5.12, reader
                      2026-09-15): a batch in flight shows the text the model has produced so
                      far, rather than an empty box until the reply is complete.
-                     The MARK belongs to the ROW: a failed row
-                     carries its own xmark and its siblings keep their ticks, and the
+                     The MARK belongs to the ROW (reader, 2026-09-15: "Mark rows as
+                     translated/failed in realtime in UI and automatically scroll to
+                     last translated row (center anchor)"): a row is marked the moment
+                     it LANDS, not when its batch ends, and the list FOLLOWS it. Both
+                     halves are the same rule read twice — the row's phase is published
+                     on the RUN's own copy of the batch the moment it is decided
+                     (`Runner.publish`; without it a page would keep showing a row that
+                     is already written and saved as one still waiting, because
+                     `performOne` works on a value and writes it back only when the
+                     batch returns), and the page's list keeps the LAST ANSWERED row
+                     CENTRED (`Translation.lastLanded` + the list's own
+                     `scrollPosition`, the same binding the batch pager above uses).
+                     No pacing here, unlike the batch pager: a row that has landed is
+                     already written, so there is nothing to wait for — a page opened
+                     mid-batch lands on the newest one at once.
+                     A failed row carries its own xmark and its siblings keep their ticks, and the
                      batch's own mark appears only when the batch wrote nothing. One request is one batch, so a
                      page shows exactly one exchange: a batch still in flight says so
                      (there is no input to show until it is sent), and a batch that
