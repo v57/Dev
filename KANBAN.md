@@ -329,7 +329,7 @@ build its `-I` sets, and it ran before the `swift build` refresh that produces t
 the enumeration found nothing, every unit got an empty search path, and the refresh then rebuilt all
 91 products into a tree nothing had read.
 
-  - [x] The refresh now runs before the enumeration (and once per package, not twice). Commit `TBD`,
+  - [x] The refresh now runs before the enumeration (and once per package, not twice). Commit `9f44542`,
         `plans/localization.md` updated.
   - [x] Probe `/tmp/dev-scan-probe`: a real two-target package (`LibA`, and `LibB` which imports it)
         whose `.build` is deleted before EVERY run, scanned through the REAL `ScanEngine`.
