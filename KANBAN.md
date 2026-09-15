@@ -63,6 +63,18 @@ LANDED COMMITS (local — not pushed)
   Proved with a probe over the reader's own pair (/tmp/dev-placeholder-probe, 32 checks GREEN
   and 14/32 RED with the aggregate rule put back).
 
+  2026-09-15 (later still): ad1926b "Redesign: an open asks for the language list, not for every
+  record" — the reader's profiler caught the LAUNCH in a sort (`loadProject` -> `loadLanguages`
+  -> `Store.records` -> `sorted(by:)`). `Store.records` sorted every fetched record by a tuple of
+  three Strings, and no caller wanted the order (all five index by (key, language, category)) —
+  measured on a copy of the reader's own store (168 802 records), 1.4 s of the call's 1.9 s.
+  `loadLanguages` wanted one COLUMN and fetched every ROW: it now asks `Store.languages`, which is
+  one `LIMIT 1` fetch per language. The launch went 2.03 s -> 0.09 s (project "Dev", 26 156 rows)
+  and 10.52 s -> 0.82 s (project "playgra", 97 languages) with the language list identical. What
+  is left of the 0.82 s is one `Context(scope: .language)` per language. NEXT CANDIDATES, seen
+  but not fixed: `Workspace.records(of:)` does a whole-project fetch per user action (it is called
+  from three review/confirm sites), and the language-document reads.
+
 BOARD COMMANDS (always pass --board — the switch pointer does not persist)
   hermes kanban --board dev-translation-redesign list --json
   hermes kanban --board dev-translation-redesign show <id>

@@ -960,6 +960,31 @@ The operation classes know what to send, nothing knows how to send it.
     save per slot of a batch. It should adopt the same flag (one save per batch), and it is
     left to whoever owns `Runner.swift` next because that file is in flight.
 
+7.7 A READ SCALES WITH ITS ANSWER, NOT WITH THE TABLE (reader, 2026-09-15: a profiler trace of
+    the LAUNCH — `Shell.focus` -> `Global.loadProject` -> `Project.init` -> `loadLanguages` ->
+    `Store.records` -> `Sequence.sorted(by:)`). Two things were wrong on that path and both
+    were the store's doing:
+
+      - `records(project:)` SORTED what it fetched, by the tuple `(key, language, category)`,
+        that being a tuple of `String`s and therefore a Unicode comparison per field per
+        comparison. Measured on the reader's own store (26 156 records in one project): 1.4 s
+        of the call's 1.9 s. Nothing wanted the order — all five callers (`Project.loadData`,
+        `Project.saveData`, `Runner.slotRecord`, `Workspace.records(of:)`, `loadLanguages`)
+        index the result by (key, language, category) — so the sort is GONE and the method is
+        documented as unordered. A caller that wants an order sorts the few rows it is about.
+      - `loadLanguages` wanted the COLUMN SET and asked for the rows: it fetched every record
+        of the project, materialised it, and threw all but one column away. It now asks
+        `Store.languages(project:)`, which is one `LIMIT 1` fetch PER LANGUAGE (excluding the
+        codes already found) — the work scales with the answer. Measured: 33 languages in
+        0.05 s, against 2.0 s for the fetch-and-sort it replaces, and the list is identical.
+        A one-column fetch of every row is NOT the answer: `propertiesToFetch` still builds a
+        row object per record (0.50 s here).
+
+    The whole launch path went from 2.0 s to 0.09 s for that project and from 10.5 s to 0.82 s
+    for the largest one in the store (97 languages) — where what is left is one
+    `Context(scope: .language)` per language, i.e. 97 small document fetches, not the store's
+    rows. That is the next thing to price, not this one.
+
 ## 8. The workspace (UI gaps)
 
 8.1 The redesign has stages and no surface. The surfaces it needs, each bound to
