@@ -336,6 +336,32 @@ the enumeration found nothing, every unit got an empty search path, and the refr
         **GREEN 9/9** — LibB extracted with its key. **`RED=1` (the old order) 6/9** — the reader's
         failure exactly: `LibB: FAILED 0 key(s) — B.swift:2:8: error: no such module 'LibA'`, and its
         key missing from the union. The build itself succeeded in both.
-  - [x] Acceptance run against the reader's own tree
-        (`./.build/debug/Dev /Users/v57/github/vijo/playgra SomeSvg SomeCombine Managers`): result
-        logged at /tmp/dev-scan-probe/playgra-run.log.
+  - [x] Acceptance on the reader's own tree, cold — `.build` set aside, scan run, tree restored
+        (verified: the backup is back and the fresh one removed). `/tmp/dev-scan-probe/playgra-cold.log`:
+        **88 modules, 188 keys, 5 failed**, and every library the reader named was extracted
+        (SomeSvg, SomeCombine, Managers, SomeCore). Before the fix that run is the reader's message:
+        every target with a sibling import failing and losing its keys.
+
+### iOS only, and iOS first (2026-09-15)
+
+Reader: "only build on ios. Make Dev app to also prioritize building on iOS." Three rules:
+
+  - [x] A manifest that DECLARES an iOS platform is an iOS signal on its own
+        (`ScanPlatformResolver.declaresIOSPlatform`, read from `dump-package`'s raw JSON that the
+        manifest model already carried for it). playgra declares `.iOS(.v17), .macOS(.v14)`; the iOS
+        build is the one a scan makes.
+  - [x] The UIKit mark is read over the WHOLE target, not its first twelve files — a UIKit import
+        past file 12 resolved an iOS package as the host.
+  - [x] An iOS run is iOS ONLY: no unit is routed to the host. That routing is what failed CoreUI
+        (`import AppKit` inside `#if os(macOS)` cannot be seen by a marker test), VideoEditor and
+        IconsPreview after the delete — they were handed a product set no scan builds.
+  - [x] Acceptance, same tree, warm: **88 modules, 228 keys, 2 failed** (from 5), and 8/8 checks:
+        CoreUI and VideoEditor extracted, SomeSvg extracted. The two survivors are a DIFFERENT,
+        pre-existing class: `Broadcast` and `Vijo` fail on binary version skew in the Xcode-package
+        scratch build ("rebuild 'LiveKit'/'Nuke' and try again"), and they failed identically before
+        this change on a warm tree.
+  - [x] Host runs are unchanged: the fixture probe still 9/9 (it resolves to the host and the macOS
+        heuristic still applies there).
+  - Cost, stated: a macOS-only target in an iOS tree is now compiled for iOS rather than against host
+        products — and the host products cannot be made for playgra's package anyway
+        (`swift build` on the host: BUILD FAILED after 77 s, measured).

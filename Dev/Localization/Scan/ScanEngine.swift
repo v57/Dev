@@ -163,6 +163,14 @@ nonisolated enum ScanEngine {
     ///  - everything else follows the run's resolved platform.
     func unitPlatform(_ files: [URL]) -> ScanPlatform {
       if ScanPlatformResolver.importsUIKit(files) { return .iosSimulator }
+      // AN iOS RUN IS iOS ONLY (reader, 2026-09-15: "only build on ios"). The scan builds ONE
+      // platform — the one it resolved — so routing a unit to the OTHER one hands it a product set
+      // that was never built: after the reader deleted `Sources/.build`, CoreUI's `Window.swift`
+      // (whose `import AppKit` sits inside `#if os(macOS)`, which the marker test cannot see) was
+      // classified host, got an empty `-I` set, and failed on `no such module 'Router'` even though
+      // the iOS build compiles that very file. The macOS heuristic now applies only to a run that
+      // IS the host, where a macOS-only unit is genuinely a different platform.
+      if toolchain.platform == .iosSimulator { return .iosSimulator }
       if ScanPlatformResolver.usesMacOSOnlyAPI(files) { return .host }
       return toolchain.platform
     }
@@ -426,11 +434,19 @@ nonisolated enum ScanEngine {
       guard let manifest = manifests[packageRoot.path] else { return false }
       for target in (manifest.targets ?? []).filter({ !$0.isSkippable }) {
         let files = ScanExtractor.targetSourceFiles(for: target, packageRoot: packageRoot)
-        if ScanPlatformResolver.importsUIKit(files, limit: 12) { return true }
+        // The whole target, not its first twelve files: a UIKit import past file 12 (alphabetical)
+        // used to leave an iOS package resolved as the HOST, which then builds host products for a
+        // tree that cannot make them (reader, 2026-09-15: "also prioritize building on iOS").
+        if ScanPlatformResolver.importsUIKit(files) { return true }
       }
       return false
     }
-    guard projectUsesIOS || packageImportsUIKit else {
+    // A declared iOS platform counts as an iOS tree on its own (a package declaring both iOS and
+    // macOS is an iOS TREE for this scan: the iOS build is the one it makes).
+    let packageDeclaresIOS = packageRoots.contains {
+      ScanPlatformResolver.declaresIOSPlatform(manifests[$0.path]?.rawJSON)
+    }
+    guard projectUsesIOS || packageImportsUIKit || packageDeclaresIOS else {
       emit(.phase("Targets the host platform"))
       return .host()
     }

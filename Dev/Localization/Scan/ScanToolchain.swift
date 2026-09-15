@@ -196,6 +196,20 @@ nonisolated enum ScanPlatformResolver {
     return false
   }
 
+  /// True when the manifest DECLARES an iOS platform — `platforms: [.iOS(.v17), …]`.
+  ///
+  /// The decisive mark of a package that can be built for iOS, and the one that settles a package
+  /// declaring BOTH (playgra: `.iOS(.v17), .macOS(.v14)`): reader, 2026-09-15, "Make Dev app to also
+  /// prioritize building on iOS". Read from `dump-package`'s undecoded JSON, which the manifest
+  /// model carries for exactly this (`ScanPackageManifest.rawJSON`).
+  static func declaresIOSPlatform(_ rawJSON: Data?) -> Bool {
+    guard let rawJSON,
+      let object = try? JSONSerialization.jsonObject(with: rawJSON) as? [String: Any],
+      let platforms = object["platforms"] as? [[String: Any]]
+    else { return false }
+    return platforms.contains { ($0["platformName"] as? String)?.lowercased() == "ios" }
+  }
+
   /// True when any of `files` imports UIKit — the decisive mark of an iOS
   /// target (the macOS counterpart is AppKit). Bounded read: the first match
   /// wins.
