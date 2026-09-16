@@ -139,9 +139,9 @@ private struct ProjectRow: View {
   @ViewBuilder
   private var badge: some View {
     if row.hasRecords {
-      Text("\(row.needsReviewKeyCount) needs review · \(row.keyCount) keys")
+      Text("\(row.keyCount) keys")
         .font(.caption)
-        .foregroundStyle(row.needsReviewKeyCount > 0 ? Color.orange : Color.secondary)
+        .foregroundStyle(.secondary)
     } else if row.catalogExists {
       Text("Not opened yet")
         .font(.caption)
@@ -438,9 +438,8 @@ private struct LocalizationStatus: View {
   var body: some View {
     Group {
       if store.isLoaded {
-        let needsReview = store.needsReviewKeyCount
-        Text("\(store.totalKeyCount) keys, \(needsReview) needs review")
-          .foregroundStyle(needsReview > 0 ? Color.orange : Color.secondary)
+        Text("\(store.totalKeyCount) keys")
+          .foregroundStyle(.secondary)
       } else {
         Text("No catalog open")
           .foregroundStyle(.tertiary)

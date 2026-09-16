@@ -64,10 +64,6 @@ struct SidebarProjectRow: Identifiable {
   let rootURL: URL?
   let catalogURL: URL
   let iconImage: NSImage?
-  /// Distinct keys with at least one filled needs_review record — mirrors
-  /// the Localization tool's 'Needs review' row filter (a key counts when
-  /// ANY of its language/plural slots needs review).
-  let needsReviewKeyCount: Int
   /// Distinct translatable keys present in the project's reconciled records.
   let keyCount: Int
   let catalogExists: Bool
@@ -176,7 +172,6 @@ final class SidebarViewModel {
           rootURL: project.rootURL,
           catalogURL: project.catalogURL,
           iconImage: project.iconThumbnail,
-          needsReviewKeyCount: badge.needsReviewKeys,
           keyCount: badge.keys,
           catalogExists: fm.fileExists(atPath: project.catalogURL.path),
           hasRecords: badge.records > 0)

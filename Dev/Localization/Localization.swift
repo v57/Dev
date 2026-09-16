@@ -524,43 +524,6 @@ final class LocalizationStore {
 
   var totalKeyCount: Int { catalog?.strings.count ?? 0 }
 
-  /// Distinct keys with at least one FILLED needs_review record — the same
-  /// key-level semantics as the sidebar project badge (a key counts when
-  /// ANY of its language/plural slots needs review). 0 when no catalog is open.
-  ///
-  /// STORED, never derived on a read (reader, 2026-09-15: "it still uses 100% cpu while
-  /// translation is working"). It used to WALK `project.records` — the SwiftData to-many
-  /// RELATIONSHIP, which faults one object at a time — and it is read from a VIEW BODY, so every
-  /// re-render re-paid the whole walk: measured on the reader's own store, 2.87 s for one
-  /// project's 26 156 records. Anything that re-rendered while a run worked — a progress tick, a
-  /// published batch, a row landing — burned seconds of CPU per frame.
-  ///
-  /// It is rebuilt where the records CHANGE instead: `markDirty` (every catalog and record
-  /// mutation funnels there, a run's publish and finish included) and the load path. A read now
-  /// costs a property load.
-  private(set) var needsReviewKeyCount = 0
-
-  /// Rebuilds `needsReviewKeyCount`: distinct keys holding a filled `needs_review` record. ONE
-  /// fetch, three fields, no object graph and no relationship fault — the walk it replaces faulted
-  /// every record of the project, which is what made a read cost seconds.
-  func recountNeedsReviewKeys() {
-    guard let project else {
-      needsReviewKeyCount = 0
-      return
-    }
-    let owner = project.persistentModelID
-    var descriptor = FetchDescriptor<TranslationRecord>(
-      predicate: #Predicate { $0.project?.persistentModelID == owner })
-    descriptor.propertiesToFetch = [\.key, \.state, \.value, \.project]
-    let rows = (try? TranslationStore.shared.context.fetch(descriptor)) ?? []
-    var keys = Set<String>()
-    for record in rows
-    where record.state == .needs_review
-      && !(record.value ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-      keys.insert(record.key)
-    }
-    needsReviewKeyCount = keys.count
-  }
 
   /// Keys explicitly marked shouldTranslate = false.
   var nonTranslatableCount: Int {
@@ -1944,9 +1907,6 @@ final class LocalizationStore {
     isUnsavedPromptPresented = false
     loadError = nil
     self.project = project
-    // The open project's record counts, built ONCE here rather than on every render that shows
-    // them (2026-09-15: the render-path walk cost seconds per frame on a real project).
-    recountNeedsReviewKeys()
     if let project {
       // ONE query for the records the mirror just wrote: this context is cold,
       // so the relationship would fault per row (4.2 s for 48k) and this fetch
@@ -1993,9 +1953,6 @@ final class LocalizationStore {
       catalog, project: project, existing: project.records ?? [], context: context)
     try? context.save()
     self.project = project
-    // The mirror just wrote records: the badge counts them, so rebuild it here (once) rather than
-    // on the next render.
-    recountNeedsReviewKeys()
     rebuildRecordIndex()
     buildRows()
     // The scan's merge preview is a diff against the catalog — keep it
@@ -2106,8 +2063,6 @@ final class LocalizationStore {
   /// by `markDirty()` inside `setGeneratedComment`".
   private func markDirty(records changed: Bool = true) {
     isDirty = true
-    guard changed else { return }
-    recountNeedsReviewKeys()
   }
 
   // MARK: - rows
