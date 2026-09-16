@@ -690,7 +690,8 @@ The operation classes know what to send, nothing knows how to send it.
     The rule that closes it: the RECORD wins for any slot whose records moved after the
     session loaded. `Project.adoptForeignWrites()` re-projects those slots from the store
     and is called by `save()` before it publishes, and by a NEW `run()` before its rows are
-    built (a run's ending saves, so it is the same hazard). A slot the session edited
+    built (a run reads the session's slots, so the same stale reading would be published
+    when it ends). A slot the session edited
     itself has no record behind the edit yet, so its stamp has not moved and the adoption
     leaves it alone; `.ignore` and `.stale` stay the session's, being the two statuses a
     record cannot express. A RESUME is deliberately not this path — it keeps the batches

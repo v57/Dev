@@ -288,11 +288,11 @@ extension Translation {
       // One workspace shows one run at a time, so the rail and the bar follow the run
       // that was just asked for.
       self.stage = stage
-      // A NEW run reads the CURRENT world: a slot another writer moved since this session
-      // loaded is not this run's to translate (a human's edit in the browser would read as
-      // the shipped text it replaced), and its ending SAVES, so the same snapshot would also
-      // be written back over it. Adoption is what closes both halves; a run RESUMED from a
-      // pause is not this path (it keeps the batches it already cut).
+      // A NEW run reads the CURRENT world: its rows are the session's, so a slot another writer
+      // moved since this session loaded would be read as the value it replaced (a human's edit
+      // still reading as the shipped text) — and the run's results are PUBLISHED when it ends, so
+      // that stale reading would also land in the app's catalog and reach the file on the next
+      // Save. A run RESUMED from a pause is not this path (it keeps the batches it already cut).
       try project.adoptForeignWrites()
       guard runner.router.isConfigured else {
         error = Self.notConfigured
