@@ -117,7 +117,15 @@ Constraints on the whole redesign, not gaps in it. Everything below assumes them
         verified       -> "translated"
         ignore         -> shouldTranslate = false, the value is kept
         stale          -> never written: staleness is app-side knowledge
-        imported       -> never written: the file keeps whatever it carried
+        imported       -> "needs_review" (reader, 2026-09-16): a value nobody
+                          vouched for is not the file's `translated`, which means
+                          HUMAN confirmed. It used to write nothing at all, so a
+                          value the imported-database resolve put on screen never
+                          reached the .xcstrings — and writing `"translated"` for
+                          it (as the old pipeline's merge did) claimed a
+                          confirmation no human gave. Both writers now agree: the
+                          artifact learns the value and that it is unreviewed, and
+                          the confirm click is what promotes it to `"translated"`.
 
     Note the two names that twist: Xcode's `"translated"` means *human
     confirmed*, which is the redesign's `.verified`, and the redesign's
@@ -842,6 +850,11 @@ The operation classes know what to send, nothing knows how to send it.
     writes NO memory entry: it is the source of truth it is, not a lesson about
     our model. It is the one source that stays GLOBAL — shipped translations are
     not this project's lessons, and every project should be able to read them.
+    The artifact DOES get the value: `.imported` writes as `"needs_review"` (2.1,
+    reader 2026-09-16) — the status itself stays app-side, the value and its
+    unreviewed state do not. A run still never overwrites the slot (`.imported`
+    is out of every write-back's write set), and the confirm click is the only
+    thing that promotes it to `"translated"`.
 
 6.4 The horizontal pass must not resolve through the imported database: with the
     freshness gate lifted it would replace existing machine values with shipped

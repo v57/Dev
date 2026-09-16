@@ -1122,6 +1122,12 @@ final class LocalizationStore {
   /// the same (sourceText, language, target) as gold immediately — no need
   /// to wait for the next run's Stage 0. No-op unless the record really is
   /// auto-reviewed with a value.
+  ///
+  /// Clearing the marker is HALF the confirm: the file carries an imported
+  /// value as `needs_review` (that is the state a value nobody vouched for
+  /// writes), so the owning row must be merged before a Save promotes it to
+  /// `translated`. The callers do that — `confirmAutoReviewedRow` for the row
+  /// action, `confirmAutoReviewed(key:language:category:)` for a cell.
   @discardableResult
   func confirmAutoReviewed(_ record: TranslationRecord) -> Bool {
     guard let project, let catalog,
@@ -1147,14 +1153,17 @@ final class LocalizationStore {
   }
 
   /// Cell-scoped confirm (flat slot, or one plural form when `category` is
-  /// set). Value unchanged; no file write needed (the file already carries
-  /// "translated" — the auto marker is DB-only provenance).
+  /// set). The value does not move, but the row still has to be re-merged:
+  /// the slot just became human-confirmed, and the file only learns that from
+  /// the merge (`needs_review` -> `translated` — the auto marker is DB-only
+  /// provenance the artifact cannot carry).
   func confirmAutoReviewed(key: String, language: String, category: String? = nil) {
     guard let project,
           let record = Reconcile.record(
             key: key, language: language, category: category, in: project)
     else { return }
     confirmAutoReviewed(record)
+    saveRow(key)
   }
 
   /// Row-scoped confirm: every auto-reviewed slot (flat + plural forms) of

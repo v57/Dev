@@ -27,8 +27,10 @@ import SwiftData
 ///    record with a value gets its value + mapped state written into the
 ///    parsed catalog's stringUnit and the file is atomically rewritten —
 ///    but only when something actually differs, so an untouched reload is a
-///    no-op write. reviewed -> "translated", needs_review -> "needs_review";
-///    empty records write nothing (absence IS the empty state).
+///    no-op write. reviewed -> "translated", needs_review -> "needs_review",
+///    and an AUTO-REVIEWED (imported-DB) copy -> "needs_review" too: a value
+///    nobody vouched for is not the file's `translated`; empty records write
+///    nothing (absence IS the empty state).
 ///
 /// Keep the file the artifact; the DB is the working/provenance store.
 ///
@@ -63,6 +65,20 @@ nonisolated enum Reconcile {
     case .needs_review: return "needs_review"
     case .reviewed: return "translated"
     }
+  }
+
+  /// The state one RECORD's value writes to the file.
+  ///
+  /// A record knows one thing its state alone does not: `autoReviewed` — an imported-DB copy
+  /// is `.reviewed` with nobody behind it (no human confirmed it, `reviewedAt` is nil, the
+  /// "auto" badge says so in the UI). Its file state is `"needs_review"`, the same one a
+  /// machine value carries: `"translated"` is Xcode's word for a HUMAN confirmation and
+  /// writing it here would claim one that never happened — a catalog that then reads back
+  /// with the value looking approved by a person. The `.imported` provenance itself stays
+  /// app-side; the file only learns that the value is unreviewed.
+  static func fileState(for record: TranslationRecord) -> String? {
+    if record.state == .reviewed, record.autoReviewed { return "needs_review" }
+    return fileState(for: record.state)
   }
 
   /// File stringUnit state -> DB state when seeding a fresh record.
@@ -1101,7 +1117,7 @@ nonisolated enum Reconcile {
       // Never resurrect a key the catalog no longer carries.
       guard updated.strings[record.key] != nil else { continue }
       if record.language == sourceLanguage { continue }
-      guard let fileState = fileState(for: record.state) else { continue }
+      guard let fileState = fileState(for: record) else { continue }
 
       if let category = record.category {
         // Plural form record: write the form, never the flat unit.

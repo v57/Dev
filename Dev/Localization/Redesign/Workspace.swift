@@ -247,8 +247,9 @@ extension Translation {
     private(set) var cursors: [Stage: Run.Cursor] = [:]
 
     /// The imported database, applied before any model call (6.3). A shipped human
-    /// translation settles its slot as `.imported` — usable, unreviewed, and written
-    /// back by nobody — and writes NO memory entry, because the database is the source
+    /// translation settles its slot as `.imported` — usable, unreviewed, never overwritten by a
+    /// run (it is out of every write-back's write set), and written to the artifact as
+    /// `needs_review` (5.8) — and writes NO memory entry, because the database is the source
     /// of truth it is and not a lesson about our model.
     ///
     /// Only a slot with nothing in it is resolved: a value the app already holds is
@@ -843,12 +844,17 @@ extension Translation {
     }
     /// One slot as the file carries it. Returns whether the slot really moved.
     ///
-    /// Three statuses write nothing at all: `.stale` (app-side knowledge, never written),
-    /// `.imported` (the shipped database is not a writer — the file keeps what it carried) and
+    /// Two statuses write nothing at all: `.stale` (app-side knowledge, never written) and
     /// `.ignore` (the key is flagged; its values are the file's). A `.needsTranslate` slot with
     /// nothing in it writes nothing either: absence IS "not translated" in the format, and
     /// writing `new` for every untouched slot of a project would rewrite a whole catalog on the
     /// first Save.
+    ///
+    /// `.imported` writes as `needs_review`: a shipped translation nobody has vouched for is the
+    /// same thing the artifact calls unreviewed, which is the state `.translated` (machine
+    /// output) rides in. It must NOT write `"translated"` — that is Xcode's word for a human
+    /// confirmation, and the `.imported` / `.verified` distinction is app-side knowledge the file
+    /// cannot carry (a value it held as `"translated"` would read back as a human's).
     ///
     /// A shape the session and the FILE disagree on stays as the file has it — a flat slot never
     /// writes into a plural-varied node, and no device-varied node is touched — which is the old
@@ -862,9 +868,11 @@ extension Translation {
       let state: String
       switch slot.status {
       case .needsTranslate: state = "new"
-      case .translated: state = "needs_review"
+      // Both unreviewed shapes land in the same file state: the artifact has one word for
+      // "nobody has vouched for this", and which side produced it stays app-side.
+      case .translated, .imported: state = "needs_review"
       case .verified: state = "translated"
-      case .stale, .imported, .ignore: return false
+      case .stale, .ignore: return false
       }
       switch slot.target {
       case .value(let text):
