@@ -478,6 +478,11 @@ enum Translation {
     /// key -> position in `data`, so a result can be applied by key and
     /// re-checked against the scan's snapshot.
     var rowIndex: [String: Int] = [:]
+    /// When the snapshot in `data` was taken. Nothing whose store record carries a NEWER
+    /// stamp is this session's to overwrite: it belongs to whoever wrote it
+    /// (`adoptForeignWrites`). A project whose `loadData` never ran keeps the distant past,
+    /// which adopts nothing.
+    private(set) var loadedAt: Date = .distantPast
     /// The parsed catalog the rows are projected from (4.8). A row IS a catalog key, so
     /// the artifact is what makes the row universe — and keeping it is what lets the
     /// no-argument `loadData()` re-project the same file state (a discard, a stage
@@ -569,6 +574,57 @@ enum Translation {
       }
       data = rows
       rowIndex = positions
+      // The stamp a foreign write is read against (`adoptForeignWrites`): the moment the
+      // snapshot above was taken.
+      loadedAt = .now
+    }
+
+    /// Adopts the store's own version of every slot whose RECORDS moved after this session
+    /// loaded — the universe rule (4.8) read from the other side.
+    ///
+    /// The rows are a SNAPSHOT: `loadData()` builds them once and deliberately refuses to
+    /// build them again, and everything this side writes comes out of them — the catalog the
+    /// publish step hands the app, and the records `saveData` stamps. The store, meanwhile,
+    /// has other writers: the browser's cell edit writes a record straight (it never goes
+    /// through this session), a second window saves, an old-pipeline run fills slots. A
+    /// snapshot that old is a REVERSION MACHINE, and it was one in the field: a human edited
+    /// an imported value in the browser, pressed Save on this side, and the session wrote its
+    /// snapshot over the edit BOTH ways — the record came back auto-reviewed with the shipped
+    /// text, and the published catalog put that same text back into the `.xcstrings`.
+    ///
+    /// So the RECORD wins wherever one moved under the session: a slot with a record stamped
+    /// newer than `loadedAt` is re-projected from its records, exactly as the row builder
+    /// would have projected it had they read that way at the load. What the session owns by
+    /// itself is untouched — a slot the human edited HERE has no record behind its edit yet
+    /// (the store hears about it in `saveData`), so its stamp has not moved and nothing is
+    /// adopted. The two statuses the store cannot express (`.ignore` for a row taken out of
+    /// scope, `.stale` from the file) are the session's own reading, so a slot carrying one
+    /// keeps it over the store's.
+    ///
+    /// Returns how many slots were adopted: 0 for a session whose world did not move, which
+    /// is the ordinary case (the caller's own run writes are the session's too).
+    @discardableResult
+    func adoptForeignWrites() throws -> Int {
+      let records = try global.store.records(project: id)
+      let byKey = Dictionary(grouping: records, by: \.key)
+      var adopted = 0
+      for (key, ofKey) in byKey {
+        guard let row = rowIndex[key], data.indices.contains(row) else { continue }
+        for (language, ofLanguage) in Dictionary(grouping: ofKey, by: \.language) {
+          guard ofLanguage.contains(where: { $0.updatedAt > loadedAt }),
+            let at = data[row].index(of: language)
+          else { continue }
+          let current = data[row].targets[at]
+          var stored = slot(language: language, records: ofLanguage)
+          guard stored.target != current.target || stored.status != current.status else {
+            continue  // the session already says what the store says
+          }
+          if current.status == .ignore || current.status == .stale { stored.status = current.status }
+          data[row].targets[at] = stored
+          adopted += 1
+        }
+      }
+      return adopted
     }
     /// One row of the table: a CATALOG key, with what the store knows about it.
     ///

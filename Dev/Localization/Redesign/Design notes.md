@@ -679,6 +679,25 @@ The operation classes know what to send, nothing knows how to send it.
         ⌘S/toolbar path is enough once the two above hold) and a run's unsaved state has
         to read where the user looks — the status bar is that place (8.1).
 
+    THE SESSION IS A SNAPSHOT, and the store's other writers do not go through it
+    (reader, 2026-09-16, after losing a hand edit). `Project.loadData` builds the rows
+    once and refuses to build them again, and both halves of a save write that snapshot
+    out — `publish()` into the app's catalog (which a Save then puts in the file) and
+    `saveData` onto the records. The browser's cell edit writes a RECORD directly and
+    merges the artifact itself, so a session opened before that edit was a reversion
+    machine: pressing Save on this side put the SHIPPED text back, in the store
+    (re-stamping `autoReviewed`, so the "auto" badge came back) and in the `.xcstrings`.
+    The rule that closes it: the RECORD wins for any slot whose records moved after the
+    session loaded. `Project.adoptForeignWrites()` re-projects those slots from the store
+    and is called by `save()` before it publishes, and by a NEW `run()` before its rows are
+    built (a run's ending saves, so it is the same hazard). A slot the session edited
+    itself has no record behind the edit yet, so its stamp has not moved and the adoption
+    leaves it alone; `.ignore` and `.stale` stay the session's, being the two statuses a
+    record cannot express. A RESUME is deliberately not this path — it keeps the batches
+    it already cut. What is still open is the other direction: a key the file gains (a
+    scan merge) after the session loaded is not a row of it at all, so the session cannot
+    translate it until the project is reopened.
+
 5.9 Retries (reader, 2026-09-14). A model response is re-asked before a batch is given
     up on: THREE RETRIES after the first attempt — at most four sends for one batch —
     and only for a failure the run already calls `retryable`. That flag is computed at
@@ -1362,6 +1381,18 @@ The operation classes know what to send, nothing knows how to send it.
 - [x] 10.18 Moot. A pass that always runs has nothing to prefer, and the rows with
       something settled are where it has work anyway. The rows without one are the
       price of having no selection and no staleness question anywhere in the shape.
+- [x] 10.21 Which writer wins when the browser and the redesign are open on the same
+      project (reader, 2026-09-16): the STORE. The redesign's rows are a snapshot taken
+      at its open, and its Save wrote that snapshot over both halves of the world — the
+      records (`saveData`) and the artifact (through `publish`) — which silently reverted
+      a hand edit made in the browser: the record came back `reviewed` + `autoReviewed`
+      with the shipped value (so the "auto" badge returned) and the file got the same
+      shipped text back as `needs_review`. Now the session ADOPTS every slot whose records
+      moved after it loaded, before it publishes or saves (`Project.adoptForeignWrites`,
+      called from `save()` and from a new `run()`). Rejected for now: refusing the save
+      while the world moved under the session (no data rule to reason about, worst UX at
+      the moment the user wants the write) and a human-only guard (it would not cover a
+      newer MACHINE value written by a second writer, which is the same class).
 
 ## 11. What this pass changed in the redesign folder
 

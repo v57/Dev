@@ -288,6 +288,12 @@ extension Translation {
       // One workspace shows one run at a time, so the rail and the bar follow the run
       // that was just asked for.
       self.stage = stage
+      // A NEW run reads the CURRENT world: a slot another writer moved since this session
+      // loaded is not this run's to translate (a human's edit in the browser would read as
+      // the shipped text it replaced), and its ending SAVES, so the same snapshot would also
+      // be written back over it. Adoption is what closes both halves; a run RESUMED from a
+      // pause is not this path (it keeps the batches it already cut).
+      try project.adoptForeignWrites()
       guard runner.router.isConfigured else {
         error = Self.notConfigured
         throw BackendError.notConfigured(Self.notConfigured)
@@ -789,6 +795,18 @@ extension Translation {
     /// this side could only disagree with the flag that gates the write.
     func save() async {
       guard !project.data.isEmpty else { return }
+      // The WORLD first, then this session (4.8). This session's rows are a snapshot from its
+      // open, and both halves of a save write that snapshot out — the publish step into the
+      // app's catalog (which a Save then puts in the file) and `saveData` onto the records —
+      // so a record another writer moved since the load is adopted before either runs, or the
+      // save silently reverts it. A session that could not READ the world must not write over
+      // it: the failure is reported and the save stops.
+      do {
+        try project.adoptForeignWrites()
+      } catch {
+        self.error = error.localizedDescription
+        return
+      }
       publish()
       guard let app else {
         error = "No catalog is open for this project, so there is nothing to save into."
