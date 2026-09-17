@@ -422,3 +422,34 @@ are catalog data, and the count asks which keys hold a filled `needs_review` REC
         project it will be seconds. The fix for that is a recount on a background context with the
         count published back (a badge may lag a tick); it is a new concurrency path, so it waits for
         the reader's word rather than arriving unasked.
+
+### A reload asks which version to load (2026-09-17)
+
+Reader: "When loading .xcstrings file currently cached data is prioritized and overrides it. Make it
+ask, which version is to load when it sees differences." Mine, and one-way: the mirror's ownership
+rule kept a DB-OWNED record's value and dropped the file's (an Xcode-side edit vanished), and the
+pane's cell EDITOR reads the RECORD (`LocalizationStore.value(for:language:)`), so the next row save
+merged that cached value back over the file. Nothing anywhere said the file had held something else.
+
+  - [x] `Reconcile.SlotDifference` / `DifferencePolicy` / `MirrorOutcome`: a slot the file and a
+        DB-OWNED record BOTH fill with different values is counted (flat slot and plural FORM alike),
+        and the pass that finds one writes NOTHING — its background context is dropped unsaved — and
+        answers `held` instead. `.fileWins` adopts the file's value + mapped state, resets the record
+        to an unowned mirror and keeps the replaced value as a user-confirmed edit row (the Stage-0
+        corpus sees the correction); `.appWins` is the old rule; a non-load caller (the per-key
+        mutations) defaults to it.
+  - [x] `LocalizationStore`: the versions prompt. The parse waits on `heldLoad` with `pendingLoad`
+        still set (the pane reads as opening, the store clear refuses), the alert names the count and
+        a few slots and offers load-file / keep-app / cancel, and a newer open/reload, a close or a
+        store clear supersedes the question with the load it belongs to. `open`/`reload` now share
+        ONE landing path (`land` → `finishLoad`), which is also where "an open resets the view state,
+        a reload does not" is written down once.
+  - [x] NOT asked about, deliberately: a slot the file has nothing for (the app's own unsaved work,
+        which the design keeps alive across a crash) and a slot only the file fills (an unowned
+        mirror, which the file already wins silently).
+  - [x] Probe `/tmp/dev-load-ask-probe` (whole tree, real `LocalizationStore` + real `Reconcile` over
+        a real store file at $PROBE_STORE_DIR; fixture written as a real `.xcstrings` and read back
+        through the app's own parser): **GREEN 46/46**, and **RED 29/46** with the detection inverted
+        and the hold disabled — the 17 failing checks are exactly the ask, the "nothing was written"
+        set and both answers. Gate: BUILD SUCCEEDED, zero warnings.
+

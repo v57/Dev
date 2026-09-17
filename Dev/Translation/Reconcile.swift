@@ -23,6 +23,16 @@ import SwiftData
 ///    provenance store and a key dropped from the file must not erase who
 ///    translated it.
 ///
+///    The one case that rule cannot decide by itself is a slot BOTH sides
+///    fill with DIFFERENT values: the app's records hold what a run or an
+///    import wrote, the file holds what a translator typed in Xcode, and
+///    whichever the mirror keeps the other one is gone (keeping the record
+///    also means the next Save writes it back OVER the file's value). That
+///    is a question, not a rule: an `.ask` pass writes nothing and reports
+///    the differences (`SlotDifference`), and the user's answer is what the
+///    load then mirrors with (`DifferencePolicy`). See
+///    `LocalizationStore.resolveDifferences`.
+///
 ///  - SAVE (`commit`) writes the working store back to the artifact: every
 ///    record with a value gets its value + mapped state written into the
 ///    parsed catalog's stringUnit and the file is atomically rewritten —
@@ -199,8 +209,81 @@ nonisolated enum Reconcile {
   /// Outcome counts of one upsert, for logging.
   struct UpsertStats: Sendable {
     var created = 0
-    var refreshed = 0  // unowned slot adopted the file's value/state
+    var refreshed = 0  // unowned slot adopted the file's value/state; or, under
+                       // `fileWins`, an owned one the user told us to refresh
     var kept = 0       // DB-owned record untouched by the reload
+    /// Slots where the file and a DB-OWNED record BOTH carry a value and they
+    /// differ (see `SlotDifference`). Counted under every policy — the answer to
+    /// the question does not change how many slots it was about.
+    var differing = 0
+    /// A capped sample of those slots, for the prompt's text (see
+    /// `DifferenceReport.sampleLimit`). Never the whole set: a real catalog can
+    /// differ on thousands of slots and nothing draws them.
+    var differenceSample: [SlotDifference] = []
+
+    /// What the pass found, in the form that crosses an actor boundary.
+    var differenceReport: DifferenceReport {
+      DifferenceReport(count: differing, sample: differenceSample)
+    }
+  }
+
+  /// One slot the FILE and the app's records both fill, with different values.
+  ///
+  /// This is the set a load has to ASK about. Where a slot is filled on one side
+  /// only, the mirror's rule is enough: the file's value wins for a row nobody in
+  /// this app has worked on (an unowned file mirror), the app's value wins for a row
+  /// it owns (a run's output the file has not been given yet) — and a slot the file
+  /// has nothing for is the app's own unsaved work, which the design deliberately
+  /// keeps alive rather than asking about on every open. Where BOTH sides hold a
+  /// value and they disagree, keeping the record throws a human's Xcode-side edit
+  /// away (and the next Save writes the record's value back over the file), while
+  /// taking the file's throws the app's own value away. Neither is the app's call.
+  struct SlotDifference: Sendable, Equatable {
+    /// The catalog key.
+    let key: String
+    /// Target language.
+    let language: String
+    /// The plural form this slot is ("one", "other", …); nil for a flat slot.
+    let category: String?
+    /// What the FILE carries.
+    let fileValue: String
+    /// What the project's record carries.
+    let recordValue: String
+
+    /// The slot as the prompt names it: `key (language)` or `key (language, one)`.
+    var label: String {
+      guard let category else { return "\(key) (\(language))" }
+      return "\(key) (\(language), \(category))"
+    }
+  }
+
+  /// What a pass found, as an answer the caller can act on: the EXACT number of
+  /// differing slots, plus a sample of them (the list is capped because a large
+  /// catalog's diff is thousands of slots and only a few are ever printed).
+  struct DifferenceReport: Sendable {
+    let count: Int
+    let sample: [SlotDifference]
+
+    /// How many differing slots one report carries.
+    static let sampleLimit = 8
+
+    var isEmpty: Bool { count == 0 }
+  }
+
+  /// What a (re)load does when the file and the app's records disagree about a slot.
+  ///
+  /// - `ask`: detect, and STOP. The pass writes nothing (its context is dropped
+  ///   unsaved) and reports what it found, so the caller can put the question to the
+  ///   user and re-run the mirror with the answer. Nothing is decided by default —
+  ///   a load that silently picks a side is the bug this exists for.
+  /// - `fileWins`: adopt the FILE's value for those slots, whatever the record's
+  ///   provenance says — the user's answer when the file is the newer writer.
+  /// - `appWins`: the mirror's own rule (a DB-owned record keeps its value and the
+  ///   file's differing one is dropped, until the next Save writes the record's out).
+  enum DifferencePolicy: Sendable, Equatable {
+    case ask
+    case fileWins
+    case appWins
   }
 
   /// What a background mirror wrote, in Sendable form: the model object itself
@@ -208,6 +291,17 @@ nonisolated enum Reconcile {
   struct MirrorResult: Sendable {
     let projectID: PersistentIdentifier
     let stats: UpsertStats
+  }
+
+  /// What one mirror pass did.
+  ///
+  /// `held` is the `.ask` policy finding something to ask about: nothing was written
+  /// (the pass's own context is thrown away unsaved), so the caller can ask and then
+  /// re-run the mirror with the user's answer — a question answered AFTER the write
+  /// would be a question about a state that is already gone.
+  enum MirrorOutcome: Sendable {
+    case mirrored(MirrorResult)
+    case held(DifferenceReport)
   }
 
   /// Mirrors `catalog` into the store on a BACKGROUND `ModelContext` — the
@@ -220,11 +314,19 @@ nonisolated enum Reconcile {
   /// the main context's copies are stale until then. Nothing here touches the
   /// open catalog's in-memory state, so a failed write leaves the document
   /// openable — the caller decides how to report it.
+  ///
+  /// `policy` is what a slot the file and the app's records disagree about does
+  /// (`DifferencePolicy`). Under the default `.ask` the pass SAVES NOTHING when it
+  /// finds one — the unsaved context is dropped — and answers `held` instead, so the
+  /// caller can ask and re-run the mirror with the user's answer. That is the only
+  /// path that pays for the question: an ordinary load (no differences) writes and
+  /// saves exactly as it always did.
   static func mirrorOffMainActor(
     _ catalog: StringCatalog,
     catalogURL: URL,
-    in container: ModelContainer
-  ) async -> Result<MirrorResult, Error> {
+    in container: ModelContainer,
+    policy: DifferencePolicy = .ask
+  ) async -> Result<MirrorOutcome, Error> {
     await Task.detached(priority: .userInitiated) {
       let context = ModelContext(container)
       let project = ensureProject(catalogURL: catalogURL, in: context)
@@ -233,13 +335,18 @@ nonisolated enum Reconcile {
       // (measured 4.2 s for 48,420 records, versus ~0.6 s for the fetch).
       let existing = records(of: project, in: context)
       let stats = upsertFromCatalog(
-        catalog, project: project, existing: existing, context: context)
+        catalog, project: project, existing: existing, context: context, policy: policy)
+      // Held, not written: the question comes first, and a write already on its way to
+      // disk would make it a question about a state the user can no longer choose.
+      if policy == .ask, !stats.differenceReport.isEmpty {
+        return .success(.held(stats.differenceReport))
+      }
       do {
         try context.save()
       } catch {
         return .failure(error)
       }
-      return .success(MirrorResult(projectID: project.persistentModelID, stats: stats))
+      return .success(.mirrored(MirrorResult(projectID: project.persistentModelID, stats: stats)))
     }.value
   }
 
@@ -528,12 +635,20 @@ nonisolated enum Reconcile {
   /// iterating `project.records` costs seconds where it is not (see
   /// `records(of:in:)`). So the background mirror passes a fetch, the warm
   /// main-actor paths pass the relationship.
+  ///
+  /// `policy` decides what a slot the file and an owned record disagree about does
+  /// (`DifferencePolicy`): the load's answer. `.appWins` is the default because it is
+  /// what every non-load caller wants — the per-key mutations (a scan merge, a plural
+  /// vary) mirror a catalog whose values the app itself just wrote, so there is
+  /// nothing for a user to decide and an `.ask` pass would simply drop their work on
+  /// the floor.
   @discardableResult
   static func upsertFromCatalog(
     _ catalog: StringCatalog,
     project: Project,
     existing: [TranslationRecord],
-    context: ModelContext
+    context: ModelContext,
+    policy: DifferencePolicy = .appWins
   ) -> UpsertStats {
     var stats = UpsertStats()
 
@@ -583,7 +698,7 @@ nonisolated enum Reconcile {
               value: value,
               seedState: unit.map { seedState(fileState: $0.state) },
               context: context, bySlot: &bySlot, stats: &stats,
-              created: &created)
+              created: &created, policy: policy)
           }
           continue
         }
@@ -599,7 +714,7 @@ nonisolated enum Reconcile {
           value: value,
           seedState: unit.map { seedState(fileState: $0.state) },
           context: context, bySlot: &bySlot, stats: &stats,
-          created: &created)
+          created: &created, policy: policy)
       }
     }
     if !created.isEmpty {
@@ -653,7 +768,8 @@ nonisolated enum Reconcile {
   /// Plural (key, language, category) slot. Same ownership rule as the flat
   /// slot: DB-owned records keep value/provider/state, unowned file mirrors
   /// adopt the file's current form value/state (or go empty when the form
-  /// vanished).
+  /// vanished) — and a form both sides fill with different values is resolved by
+  /// the same `resolveOwnedSlot` the flat slot uses, under the load's policy.
   private static func upsertForm(
     key: String,
     language: String,
@@ -664,17 +780,19 @@ nonisolated enum Reconcile {
     context: ModelContext,
     bySlot: inout [String: [String: [String: TranslationRecord]]],
     stats: inout UpsertStats,
-    created: inout [TranslationRecord]
+    created: inout [TranslationRecord],
+    policy: DifferencePolicy
   ) {
     if let record = bySlot[key]?[language]?[category] {
       let fileSlot = FileSlot(
         value: value, state: value != nil ? (seedState ?? .needs_review) : .empty,
         sourceText: sourceText)
       if record.provider != nil || record.edits?.isEmpty == false {
-        // DB-OWNED record: keep value/provider/state/versions; refresh the
-        // source text only when it actually moved.
-        if record.sourceText != sourceText { record.sourceText = sourceText }
-        stats.kept += 1
+        // DB-OWNED record: keep value/provider/state/versions, unless the file
+        // carries a different value for this very slot (see resolveOwnedSlot).
+        resolveOwnedSlot(
+          record: record, fileSlot: fileSlot, sourceText: sourceText,
+          policy: policy, context: context, stats: &stats)
       } else if fileSlot.matches(record) {
         stats.kept += 1
       } else {
@@ -707,7 +825,9 @@ nonisolated enum Reconcile {
   ///    fills, TM copies) -> keep value/provider/state/versions untouched;
   ///    refresh sourceText only. DB provenance survives the reload even
   ///    when the file is stale (a crash between pipeline run and commit
-  ///    must not lose machine output).
+  ///    must not lose machine output). A file that fills this same slot with a
+  ///    DIFFERENT value is the one thing this rule may not decide alone — see
+  ///    `resolveOwnedSlot`.
   ///  - record is an unowned FILE MIRROR (provider nil, no edits — created
   ///    by an earlier upsert) -> re-mirror the file: adopt its value/state,
   ///    or go back to empty when the file dropped the unit. The artifact
@@ -723,18 +843,19 @@ nonisolated enum Reconcile {
     context: ModelContext,
     bySlot: inout [String: [String: [String: TranslationRecord]]],
     stats: inout UpsertStats,
-    created: inout [TranslationRecord]
+    created: inout [TranslationRecord],
+    policy: DifferencePolicy
   ) {
     if let record = bySlot[key]?[language]?[""] {
       let fileSlot = FileSlot(
         value: value, state: value != nil ? (seedState ?? .needs_review) : .empty,
         sourceText: sourceText)
       if record.provider != nil || record.edits?.isEmpty == false {
-        // DB-OWNED record: keep value/provider/state/versions; the file may
-        // only refresh the source text (and even that is skipped when it
-        // already matches).
-        if record.sourceText != sourceText { record.sourceText = sourceText }
-        stats.kept += 1
+        // DB-OWNED record: keep value/provider/state/versions, unless the file
+        // carries a different value for this very slot (see resolveOwnedSlot).
+        resolveOwnedSlot(
+          record: record, fileSlot: fileSlot, sourceText: sourceText,
+          policy: policy, context: context, stats: &stats)
       } else if fileSlot.matches(record) {
         stats.kept += 1
       } else {
@@ -759,6 +880,81 @@ nonisolated enum Reconcile {
     created.append(record)
     bySlot[key, default: [:]][language, default: [:]][""] = record
     stats.created += 1
+  }
+
+  /// The DB-OWNED branch of one slot, shared by `upsertSlot` and `upsertForm` — one
+  /// definition, so a plural form can never be resolved differently from the flat row
+  /// beside it.
+  ///
+  /// The record keeps everything (value, provider, state, context versions) and the
+  /// file may only refresh its source text — EXCEPT when the file fills this very slot
+  /// with a different value. That is the case the mirror's ownership rule cannot decide:
+  /// the app's value came from a run or an import, the file's from a human in Xcode, and
+  /// keeping the record both throws the file's edit away and makes the next Save write
+  /// the record's value back over the file. So the slot is COUNTED as a difference
+  /// (`stats`) and the policy — the user's answer to the load's question — decides:
+  /// `fileWins` adopts the file's slot (`adoptFile`), anything else keeps the record.
+  private static func resolveOwnedSlot(
+    record: TranslationRecord,
+    fileSlot: FileSlot,
+    sourceText: String,
+    policy: DifferencePolicy,
+    context: ModelContext,
+    stats: inout UpsertStats
+  ) {
+    // The source is the artifact's wherever it moved, whether or not the value is
+    // contested: the file is where source text is authored.
+    if record.sourceText != sourceText { record.sourceText = sourceText }
+    guard let fileValue = fileSlot.value,
+          let recordValue = record.value,
+          recordValue != fileValue
+    else {
+      stats.kept += 1
+      return
+    }
+
+    stats.differing += 1
+    if stats.differenceSample.count < DifferenceReport.sampleLimit {
+      stats.differenceSample.append(SlotDifference(
+        key: record.key, language: record.language, category: record.category,
+        fileValue: fileValue, recordValue: recordValue))
+    }
+    if policy == .fileWins {
+      adoptFile(fileSlot, into: record, context: context)
+      stats.refreshed += 1
+    } else {
+      stats.kept += 1
+    }
+  }
+
+  /// Adopts the file's slot over a DB-OWNED record: the value and mapped state, the
+  /// source text, and the provenance reset that marks the record an unowned mirror
+  /// again — PLUS an edit row for the value it replaced.
+  ///
+  /// The edit row is what keeps the app's own corpus honest: the value the record held
+  /// was produced by a run or an import and the file's is a person's, so the
+  /// before->after pair is exactly the correction Stage 0 learns from. Without it the
+  /// app's value would be gone with no trace of who replaced it, which is the loss this
+  /// whole path exists to make deliberate. `editor: .human` and `isUserConfirmed: true`
+  /// say the truth about it: a person edited this catalog, and the app read it back.
+  /// It also leaves the record DB-OWNED (`edits` is no longer empty), so the value the
+  /// user just chose is what survives the reloads that follow.
+  private static func adoptFile(
+    _ fileSlot: FileSlot,
+    into record: TranslationRecord,
+    context: ModelContext
+  ) {
+    let edit = TranslationEdit(
+      record: record,
+      fromValue: record.value,
+      toValue: fileSlot.value ?? "",
+      editor: .human,
+      reason: "Adopted from the catalog file on reload",
+      contextVersions: persistableVersions(ContextVersions()),
+      isUserConfirmed: true)
+    record.edits = (record.edits ?? []) + [edit]
+    context.insert(edit)
+    fileSlot.apply(to: record)
   }
 
   // MARK: - single record lookup

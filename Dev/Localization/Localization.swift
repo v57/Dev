@@ -272,6 +272,27 @@ enum LeaveChoice {
   case cancel
 }
 
+/// Which half of a load a finished parse belongs to (`LocalizationStore.land`).
+/// An OPEN resets the pane's view state (search, filter, columns, sort), a RELOAD
+/// deliberately leaves it alone — that is the whole difference between them, and
+/// the held parse has to remember which one it was while the user answers.
+private enum LoadPurpose {
+  case open
+  case reload
+}
+
+/// The user's answer to the versions prompt: the file and the app's records carry
+/// different values for the slots the load asked about.
+enum DifferenceChoice {
+  /// Load the FILE's values for the differing slots.
+  case file
+  /// Keep the app's records; the file's values for those slots are left out (and
+  /// the next Save writes the app's values back over them).
+  case app
+  /// Open nothing — the request is dropped and the pane stays as it was.
+  case cancel
+}
+
 /// Owns the parsed catalog, load state, view state and the in-memory edit
 /// overrides. Since Phase C the catalog is reconciled into SwiftData
 /// (Reconcile): every (re)load upserts TranslationRecords from the file —
@@ -314,6 +335,41 @@ final class LocalizationStore {
   /// the dismissal SwiftUI reports when a button is tapped cannot drop the
   /// request before that button's action runs.
   private(set) var isUnsavedPromptPresented = false
+
+  // MARK: file-vs-records prompt
+
+  /// The parsed catalog held on the versions prompt, or nil.
+  ///
+  /// The load does not pick a side when the file and the app's records carry different
+  /// values for the same slot: the mirror pass writes NOTHING (see
+  /// `Reconcile.mirrorOffMainActor`), the parse waits here, and the answer decides which
+  /// version the re-run mirrors. Nil while no question is up.
+  private var heldLoad: HeldLoad?
+
+  /// The differing slots the versions prompt is asking about, in the order the mirror
+  /// found them — a SAMPLE, not the whole set (the count below is exact). The prompt
+  /// names a few of them.
+  private(set) var pendingDifferences: [Reconcile.SlotDifference] = []
+
+  /// How many slots the file and the app's records disagree about. The exact count, for
+  /// the prompt's text.
+  private(set) var pendingDifferenceCount = 0
+
+  /// True while the versions alert is on screen. Separate from the pending state for the
+  /// same reason as `isUnsavedPromptPresented`: the dismissal SwiftUI reports must not
+  /// drop the question before its button's action runs.
+  private(set) var isVersionsPromptPresented = false
+
+  /// A parse held on the versions prompt: the document, the file it came from, which half
+  /// of a load it is, and the generation it belongs to — so a newer open/reload, a close
+  /// or a store clear (each bumps `loadGeneration`) supersedes it instead of having the
+  /// answer land over whatever came next.
+  private struct HeldLoad {
+    let catalog: StringCatalog
+    let url: URL
+    let purpose: LoadPurpose
+    let generation: Int
+  }
 
   /// The store app-level code (the quit prompt) asks; STRONG, so a closed
   /// window's unsaved edits still reach their prompt instead of vanishing
@@ -1646,7 +1702,11 @@ final class LocalizationStore {
     selectedLanguages = []
     addedLanguages = []
     run.reset()
-    let project = await mirrorCatalog(blank, url: url)
+    let landing = await mirrorCatalog(blank, url: url)
+    // A blank catalog carries no values, so it can never be held on the versions prompt;
+    // the branch is written out anyway, so a held mirror can never leave the pane adopted
+    // on a document nothing wrote a project for.
+    guard case .landed(let project) = landing else { return true }
     adopt(blank, project: project, url: url)
     scan.begin(store: self, root: scanRoot)
     return true
@@ -1726,24 +1786,62 @@ final class LocalizationStore {
     let result = await StringCatalog.loadOffMainActor(url)
     // A newer open/reload supersedes this one — never adopt a stale parse.
     guard generation == loadGeneration else { return }
-    await finishOpen(result, url: url, generation: generation)
+    await land(result, url: url, generation: generation, purpose: .open)
   }
 
-  /// Applies a still-current finished parse: success resets view state and
-  /// reconciles; failure clears the open catalog. Main-actor side of `open`.
-  private func finishOpen(
-    _ result: Result<StringCatalog, Error>, url: URL, generation: Int
+  /// The main-actor side of a finished parse — the one landing path both halves of a
+  /// load go through (an open and a reload differ only in what they reset, see
+  /// `finishLoad`).
+  ///
+  /// The parse is mirrored first, and the mirror can come back HELD: when the file and
+  /// the app's records both carry a value for a slot and the two disagree, NOTHING is
+  /// written and the question goes to the user (the versions prompt,
+  /// `isVersionsPromptPresented`) — a load that silently picks a side is exactly what
+  /// that prompt exists for. The parse then waits on `heldLoad` with `pendingLoad` still
+  /// set, so the pane reads as opening and a newer open/reload, a close or a store clear
+  /// takes the question down with the load it belongs to.
+  private func land(
+    _ result: Result<StringCatalog, Error>,
+    url: URL,
+    generation: Int,
+    purpose: LoadPurpose
   ) async {
-    // Either landing — adopted or failed — ends this parse.
-    defer { if pendingLoad == generation { pendingLoad = nil } }
     switch result {
     case .success(let catalog):
-      let project = await mirrorCatalog(catalog, url: url)
-      // The mirror is seconds long on a large catalog: a newer open/reload may
-      // have started and finished in the meantime, so re-check before this one
-      // takes over the store.
+      let landing = await mirrorCatalog(catalog, url: url, policy: .ask)
+      // The mirror is seconds long on a large catalog: a newer open/reload may have
+      // started and finished in the meantime, so re-check before this one takes
+      // over the store.
       guard generation == loadGeneration else { return }
-      // Fresh file: reset view state to defaults.
+      switch landing {
+      case .held(let differences):
+        heldLoad = HeldLoad(
+          catalog: catalog, url: url, purpose: purpose, generation: generation)
+        pendingDifferences = differences.sample
+        pendingDifferenceCount = differences.count
+        isVersionsPromptPresented = true
+      case .landed(let project):
+        finishLoad(catalog, project: project, url: url, purpose: purpose)
+        if pendingLoad == generation { pendingLoad = nil }
+      }
+    case .failure(let error):
+      finishLoadFailure(error, purpose: purpose)
+      if pendingLoad == generation { pendingLoad = nil }
+    }
+  }
+
+  /// Opens a finished, mirrored parse: the view state and the document.
+  ///
+  /// An OPEN resets the view state to its defaults (a different file's search, columns
+  /// and sort must not carry over); a RELOAD deliberately touches none of it — the
+  /// reload's whole point is that the user keeps the view they were working in.
+  private func finishLoad(
+    _ catalog: StringCatalog,
+    project: Project?,
+    url: URL,
+    purpose: LoadPurpose
+  ) {
+    if purpose == .open {
       searchText = ""
       filter = .all
       includeNonTranslatable = false
@@ -1754,18 +1852,25 @@ final class LocalizationStore {
       addedLanguages = []
       // A different catalog: drop the previous project's run summary.
       run.reset()
-      adopt(catalog, project: project, url: url)
-    case .failure(let error):
-      catalog = nil
-      catalogURL = nil
-      recordIndex = [:]
-      rows = []
-      visibleRows = []
-      isDirty = false
-      pendingLeave = nil
-      isUnsavedPromptPresented = false
-      loadError = error.localizedDescription
     }
+    adopt(catalog, project: project, url: url)
+  }
+
+  /// Applies a failed parse. An OPEN that failed leaves nothing open — a pane showing
+  /// half a catalog is worse than an empty one — while a RELOAD that failed leaves the
+  /// open catalog exactly as it was and only reports the error: the document on screen
+  /// is still the one the user is working in.
+  private func finishLoadFailure(_ error: Error, purpose: LoadPurpose) {
+    loadError = error.localizedDescription
+    guard purpose == .open else { return }
+    catalog = nil
+    catalogURL = nil
+    recordIndex = [:]
+    rows = []
+    visibleRows = []
+    isDirty = false
+    pendingLeave = nil
+    isUnsavedPromptPresented = false
   }
 
   /// Closes the open catalog without opening another: the parsed document,
@@ -1793,6 +1898,11 @@ final class LocalizationStore {
     isDirty = false
     pendingLeave = nil
     isUnsavedPromptPresented = false
+    // A parse held on the versions prompt belongs to THIS catalog: it goes with it.
+    heldLoad = nil
+    pendingDifferences = []
+    pendingDifferenceCount = 0
+    isVersionsPromptPresented = false
     // Supersede any parse still in flight, so it cannot adopt state over a
     // closed store.
     loadGeneration += 1
@@ -1823,6 +1933,13 @@ final class LocalizationStore {
     visibleRows = []
     valueOverrides = [:]
     saveError = nil
+    // A parse held on the versions prompt would write the whole-catalog mirror this clear
+    // just emptied: it is dropped with the store it was read against, and the generation
+    // bump below is what makes its answer land nowhere.
+    heldLoad = nil
+    pendingDifferences = []
+    pendingDifferenceCount = 0
+    isVersionsPromptPresented = false
     // A parse still in flight must not land its whole-catalog MIRROR over a store
     // that was just emptied.
     loadGeneration += 1
@@ -1889,16 +2006,72 @@ final class LocalizationStore {
     CatalogFileIO.flush()
     let result = await StringCatalog.loadOffMainActor(url)
     guard generation == loadGeneration else { return }
-    switch result {
-    case .success(let catalog):
-      let project = await mirrorCatalog(catalog, url: url)
-      guard generation == loadGeneration else { return }
-      // View state is deliberately untouched by a reload.
-      adopt(catalog, project: project, url: url)
-    case .failure(let error):
-      loadError = error.localizedDescription
+    await land(result, url: url, generation: generation, purpose: .reload)
+  }
+
+  // MARK: - versions prompt (file vs the app's records)
+
+  /// Title of the versions alert: the load found slots the file and the app's records
+  /// fill with different values.
+  var versionsPromptTitle: String {
+    "Which version should load?"
+  }
+
+  /// Body of the versions alert: how many slots are in play, a few of them by name, and
+  /// what each answer does — including the part that is invisible from the pane, that
+  /// keeping the app's records leaves the file's values to be overwritten by the next
+  /// Save.
+  var versionsPromptMessage: String {
+    let count = pendingDifferenceCount
+    let named = pendingDifferences.prefix(3)
+    var text = "The file and the app's records carry different values for "
+      + "\(count) \(count == 1 ? "slot" : "slots") — "
+      + named.map(\.label).joined(separator: ", ")
+    if count > named.count { text += " (and \(count - named.count) more)" }
+    text += "."
+    text += "\n\nLoading the file's values replaces what the app holds for those slots; "
+      + "the replaced values stay in the row's edit history."
+    text += "\n\nKeeping the app's records leaves the file's values out of the app — the row "
+      + "still holds the app's value, and saving that row writes it back over the file's."
+    if heldLoad?.purpose == .open { text += " Cancelling leaves the catalog closed." }
+    return text
+  }
+
+  /// Raises the versions alert. The parse is already held (`heldLoad`); nothing else
+  /// happens until a button answers it.
+  func dismissVersionsPrompt() {
+    isVersionsPromptPresented = false
+  }
+
+  /// Answers the versions prompt: load the file's values for the differing slots, keep
+  /// the app's records, or open nothing.
+  ///
+  /// The held parse is re-mirrored with the answer — the FIRST pass deliberately wrote
+  /// nothing (see `Reconcile.mirrorOffMainActor`), so THIS is the pass that makes the
+  /// choice durable — and is then landed exactly as an unanswered load would have been.
+  /// A generation mismatch means a newer open/reload, a close or a store clear happened
+  /// while the alert was up: the answer is dropped rather than applied over it, and the
+  /// load it belonged to is gone with the parse.
+  func resolveDifferences(_ choice: DifferenceChoice) async {
+    guard let held = heldLoad else { return }
+    heldLoad = nil
+    isVersionsPromptPresented = false
+    pendingDifferences = []
+    pendingDifferenceCount = 0
+    guard choice != .cancel else {
+      // No parse is adopted and the generation is NOT bumped: the pane stays exactly as
+      // it was — the catalog already open, for a reload that was cancelled.
+      if pendingLoad == held.generation { pendingLoad = nil }
+      return
     }
-    if pendingLoad == generation { pendingLoad = nil }
+    guard held.generation == loadGeneration else { return }
+    let policy: Reconcile.DifferencePolicy = choice == .file ? .fileWins : .appWins
+    let landing = await mirrorCatalog(held.catalog, url: held.url, policy: policy)
+    guard held.generation == loadGeneration else { return }
+    if case .landed(let project) = landing {
+      finishLoad(held.catalog, project: project, url: held.url, purpose: held.purpose)
+    }
+    if pendingLoad == held.generation { pendingLoad = nil }
   }
 
   /// Opens a catalog that has already been mirrored into the DB: the document,
@@ -1971,27 +2144,44 @@ final class LocalizationStore {
     }
   }
 
-  /// Mirrors `catalog` into the project's records OFF the main actor and
-  /// returns the project to hold in the MAIN context, or nil when the write
-  /// failed.
+  /// What `mirrorCatalog` did with the parse it was handed: wrote it (with the project to
+  /// hold), or held it because the file and the app's records disagree.
+  private enum MirrorLanding {
+    case landed(Project?)
+    case held(Reconcile.DifferenceReport)
+  }
+
+  /// Mirrors `catalog` into the project's records OFF the main actor and returns the
+  /// project to hold in the MAIN context, or nil when the write failed.
   ///
   /// The upsert is the expensive half of opening a catalog (48,420 slots
   /// measured at ~6 s in Debug — see `Reconcile.mirrorOffMainActor`), so it
   /// runs in its own background `ModelContext`. Browsing never depends on the
   /// DB: a failed mirror still returns the project row so the pane opens with
   /// file-derived cells, and reports through `saveError`.
-  private func mirrorCatalog(_ catalog: StringCatalog, url: URL) async -> Project? {
+  ///
+  /// `policy` is the load's ANSWER to the versions prompt: `.ask` is the first pass (it
+  /// writes nothing and comes back `held` when the two sides disagree), `.fileWins` /
+  /// `.appWins` are the pass the user's answer pays for.
+  private func mirrorCatalog(
+    _ catalog: StringCatalog,
+    url: URL,
+    policy: Reconcile.DifferencePolicy = .ask
+  ) async -> MirrorLanding {
     isReconciling = true
     defer { isReconciling = false }
     let previous = mirrorChain
-    let work = Task { () -> Result<Reconcile.MirrorResult, Error> in
+    let work = Task { () -> Result<Reconcile.MirrorOutcome, Error> in
       await previous.value
       return await Reconcile.mirrorOffMainActor(
-        catalog, catalogURL: url, in: TranslationStore.container)
+        catalog, catalogURL: url, in: TranslationStore.container, policy: policy)
     }
     mirrorChain = Task { _ = await work.value }
     switch await work.value {
-    case .success(let mirror):
+    case .success(.held(let differences)):
+      // Nothing was written: the load waits on the question (see `resolveDifferences`).
+      return .held(differences)
+    case .success(.mirrored(let mirror)):
       // The BACKGROUND context did the writing, so this context's copies of
       // those rows are stale — a fetch by identity refreshes them and hands
       // back the instance this store should hold.
@@ -1999,12 +2189,13 @@ final class LocalizationStore {
       let project = Reconcile.project(id: mirror.projectID, in: context)
         ?? Reconcile.ensureProject(catalogURL: url, in: context)
       NSLog(
-        "[Localization] reconciled %@: %d created, %d refreshed, %d kept",
-        url.lastPathComponent, mirror.stats.created, mirror.stats.refreshed, mirror.stats.kept)
-      return project
+        "[Localization] reconciled %@: %d created, %d refreshed, %d kept, %d differing",
+        url.lastPathComponent, mirror.stats.created, mirror.stats.refreshed,
+        mirror.stats.kept, mirror.stats.differing)
+      return .landed(project)
     case .failure(let error):
       saveError = "Couldn't save the catalog's records: \(error.localizedDescription)"
-      return Reconcile.ensureProject(catalogURL: url, in: TranslationStore.shared.context)
+      return .landed(Reconcile.ensureProject(catalogURL: url, in: TranslationStore.shared.context))
     }
   }
 

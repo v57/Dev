@@ -51,6 +51,26 @@ struct ContentView: View {
     } message: {
       Text(localizationStore.unsavedChangesMessage)
     }
+    // Versions prompt: the file and the app's records carry different values for
+    // the same slot, so the load asks which version to load instead of keeping
+    // the cached records and dropping the file's (or the other way round). The
+    // parse is held until this is answered — nothing is opened before it is.
+    .alert(localizationStore.versionsPromptTitle, isPresented: Binding(
+      get: { localizationStore.isVersionsPromptPresented },
+      set: { if !$0 { localizationStore.dismissVersionsPrompt() } }
+    )) {
+      Button("Load the File's Values") {
+        Task { await localizationStore.resolveDifferences(.file) }
+      }
+      Button("Keep the App's Records") {
+        Task { await localizationStore.resolveDifferences(.app) }
+      }
+      Button("Cancel", role: .cancel) {
+        Task { await localizationStore.resolveDifferences(.cancel) }
+      }
+    } message: {
+      Text(localizationStore.versionsPromptMessage)
+    }
     // Restore the remembered imported translation DB (path only — no open,
     // no scan) so the pipeline knows it is active.
     .task {
