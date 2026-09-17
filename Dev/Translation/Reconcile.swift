@@ -102,6 +102,41 @@ nonisolated enum Reconcile {
     }
   }
 
+  /// What the file's own unit says about one slot — the value it carries (`nil` when the
+  /// file leaves it absent or blank, because absence IS the empty state) and the state it
+  /// claims, mapped to the DB's vocabulary. The ONE reading of a unit: the mirror's slot
+  /// upserts and the difference scan both go through it, so a scan can never disagree with
+  /// the mirror about what the file said.
+  private static func unitValue(
+    _ unit: StringCatalog.StringUnit?
+  ) -> (value: String?, state: TranslationState?) {
+    let raw = unit?.value ?? ""
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    return (trimmed.isEmpty ? nil : raw, unit.map { seedState(fileState: $0.state) })
+  }
+
+  /// The file's unit for one FLAT (key, language).
+  private static func fileUnit(
+    _ catalog: StringCatalog, key: String, language: String
+  ) -> (value: String?, state: TranslationState?) {
+    unitValue(catalog.strings[key]?.localizations?[language]?.stringUnit)
+  }
+
+  /// The file's unit for one PLURAL form of a (key, language).
+  private static func fileForm(
+    _ catalog: StringCatalog, key: String, language: String, category: String
+  ) -> (value: String?, state: TranslationState?) {
+    let plural = catalog.strings[key]?.localizations?[language]?.variations?["plural"]
+    return unitValue(plural?[category]?.stringUnit)
+  }
+
+  /// True when the app has worked on this record: a provider produced its value or an edit
+  /// was journaled for it (a human's typing, a machine fill, a TM copy). The mirror's
+  /// ownership test, in one place.
+  private static func isOwned(_ record: TranslationRecord) -> Bool {
+    record.provider != nil || record.edits?.isEmpty == false
+  }
+
   // MARK: - project
 
   /// The project's records, materialized in ONE query.
@@ -270,18 +305,18 @@ nonisolated enum Reconcile {
     var isEmpty: Bool { count == 0 }
   }
 
-  /// What a (re)load does when the file and the app's records disagree about a slot.
+  /// What a (re)load does when the file and the app's records disagree about a slot — the
+  /// user's answer to the versions prompt.
   ///
-  /// - `ask`: detect, and STOP. The pass writes nothing (its context is dropped
-  ///   unsaved) and reports what it found, so the caller can put the question to the
-  ///   user and re-run the mirror with the answer. Nothing is decided by default —
-  ///   a load that silently picks a side is the bug this exists for.
-  /// - `fileWins`: adopt the FILE's value for those slots, whatever the record's
-  ///   provenance says — the user's answer when the file is the newer writer.
-  /// - `appWins`: the mirror's own rule (a DB-owned record keeps its value and the
-  ///   file's differing one is dropped, until the next Save writes the record's out).
+  /// - `fileWins`: adopt the FILE's value for those slots, whatever the record's provenance
+  ///   says (the user's answer when the file is the newer writer).
+  /// - `appWins`: the mirror's own rule (a DB-owned record keeps its value and the file's
+  ///   differing one is dropped, until the next Save writes the record's out).
+  ///
+  /// The QUESTION itself is not a policy: it is asked before anything is mirrored
+  /// (`detectDifferences`), because a pass that had already picked a side would be asking
+  /// about a state the user can no longer choose.
   enum DifferencePolicy: Sendable, Equatable {
-    case ask
     case fileWins
     case appWins
   }
@@ -291,23 +326,195 @@ nonisolated enum Reconcile {
   struct MirrorResult: Sendable {
     let projectID: PersistentIdentifier
     let stats: UpsertStats
+    /// Slots the pass had taken from the FILE and then gave back, because the app wrote
+    /// them while it ran — by the guard before the commit (`revertFileWrites`) or by the
+    /// repair after it. For the log.
+    let reverted: Int
+    /// Rows the pass's own commit dropped out of the project's membership and the pass put
+    /// back (`orphanedRows`) — for the log.
+    let repaired: Int
   }
 
-  /// What one mirror pass did.
+  /// One write a pass made FROM the FILE, with what the slot held before it — enough to put
+  /// the slot back when it turns out the app wrote it while the pass was running.
   ///
-  /// `held` is the `.ask` policy finding something to ask about: nothing was written
-  /// (the pass's own context is thrown away unsaved), so the caller can ask and then
-  /// re-run the mirror with the user's answer — a question answered AFTER the write
-  /// would be a question about a state that is already gone.
-  enum MirrorOutcome: Sendable {
-    case mirrored(MirrorResult)
-    case held(DifferenceReport)
+  /// The pass is a SNAPSHOT: it decides who owns a slot from the records it fetched when it
+  /// started. The app keeps working beside it now (the pane is open and a run can be
+  /// started while the mirror catches up), so a slot the app saves mid-pass is invisible to
+  /// that snapshot — the pass would adopt the file over a value someone typed or a run just
+  /// produced, and for a record the pass CREATES it would leave two rows for one slot
+  /// (SwiftData has no unique constraint to stop it). `revertFileWrites` is what honours
+  /// the newer writer.
+  enum FileWrite {
+    /// A record this pass inserted — the whole row is the pass's, so giving it back is a
+    /// delete.
+    case created(TranslationRecord)
+    /// A record this pass re-mirrored or adopted from the file (unowned mirror, or the
+    /// `fileWins` answer over an owned one) — with the edit row `fileWins` appended, if it
+    /// did.
+    case adopted(TranslationRecord, before: PreSlot, edit: TranslationEdit?)
+
+    /// The record this write was about.
+    var record: TranslationRecord {
+      switch self {
+      case .created(let record): return record
+      case .adopted(let record, _, _): return record
+      }
+    }
   }
 
-  /// Mirrors `catalog` into the store on a BACKGROUND `ModelContext` — the
-  /// open/reload path for a catalog whose upsert is seconds of work (48,420
-  /// slots measured at ~6 s in Debug, and the inserts cannot be moved off the
-  /// main actor without moving the context that owns them).
+  /// The whole row a record held before a pass touched it, field by field — the fields a
+  /// slot upsert can write, and nothing else.
+  struct PreSlot {
+    let value: String?
+    let state: TranslationState
+    let provider: Provider?
+    let confidence: Double?
+    let autoReviewed: Bool
+    let reviewedAt: Date?
+    let contextVersions: ContextVersions
+    let sourceText: String
+    let updatedAt: Date
+
+    init(_ record: TranslationRecord) {
+      value = record.value
+      state = record.state
+      provider = record.provider
+      confidence = record.confidence
+      autoReviewed = record.autoReviewed
+      reviewedAt = record.reviewedAt
+      contextVersions = record.contextVersions
+      sourceText = record.sourceText
+      updatedAt = record.updatedAt
+    }
+
+    func restore(_ record: TranslationRecord) {
+      record.value = value
+      record.state = state
+      record.provider = provider
+      record.confidence = confidence
+      record.autoReviewed = autoReviewed
+      record.reviewedAt = reviewedAt
+      record.contextVersions = contextVersions
+      record.sourceText = sourceText
+      record.updatedAt = updatedAt
+    }
+  }
+
+  /// The log a pass keeps of its own file-driven writes, for `revertFileWrites`.
+  ///
+  /// A box rather than a returned array, because the pass that needs it is deep inside the
+  /// shared upsert and the two callers that do NOT need it (the per-key mutations, which
+  /// write and save in place on the main actor where nothing can interleave) must not pay
+  /// for it: they pass nil.
+  ///
+  /// `FileWrite`, `PreSlot` and this box are the pass's own bookkeeping and nothing else
+  /// reads them; they are internal only because the shared upsert takes them as parameters.
+  final class FileWriteLog {
+    private(set) var writes: [FileWrite] = []
+
+    /// The records this pass INSERTED — the membership write at the pass's tail needs them,
+    /// because nothing else links them to the project (`upsertFromCatalog` skips its own bulk
+    /// append while the app is live).
+    var created: [TranslationRecord] {
+      writes.compactMap {
+        if case .created(let record) = $0 { return record }
+        return nil
+      }
+    }
+
+    func record(_ write: FileWrite) { writes.append(write) }
+  }
+
+  /// The difference scan a load runs BEFORE it mirrors anything: every slot the file and a
+  /// DB-owned record both fill with different values (`SlotDifference`), found WITHOUT
+  /// writing a row.
+  ///
+  /// This is what makes the versions prompt possible at all in a load that does not wait:
+  /// the question has to be asked before a side is picked (see `DifferencePolicy`), and the
+  /// load has to be able to ask it without having mirrored the catalog first. It is also the
+  /// cheap half of the work — one scoped fetch plus a walk, no inserts, no save.
+  ///
+  /// A project the store does not know yet has nothing to disagree with (a first open can
+  /// only seed), and neither does one whose records are all unowned file mirrors.
+  static func detectDifferences(
+    _ catalog: StringCatalog,
+    catalogURL: URL,
+    in container: ModelContainer
+  ) async -> DifferenceReport {
+    await Task.detached(priority: .userInitiated) {
+      let context = ModelContext(container)
+      guard let project = existingProject(catalogURL: catalogURL, in: context) else {
+        return DifferenceReport(count: 0, sample: [])
+      }
+      return differences(catalog, existing: records(of: project, in: context))
+    }.value
+  }
+
+  /// The scan itself, over records the caller hands in — pure, so a probe can ask it the
+  /// same question the load asks.
+  ///
+  /// A slot counts when the file fills it AND the record is DB-OWNED (`isOwned`) and fills
+  /// it with something else. Two shapes deliberately do NOT count: a slot the file has
+  /// nothing for (the app's own unsaved work — the design keeps it alive across a crash
+  /// rather than asking about it on every open) and a slot only the file fills (an unowned
+  /// mirror, which the file already wins).
+  static func differences(
+    _ catalog: StringCatalog,
+    existing: [TranslationRecord]
+  ) -> DifferenceReport {
+    var bySlot: [SlotKey: TranslationRecord] = [:]
+    bySlot.reserveCapacity(existing.count)
+    for record in existing {
+      bySlot[SlotKey(
+        key: record.key, language: record.language, category: record.category ?? "")] = record
+    }
+
+    var count = 0
+    var sample: [SlotDifference] = []
+    func compare(_ key: String, _ language: String, _ category: String?, _ fileValue: String?) {
+      guard let fileValue,
+            let record = bySlot[SlotKey(key: key, language: language, category: category ?? "")],
+            isOwned(record),
+            let recordValue = record.value,
+            recordValue != fileValue
+      else { return }
+      count += 1
+      if sample.count < DifferenceReport.sampleLimit {
+        sample.append(SlotDifference(
+          key: key, language: language, category: category,
+          fileValue: fileValue, recordValue: recordValue))
+      }
+    }
+
+    let sourceLanguage = catalog.sourceLanguage
+    // Computed (walks every entry): hoisted out of the key loop, like the mirror's own.
+    let languages = catalog.languages
+    for (key, entry) in catalog.strings {
+      if entry.shouldTranslate == false { continue }
+      for language in languages where language != sourceLanguage {
+        let variations = entry.localizations?[language]?.variations ?? [:]
+        // A device-varied holder carries no translatable slot at all (same rule as the
+        // mirror: a flat unit cannot live there and nothing ever cleans one up).
+        if !variations.isEmpty, variations["plural"] == nil { continue }
+        if let plural = variations["plural"], !plural.isEmpty {
+          for category in PluralRules.categories(for: language) {
+            compare(
+              key, language, category,
+              fileForm(catalog, key: key, language: language, category: category).value)
+          }
+          continue
+        }
+        compare(key, language, nil, fileUnit(catalog, key: key, language: language).value)
+      }
+    }
+    return DifferenceReport(count: count, sample: sample)
+  }
+
+  /// Mirrors `catalog` into the store on a BACKGROUND `ModelContext` — the open/reload
+  /// path for a catalog whose upsert is seconds of work (48,420 slots measured at ~6 s in
+  /// Debug, and the inserts cannot be moved off the main actor without moving the context
+  /// that owns them).
   ///
   /// The caller is responsible for what happens after: re-fetch the project in
   /// the main context (`project(id:in:)`) before reading its records, because
@@ -315,39 +522,175 @@ nonisolated enum Reconcile {
   /// open catalog's in-memory state, so a failed write leaves the document
   /// openable — the caller decides how to report it.
   ///
-  /// `policy` is what a slot the file and the app's records disagree about does
-  /// (`DifferencePolicy`). Under the default `.ask` the pass SAVES NOTHING when it
-  /// finds one — the unsaved context is dropped — and answers `held` instead, so the
-  /// caller can ask and re-run the mirror with the user's answer. That is the only
-  /// path that pays for the question: an ordinary load (no differences) writes and
-  /// saves exactly as it always did.
+  /// This pass does NOT block the pane: the load adopts the parsed file first and submits
+  /// this behind it (`StoreWork.shared`), so the table is up while the store catches up. A
+  /// consequence worth naming: the app can now write a slot while this pass runs, and the
+  /// pass's own snapshot cannot see that. `revertFileWrites` is what keeps the newer writer
+  /// — and the only reason a pass needs to know when it started.
   static func mirrorOffMainActor(
     _ catalog: StringCatalog,
     catalogURL: URL,
     in container: ModelContainer,
-    policy: DifferencePolicy = .ask
-  ) async -> Result<MirrorOutcome, Error> {
+    policy: DifferencePolicy = .appWins
+  ) async -> Result<MirrorResult, Error> {
     await Task.detached(priority: .userInitiated) {
+      // The watermark for "the app wrote this slot while the pass was running".
+      let passStartedAt = Date()
       let context = ModelContext(container)
       let project = ensureProject(catalogURL: catalogURL, in: context)
       // This context is COLD, so the records come from one scoped fetch —
       // iterating the relationship here would fault every row one at a time
       // (measured 4.2 s for 48,420 records, versus ~0.6 s for the fetch).
       let existing = records(of: project, in: context)
-      let stats = upsertFromCatalog(
-        catalog, project: project, existing: existing, context: context, policy: policy)
-      // Held, not written: the question comes first, and a write already on its way to
-      // disk would make it a question about a state the user can no longer choose.
-      if policy == .ask, !stats.differenceReport.isEmpty {
-        return .success(.held(stats.differenceReport))
-      }
+      let log = FileWriteLog()
+      var stats = upsertFromCatalog(
+        catalog, project: project, existing: existing, context: context,
+        policy: policy, fileWrites: log, liveWriters: true)
+      // THE APP'S OWN WRITES, read here — as late as the pass can read them and still act: they
+      // are the slots this pass gives back (`revertFileWrites`). What a read at this point
+      // cannot catch (a write committed between it and the commit) is the repair below's job.
+      let appWrites = appWrittenRows(
+        project: project, since: passStartedAt, excluding: log, in: context)
+      var reverted = revertFileWrites(
+        log.writes, writtenByApp: Set(appWrites.map(slotKey)), context: context, stats: &stats)
       do {
         try context.save()
       } catch {
         return .failure(error)
       }
-      return .success(.mirrored(MirrorResult(projectID: project.persistentModelID, stats: stats)))
+      // THE COMMIT'S OWN CASUALTY, repaired AFTER it — because only the store can show it.
+      //
+      // Writing a to-many from this context's view of the project writes the membership as this
+      // context holds it, and every member it does not list has its inverse nullified: a row the
+      // app links while the pass runs comes out of the commit with `project = nil` — ORPHANED,
+      // invisible to every project-scoped reader in the app (found by the probe: an app edit
+      // landing beside the pass's own row for its slot). The guard above cannot see that last
+      // writer: it reads the app's writes a moment before the commit, and a write committed in
+      // between is invisible until the commit is on disk. So the orphan is read back from the
+      // store — the only place it is visible at all — and put where it belongs.
+      //
+      // Serial by construction, which is what makes this safe to do blind: only the mirror ever
+      // writes a membership (the other bulk passes go through the same queue), so a project-less
+      // row stamped inside this pass's window is this pass's doing, whatever slot it is.
+      //
+      // Paid only when the pass had something to link (no membership write, no casualty).
+      var repaired = 0
+      if !log.created.isEmpty {
+        var createdBySlot: [SlotKey: TranslationRecord] = [:]
+        for record in log.created { createdBySlot[slotKey(record)] = record }
+        for orphan in orphanedRows(since: passStartedAt, in: container) {
+          // The pass made its OWN row for that slot while the app was writing one — the guard
+          // above missed it in the same window. The app's write is the newer one (that is the
+          // guard's rule), so the pass's row goes.
+          if let rival = createdBySlot[slotKey(orphan)] {
+            context.delete(rival)
+            stats.created -= 1
+            // Counted as given back: that is what it is, only later than the guard could.
+            reverted.insert(ObjectIdentifier(rival))
+          }
+          guard
+            let row = context.model(for: orphan.persistentModelID) as? TranslationRecord,
+            row.project == nil
+          else { continue }
+          row.project = project
+          repaired += 1
+        }
+        if repaired > 0, (try? context.save()) == nil {
+          NSLog("[Reconcile] \(repaired) app row(s) could not be re-linked to their project")
+        }
+      }
+      return .success(MirrorResult(
+        projectID: project.persistentModelID, stats: stats, reverted: reverted.count,
+        repaired: repaired))
     }.value
+  }
+
+  /// The slot a record occupies, in the form the passes compare by.
+  private static func slotKey(_ record: TranslationRecord) -> SlotKey {
+    SlotKey(key: record.key, language: record.language, category: record.category ?? "")
+  }
+
+  /// The rows the APP ITSELF wrote since `since`, read on the pass's own context (so the two
+  /// sets can be compared by identity) and with the pass's own writes removed — those are the
+  /// ones whose `updatedAt` this pass just moved.
+  ///
+  /// Project-scoped and time-bounded: a row the app wrote has both. An already-orphaned row is
+  /// NOT found here, which is why the repair below reads the store again with a time-only query.
+  private static func appWrittenRows(
+    project: Project,
+    since: Date,
+    excluding log: FileWriteLog,
+    in context: ModelContext
+  ) -> [TranslationRecord] {
+    let id = project.persistentModelID
+    let descriptor = FetchDescriptor<TranslationRecord>(
+      predicate: #Predicate {
+        $0.project?.persistentModelID == id && $0.updatedAt > since
+      })
+    guard let moved = try? context.fetch(descriptor) else { return [] }
+    let ours = Set(log.writes.map { ObjectIdentifier($0.record) })
+    return moved.filter { !ours.contains(ObjectIdentifier($0)) }
+  }
+
+  /// Every row saved since `since` that belongs to NO project — what a stale membership write
+  /// leaves behind. One query, no project scope (an orphan has no project to be scoped by).
+  private static func orphanedRows(
+    since: Date,
+    in container: ModelContainer
+  ) -> [TranslationRecord] {
+    let context = ModelContext(container)
+    let descriptor = FetchDescriptor<TranslationRecord>(
+      predicate: #Predicate { $0.updatedAt > since })
+    return ((try? context.fetch(descriptor)) ?? []).filter { $0.project == nil }
+  }
+
+  /// Gives back every write the pass made FROM THE FILE for a slot the app wrote while it
+  /// ran: the record the pass inserted is deleted, a re-mirrored or adopted one is restored
+  /// to the row it held before (and the edit row a `fileWins` adoption appended goes with
+  /// it).
+  ///
+  /// Without this the two writers race and the OLDER one wins, because the pass decides
+  /// ownership from a snapshot: an Xcode-side value would land over a translation a run had
+  /// just produced, or over the word someone had just typed, and a created record would sit
+  /// beside the app's own row for the same slot — two rows, one slot, SwiftData holding no
+  /// constraint that could have refused it.
+  ///
+  /// Returns WHICH records were given back (by identity: the caller must not put a deleted one
+  /// back into the project's member list). The counts in `stats` follow, so the log tells the
+  /// truth about what the pass actually left behind.
+  private static func revertFileWrites(
+    _ writes: [FileWrite],
+    writtenByApp: Set<SlotKey>,
+    context: ModelContext,
+    stats: inout UpsertStats
+  ) -> Set<ObjectIdentifier> {
+    guard !writtenByApp.isEmpty else { return [] }
+    var reverted: Set<ObjectIdentifier> = []
+    for write in writes {
+      let record: TranslationRecord
+      switch write {
+      case .created(let created):
+        record = created
+        let slot = SlotKey(
+          key: record.key, language: record.language, category: record.category ?? "")
+        guard writtenByApp.contains(slot) else { continue }
+        context.delete(record)
+        stats.created -= 1
+      case .adopted(let adopted, let before, let edit):
+        record = adopted
+        let slot = SlotKey(
+          key: record.key, language: record.language, category: record.category ?? "")
+        guard writtenByApp.contains(slot) else { continue }
+        before.restore(record)
+        if let edit {
+          record.edits?.removeAll { $0 === edit }
+          context.delete(edit)
+        }
+        stats.refreshed -= 1
+      }
+      reverted.insert(ObjectIdentifier(record))
+    }
+    return reverted
   }
 
   // MARK: - plural skeleton (run preparation, off the main actor)
@@ -640,15 +983,25 @@ nonisolated enum Reconcile {
   /// (`DifferencePolicy`): the load's answer. `.appWins` is the default because it is
   /// what every non-load caller wants — the per-key mutations (a scan merge, a plural
   /// vary) mirror a catalog whose values the app itself just wrote, so there is
-  /// nothing for a user to decide and an `.ask` pass would simply drop their work on
-  /// the floor.
+  /// nothing for a user to decide.
+  ///
+  /// `fileWrites` is where the pass logs every write it makes FROM THE FILE, so a slot the
+  /// app saves while the pass runs can be given back (`revertFileWrites`). The in-place
+  /// callers pass nil: they write and save on the main actor, where nothing interleaves.
+  ///
+  /// `liveWriters` says the app itself may be writing records while this pass runs — true for
+  /// the background mirror, which no longer blocks the pane, false for the in-place callers.
+  /// It changes ONE thing: how the project's record list is written (see the bulk append at
+  /// the end of the walk). Read it as "this pass is not the only writer right now".
   @discardableResult
   static func upsertFromCatalog(
     _ catalog: StringCatalog,
     project: Project,
     existing: [TranslationRecord],
     context: ModelContext,
-    policy: DifferencePolicy = .appWins
+    policy: DifferencePolicy = .appWins,
+    fileWrites: FileWriteLog? = nil,
+    liveWriters: Bool = false
   ) -> UpsertStats {
     var stats = UpsertStats()
 
@@ -687,37 +1040,36 @@ nonisolated enum Reconcile {
           // language. The per-form source text comes from the source
           // language's matching form (fallback: source "other", then key).
           for category in PluralRules.categories(for: language) {
-            let unit = plural[category]?.stringUnit
-            let rawValue = unit?.value ?? ""
-            let value: String? = rawValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-              ? nil
-              : rawValue
+            let form = fileForm(catalog, key: key, language: language, category: category)
             upsertForm(
               key: key, language: language, category: category,
               sourceText: catalog.sourcePluralDisplay(for: key, category: category),
-              value: value,
-              seedState: unit.map { seedState(fileState: $0.state) },
+              value: form.value,
+              seedState: form.state,
               context: context, bySlot: &bySlot, stats: &stats,
-              created: &created, policy: policy)
+              created: &created, policy: policy, fileWrites: fileWrites)
           }
           continue
         }
         // Flat slot (unchanged).
-        let unit = loc?.stringUnit
-        let rawValue = unit?.value ?? ""
-        let value: String? = rawValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-          ? nil
-          : rawValue
+        let unit = fileUnit(catalog, key: key, language: language)
         upsertSlot(
           key: key, language: language,
           sourceText: catalog.sourceDisplay(for: key),
-          value: value,
-          seedState: unit.map { seedState(fileState: $0.state) },
+          value: unit.value,
+          seedState: unit.state,
           context: context, bySlot: &bySlot, stats: &stats,
-          created: &created, policy: policy)
+          created: &created, policy: policy, fileWrites: fileWrites)
       }
     }
     if !created.isEmpty {
+      // ONE bulk append instead of a to-one assignment per record (see the note above).
+      //
+      // Either shape WRITES the whole membership, and that is what the mirror's repair step is
+      // about: a to-many written from a view that predates another writer's link drops that
+      // member and nullifies its inverse (probe: the app's mid-pass row came out `project = nil`
+      // with both shapes, and the to-one form costs 3x here). So this stays the cheap shape and
+      // `mirrorOffMainActor` re-links what the commit dropped.
       project.records = (project.records ?? []) + created
     }
     // The CALLER saves: the background mirror reports a failed write to the
@@ -781,21 +1133,23 @@ nonisolated enum Reconcile {
     bySlot: inout [String: [String: [String: TranslationRecord]]],
     stats: inout UpsertStats,
     created: inout [TranslationRecord],
-    policy: DifferencePolicy
+    policy: DifferencePolicy,
+    fileWrites: FileWriteLog?
   ) {
     if let record = bySlot[key]?[language]?[category] {
       let fileSlot = FileSlot(
         value: value, state: value != nil ? (seedState ?? .needs_review) : .empty,
         sourceText: sourceText)
-      if record.provider != nil || record.edits?.isEmpty == false {
-        // DB-OWNED record: keep value/provider/state/versions, unless the file
-        // carries a different value for this very slot (see resolveOwnedSlot).
+      if isOwned(record) {
+        // DB-OWNED record: keep value/provider/state/versions, unless the file carries a
+        // different value for this very slot (see resolveOwnedSlot).
         resolveOwnedSlot(
           record: record, fileSlot: fileSlot, sourceText: sourceText,
-          policy: policy, context: context, stats: &stats)
+          policy: policy, context: context, stats: &stats, fileWrites: fileWrites)
       } else if fileSlot.matches(record) {
         stats.kept += 1
       } else {
+        fileWrites?.record(.adopted(record, before: PreSlot(record), edit: nil))
         fileSlot.apply(to: record)
         stats.refreshed += 1
       }
@@ -816,6 +1170,7 @@ nonisolated enum Reconcile {
     // The project link is applied by the caller in one bulk append — see
     // upsertFromCatalog.
     created.append(record)
+    fileWrites?.record(.created(record))
     bySlot[key, default: [:]][language, default: [:]][category] = record
     stats.created += 1
   }
@@ -844,21 +1199,23 @@ nonisolated enum Reconcile {
     bySlot: inout [String: [String: [String: TranslationRecord]]],
     stats: inout UpsertStats,
     created: inout [TranslationRecord],
-    policy: DifferencePolicy
+    policy: DifferencePolicy,
+    fileWrites: FileWriteLog?
   ) {
     if let record = bySlot[key]?[language]?[""] {
       let fileSlot = FileSlot(
         value: value, state: value != nil ? (seedState ?? .needs_review) : .empty,
         sourceText: sourceText)
-      if record.provider != nil || record.edits?.isEmpty == false {
-        // DB-OWNED record: keep value/provider/state/versions, unless the file
-        // carries a different value for this very slot (see resolveOwnedSlot).
+      if isOwned(record) {
+        // DB-OWNED record: keep value/provider/state/versions, unless the file carries a
+        // different value for this very slot (see resolveOwnedSlot).
         resolveOwnedSlot(
           record: record, fileSlot: fileSlot, sourceText: sourceText,
-          policy: policy, context: context, stats: &stats)
+          policy: policy, context: context, stats: &stats, fileWrites: fileWrites)
       } else if fileSlot.matches(record) {
         stats.kept += 1
       } else {
+        fileWrites?.record(.adopted(record, before: PreSlot(record), edit: nil))
         fileSlot.apply(to: record)
         stats.refreshed += 1
       }
@@ -878,6 +1235,7 @@ nonisolated enum Reconcile {
     // The project link is applied by the caller in one bulk append — see
     // upsertFromCatalog.
     created.append(record)
+    fileWrites?.record(.created(record))
     bySlot[key, default: [:]][language, default: [:]][""] = record
     stats.created += 1
   }
@@ -900,7 +1258,8 @@ nonisolated enum Reconcile {
     sourceText: String,
     policy: DifferencePolicy,
     context: ModelContext,
-    stats: inout UpsertStats
+    stats: inout UpsertStats,
+    fileWrites: FileWriteLog?
   ) {
     // The source is the artifact's wherever it moved, whether or not the value is
     // contested: the file is where source text is authored.
@@ -920,7 +1279,7 @@ nonisolated enum Reconcile {
         fileValue: fileValue, recordValue: recordValue))
     }
     if policy == .fileWins {
-      adoptFile(fileSlot, into: record, context: context)
+      adoptFile(fileSlot, into: record, context: context, fileWrites: fileWrites)
       stats.refreshed += 1
     } else {
       stats.kept += 1
@@ -942,7 +1301,8 @@ nonisolated enum Reconcile {
   private static func adoptFile(
     _ fileSlot: FileSlot,
     into record: TranslationRecord,
-    context: ModelContext
+    context: ModelContext,
+    fileWrites: FileWriteLog?
   ) {
     let edit = TranslationEdit(
       record: record,
@@ -954,6 +1314,8 @@ nonisolated enum Reconcile {
       isUserConfirmed: true)
     record.edits = (record.edits ?? []) + [edit]
     context.insert(edit)
+    // Logged BEFORE the slot is overwritten: the row to restore is the one it holds now.
+    fileWrites?.record(.adopted(record, before: PreSlot(record), edit: edit))
     fileSlot.apply(to: record)
   }
 

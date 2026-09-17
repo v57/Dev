@@ -423,6 +423,42 @@ are catalog data, and the count asks which keys hold a filled `needs_review` REC
         count published back (a badge may lag a tick); it is a new concurrency path, so it waits for
         the reader's word rather than arriving unasked.
 
+### The big work is queued, and an open does not wait for it (2026-09-17)
+
+Reader: "Make all large operations asynchronous and queue them when needed. So i can open project,
+localizations tab and start localization without waiting for that huge db to load. So make like a
+singleton Task that automatically creates on request and reuses."
+
+The open used to be one chain: parse → MIRROR (the whole catalog into SwiftData, ~6 s for 48,420
+slots) → adopt. The pane therefore read "Opening catalog…" for the mirror, the redesign's workspace
+(and so Start) was built only after the adopt, and nothing else could touch the store meanwhile.
+
+  - [x] `StoreWork` (new): the app's ONE bulk-store queue — created on first use, reused after
+        that, serial by construction, `isBusy`/`queued` for the surfaces that need a settled store.
+        Replaces the store's own `mirrorChain` AND the add-language chain, and the plural skeleton
+        (a run's preparation) now goes through it too: all three create and adopt the same slots, and
+        two of them at once is two rows for one record.
+  - [x] The load: parse → difference scan (no writes; the versions prompt still asks BEFORE anything
+        is mirrored) → ADOPT → `submit` the mirror behind the pane. The project row is saved before
+        the mirror is submitted (a row the main context has only inserted is invisible to the
+        mirror's background context, which then makes a SECOND one for the same file — found by the
+        probe: 6001 rows and two projects for one URL). `isLoading` is the load; `isSyncing` is the
+        store catching up; the sidebar's clear blocker uses both.
+  - [x] `mirrorLanded`: the mirror's rows become the table's when they arrive (record index + rows
+        rebuilt, the view state untouched) — the badges and counts arrive late, the pane never shuts.
+  - [x] Two hazards the reordering creates, both found and fixed by the probe, both because the pass
+        is no longer the only writer: a slot the app writes mid-pass was taken from the file anyway
+        (now given back — the guard reads the app's writes as late as it can), and the pass's own
+        bulk relationship write NULLIFIED the inverse of a row the app had just linked, leaving an
+        ORPHANED record (`project = nil`, invisible to every project-scoped reader) — now repaired
+        after the commit, where the orphan is visible at all. Named and accepted: an app write
+        committed in the window between the guard's read and the pass's commit can still lose its
+        VALUE on a slot the pass adopts from the file; its row is never orphaned or duplicated.
+  - [x] Probe `/tmp/dev-load-ask-probe` (whole tree, real `LocalizationStore` + `Reconcile` +
+        `StoreWork` over a real store file, two real `.xcstrings` fixtures — one 6 000 slots, so a
+        write can be made while a pass is provably in flight): **GREEN 65/65**, **RED 58/65** with
+        the open waiting for the mirror again, the guard off and the repair off.
+
 ### A reload asks which version to load (2026-09-17)
 
 Reader: "When loading .xcstrings file currently cached data is prioritized and overrides it. Make it

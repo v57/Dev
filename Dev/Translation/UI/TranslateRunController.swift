@@ -230,14 +230,19 @@ final class TranslateRunController {
     // (main) actor so the footer can render it live while the pass runs.
     let (stream, continuation) = AsyncStream<Reconcile.PluralSkeletonProgress>.makeStream()
     let projectID = project.persistentModelID
-    let work = Task.detached(priority: .userInitiated) {
+    // The skeleton is bulk store work (one insert per form per key), so it goes through the
+    // app's ONE queue: a whole-catalog mirror may be queued behind the pane for the same
+    // slots, and two passes creating the same record is two rows for one slot.
+    let work = Task {
       () -> Result<Reconcile.PluralSkeletonOutcome, Error> in
       defer { continuation.finish() }
-      return await Reconcile.ensurePluralForms(
-        catalog: catalog, projectID: projectID, key: key, languages: languages,
-        in: TranslationStore.container,
-        isCancelled: { cancellation.isCancelled },
-        progress: { continuation.yield($0) })
+      return await StoreWork.shared.enqueue {
+        await Reconcile.ensurePluralForms(
+          catalog: catalog, projectID: projectID, key: key, languages: languages,
+          in: TranslationStore.container,
+          isCancelled: { cancellation.isCancelled },
+          progress: { continuation.yield($0) })
+      }
     }
     var announced = false
     for await update in stream {

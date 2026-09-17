@@ -480,10 +480,6 @@ final class LocalizationStore {
   /// True while an add-language pass is seeding its records.
   private(set) var isAddingLanguage = false
 
-  /// Tail of the add-language chain: each pass waits for the previous one, so
-  /// two adds never write the same slots from two background contexts.
-  private var languageChain: Task<Void, Never> = Task {}
-
   /// Language columns the strip offers: every language of the browser except
   /// the source (whose column is permanent).
   var pickerLanguages: [String] { browserLanguages }
@@ -535,13 +531,16 @@ final class LocalizationStore {
     }
     buildRows()
     let projectID = project.persistentModelID
-    let previous = languageChain
     isAddingLanguage = true
-    languageChain = Task {
-      await previous.value
-      let result = await Reconcile.addLanguages(
-        codes, catalog: catalog, projectID: projectID,
-        in: TranslationStore.container)
+    // The seeding is bulk store work (one insert per slot per language), so it goes through
+    // the app's ONE queue: it must not race a whole-catalog mirror for the same slots, and
+    // the load path may well have one in flight behind the pane.
+    Task {
+      let result = await StoreWork.shared.enqueue {
+        await Reconcile.addLanguages(
+          codes, catalog: catalog, projectID: projectID,
+          in: TranslationStore.container)
+      }
       isAddingLanguage = false
       switch result {
       case .success(let outcome):
@@ -1702,12 +1701,11 @@ final class LocalizationStore {
     selectedLanguages = []
     addedLanguages = []
     run.reset()
-    let landing = await mirrorCatalog(blank, url: url)
-    // A blank catalog carries no values, so it can never be held on the versions prompt;
-    // the branch is written out anyway, so a held mirror can never leave the pane adopted
-    // on a document nothing wrote a project for.
-    guard case .landed(let project) = landing else { return true }
+    // A blank catalog has no values to disagree about, so it never asks: it is opened at
+    // once and its (empty) mirror goes to the queue behind the pane like any other load.
+    let project = Reconcile.ensureProject(catalogURL: url, in: TranslationStore.shared.context)
     adopt(blank, project: project, url: url)
+    submitMirror(blank, url: url, generation: loadGeneration, policy: .appWins)
     scan.begin(store: self, root: scanRoot)
     return true
   }
@@ -1772,10 +1770,9 @@ final class LocalizationStore {
 
   /// Full (re)load: parse + reset everything. Used by Open….
   /// No language is selected by default; the user picks via the buttons.
-  /// Both halves run off the main actor — the decode, then the catalog's
-  /// mirror into SwiftData — and the store is opened in ONE main-actor step
-  /// afterwards, so the pane never shows a half-opened catalog (see
-  /// `mirrorCatalog`).
+  /// The decode runs off the main actor and the pane is opened in ONE main-actor
+  /// step afterwards, so it never shows a half-opened catalog; the mirror into
+  /// SwiftData is submitted behind it (`openCatalog`) and lands later.
   private func performOpen(_ url: URL) async {
     loadGeneration += 1
     let generation = loadGeneration
@@ -1793,13 +1790,13 @@ final class LocalizationStore {
   /// load go through (an open and a reload differ only in what they reset, see
   /// `finishLoad`).
   ///
-  /// The parse is mirrored first, and the mirror can come back HELD: when the file and
-  /// the app's records both carry a value for a slot and the two disagree, NOTHING is
-  /// written and the question goes to the user (the versions prompt,
-  /// `isVersionsPromptPresented`) — a load that silently picks a side is exactly what
-  /// that prompt exists for. The parse then waits on `heldLoad` with `pendingLoad` still
-  /// set, so the pane reads as opening and a newer open/reload, a close or a store clear
-  /// takes the question down with the load it belongs to.
+  /// Two things stand between the parse and the table, and both are cheap: the DIFFERENCE
+  /// scan (one scoped fetch plus a walk, no writes), and — only when it finds something to
+  /// ask about — the versions prompt, which holds the parse with `pendingLoad` still set so
+  /// a newer open/reload, a close or a store clear takes the question down with the load it
+  /// belongs to. The MIRROR is not one of them: it is submitted behind the pane
+  /// (`openCatalog`), because it is seconds of inserts on a big catalog and the table does
+  /// not need a single one of them to be usable.
   private func land(
     _ result: Result<StringCatalog, Error>,
     url: URL,
@@ -1808,25 +1805,110 @@ final class LocalizationStore {
   ) async {
     switch result {
     case .success(let catalog):
-      let landing = await mirrorCatalog(catalog, url: url, policy: .ask)
-      // The mirror is seconds long on a large catalog: a newer open/reload may have
-      // started and finished in the meantime, so re-check before this one takes
-      // over the store.
+      let differences = await Reconcile.detectDifferences(
+        catalog, catalogURL: url, in: TranslationStore.container)
+      // The scan is a fetch: a newer open/reload may have started and finished in the
+      // meantime, so re-check before this one takes over the pane.
       guard generation == loadGeneration else { return }
-      switch landing {
-      case .held(let differences):
+      guard differences.isEmpty else {
         heldLoad = HeldLoad(
           catalog: catalog, url: url, purpose: purpose, generation: generation)
         pendingDifferences = differences.sample
         pendingDifferenceCount = differences.count
         isVersionsPromptPresented = true
-      case .landed(let project):
-        finishLoad(catalog, project: project, url: url, purpose: purpose)
-        if pendingLoad == generation { pendingLoad = nil }
+        return
       }
+      await openCatalog(
+        catalog, url: url, generation: generation, purpose: purpose, policy: .appWins)
     case .failure(let error):
       finishLoadFailure(error, purpose: purpose)
       if pendingLoad == generation { pendingLoad = nil }
+    }
+  }
+
+  /// Opens a parsed catalog: the pane gets the document and the rows the file already
+  /// describes, and the store catches up behind it.
+  ///
+  /// The project row is find-or-create on the main context (one fetch of the registry), and
+  /// it must NOT wait for the mirror: the pane's rows, the redesign's workspace and a run's
+  /// first read all hang off it. The mirror is then SUBMITTED to the app's one store queue
+  /// (`StoreWork.shared`) instead of awaited — that is the whole point of the split: an open
+  /// that waits for 48,420 inserts is a window that reads "Opening catalog…" while the user
+  /// is looking at a table the artifact could already have filled.
+  private func openCatalog(
+    _ catalog: StringCatalog,
+    url: URL,
+    generation: Int,
+    purpose: LoadPurpose,
+    policy: Reconcile.DifferencePolicy
+  ) async {
+    let context = TranslationStore.shared.context
+    let project = Reconcile.ensureProject(catalogURL: url, in: context)
+    // SAVED before the mirror is submitted, and that is load-bearing: the project row is what
+    // the mirror's own background context finds-or-creates by URL, and a row this context has
+    // only INSERTED is invisible to it — the pass would make a SECOND row for the same file and
+    // write the catalog into that one (found by the probe: 6001 rows and two projects for one
+    // URL). One save of the registry here is cheaper than a reconciliation later.
+    try? context.save()
+    finishLoad(catalog, project: project, url: url, purpose: purpose)
+    submitMirror(catalog, url: url, generation: generation, policy: policy)
+    if pendingLoad == generation { pendingLoad = nil }
+  }
+
+  /// Hands the whole-catalog mirror to the store queue, to run after whatever bulk work is
+  /// already ahead of it (another catalog's mirror, a plural skeleton, a language seeding —
+  /// they all write the same slots, so they are serial BY the queue).
+  ///
+  /// Nothing waits for this. What it lands with is the store's own rows, and
+  /// `mirrorLanded` is where they become the table's: the badges, the needs-review counts
+  /// and the provenance are the store's readings, so they arrive late rather than keeping
+  /// the pane shut.
+  private func submitMirror(
+    _ catalog: StringCatalog,
+    url: URL,
+    generation: Int,
+    policy: Reconcile.DifferencePolicy
+  ) {
+    StoreWork.shared.submit { [weak self] in
+      let result = await Reconcile.mirrorOffMainActor(
+        catalog, catalogURL: url, in: TranslationStore.container, policy: policy)
+      self?.mirrorLanded(result, url: url, generation: generation)
+    }
+  }
+
+  /// Applies a mirror that landed behind the pane.
+  ///
+  /// The generation guard is the load's own: a mirror submitted for a catalog that is no
+  /// longer the open one (another project, a closed pane) must not rebuild this pane's
+  /// rows. The records are durable either way — they belong to the project row, and the
+  /// next open adopts them with everything else.
+  private func mirrorLanded(
+    _ result: Result<Reconcile.MirrorResult, Error>,
+    url: URL,
+    generation: Int
+  ) {
+    switch result {
+    case .success(let mirror):
+      NSLog(
+        "[Localization] mirrored %@ behind the pane: %d created, %d refreshed, %d kept, "
+          + "%d differing, %d given back, %d re-linked",
+        url.lastPathComponent, mirror.stats.created, mirror.stats.refreshed,
+        mirror.stats.kept, mirror.stats.differing, mirror.reverted, mirror.repaired)
+      guard generation == loadGeneration, catalogURL == url else { return }
+      // The mirror wrote on its OWN context, so this one's copies of those rows are stale
+      // — fetch by identity, then re-read the records it wrote (see `rebuildRecordIndex`).
+      let context = TranslationStore.shared.context
+      if let landed = Reconcile.project(id: mirror.projectID, in: context) {
+        project = landed
+      }
+      guard let project else { return }
+      rebuildRecordIndex(from: Reconcile.records(of: project, in: context))
+      buildRows()
+      // The scan's merge preview is a diff against the catalog — keep it current while its
+      // sheet is open.
+      if scan.isPresented { scan.refreshPlan() }
+    case .failure(let error):
+      saveError = "Couldn't save the catalog's records: \(error.localizedDescription)"
     }
   }
 
@@ -1964,7 +2046,7 @@ final class LocalizationStore {
   /// loss the confirmation names true: edits this window had not written to the
   /// file go with the session.
   ///
-  /// The parse deliberately does NOT go through the mirror: `mirrorCatalog` is
+  /// The parse deliberately does NOT go through the mirror: `submitMirror` is
   /// what writes a catalog's records into the store, and re-mirroring on the way
   /// in would put back the rows the clear just deleted.
   func reloadAfterStoreClear() async {
@@ -2046,12 +2128,13 @@ final class LocalizationStore {
   /// Answers the versions prompt: load the file's values for the differing slots, keep
   /// the app's records, or open nothing.
   ///
-  /// The held parse is re-mirrored with the answer — the FIRST pass deliberately wrote
-  /// nothing (see `Reconcile.mirrorOffMainActor`), so THIS is the pass that makes the
-  /// choice durable — and is then landed exactly as an unanswered load would have been.
-  /// A generation mismatch means a newer open/reload, a close or a store clear happened
-  /// while the alert was up: the answer is dropped rather than applied over it, and the
-  /// load it belonged to is gone with the parse.
+  /// The answer is what the mirror is then submitted with — the scan that asked wrote
+  /// nothing at all (`Reconcile.detectDifferences`), so this is the pass that makes the
+  /// choice durable — and the parse is opened exactly as an unanswered load would have been
+  /// (the pane up at once, the mirror behind it). A generation mismatch means a newer
+  /// open/reload, a close or a store clear happened while the alert was up: the answer is
+  /// dropped rather than applied over it, and the load it belonged to is gone with the
+  /// parse.
   func resolveDifferences(_ choice: DifferenceChoice) async {
     guard let held = heldLoad else { return }
     heldLoad = nil
@@ -2066,12 +2149,9 @@ final class LocalizationStore {
     }
     guard held.generation == loadGeneration else { return }
     let policy: Reconcile.DifferencePolicy = choice == .file ? .fileWins : .appWins
-    let landing = await mirrorCatalog(held.catalog, url: held.url, policy: policy)
-    guard held.generation == loadGeneration else { return }
-    if case .landed(let project) = landing {
-      finishLoad(held.catalog, project: project, url: held.url, purpose: held.purpose)
-    }
-    if pendingLoad == held.generation { pendingLoad = nil }
+    await openCatalog(
+      held.catalog, url: held.url, generation: held.generation, purpose: held.purpose,
+      policy: policy)
   }
 
   /// Opens a catalog that has already been mirrored into the DB: the document,
@@ -2108,21 +2188,19 @@ final class LocalizationStore {
     }
   }
 
-  /// True while a parsed catalog is being mirrored into the DB — the open /
-  /// reload window, which for a large catalog is seconds long. Drives the
-  /// panes' "Opening catalog…" state.
-  private(set) var isReconciling = false
-
-  /// Tail of the mirror chain. An open/reload that lands while an earlier
-  /// mirror is still writing must not race it for the same records (the mirror
-  /// used to be synchronous on the main actor, which made this ordering
-  /// implicit) — each mirror awaits the previous one first.
-  private var mirrorChain: Task<Void, Never> = Task {}
+  /// True while the STORE is still catching up with the pane: the app's one work queue has
+  /// bulk writes to run (a whole-catalog mirror, a plural skeleton, a language seeding).
+  ///
+  /// Nothing the user does with the table waits for this — that is the point of the queue
+  /// — but the operations that need a SETTLED store say so: the clear (7.5) refuses while
+  /// one is running, and a run's own reads are the run's own business (`adoptForeignWrites`
+  /// is how a session picks up what landed behind it).
+  var isSyncing: Bool { StoreWork.shared.isBusy }
 
   /// Re-mirrors the OPEN catalog into the DB on the main actor and refreshes
   /// the derived rows — the per-key mutations' path (scan merge, plural
   /// vary/remove, don't-translate): one key's slots, cheap enough to run
-  /// inline, unlike the whole-catalog `mirrorCatalog`.
+  /// inline, unlike the whole-catalog mirror.
   private func mirrorOpenCatalog(_ catalog: StringCatalog, url: URL) {
     let context = TranslationStore.shared.context
     // The open project owns this catalog; a URL that does not match it (a
@@ -2141,61 +2219,6 @@ final class LocalizationStore {
     // current while its sheet is open.
     if scan.isPresented {
       scan.refreshPlan()
-    }
-  }
-
-  /// What `mirrorCatalog` did with the parse it was handed: wrote it (with the project to
-  /// hold), or held it because the file and the app's records disagree.
-  private enum MirrorLanding {
-    case landed(Project?)
-    case held(Reconcile.DifferenceReport)
-  }
-
-  /// Mirrors `catalog` into the project's records OFF the main actor and returns the
-  /// project to hold in the MAIN context, or nil when the write failed.
-  ///
-  /// The upsert is the expensive half of opening a catalog (48,420 slots
-  /// measured at ~6 s in Debug — see `Reconcile.mirrorOffMainActor`), so it
-  /// runs in its own background `ModelContext`. Browsing never depends on the
-  /// DB: a failed mirror still returns the project row so the pane opens with
-  /// file-derived cells, and reports through `saveError`.
-  ///
-  /// `policy` is the load's ANSWER to the versions prompt: `.ask` is the first pass (it
-  /// writes nothing and comes back `held` when the two sides disagree), `.fileWins` /
-  /// `.appWins` are the pass the user's answer pays for.
-  private func mirrorCatalog(
-    _ catalog: StringCatalog,
-    url: URL,
-    policy: Reconcile.DifferencePolicy = .ask
-  ) async -> MirrorLanding {
-    isReconciling = true
-    defer { isReconciling = false }
-    let previous = mirrorChain
-    let work = Task { () -> Result<Reconcile.MirrorOutcome, Error> in
-      await previous.value
-      return await Reconcile.mirrorOffMainActor(
-        catalog, catalogURL: url, in: TranslationStore.container, policy: policy)
-    }
-    mirrorChain = Task { _ = await work.value }
-    switch await work.value {
-    case .success(.held(let differences)):
-      // Nothing was written: the load waits on the question (see `resolveDifferences`).
-      return .held(differences)
-    case .success(.mirrored(let mirror)):
-      // The BACKGROUND context did the writing, so this context's copies of
-      // those rows are stale — a fetch by identity refreshes them and hands
-      // back the instance this store should hold.
-      let context = TranslationStore.shared.context
-      let project = Reconcile.project(id: mirror.projectID, in: context)
-        ?? Reconcile.ensureProject(catalogURL: url, in: context)
-      NSLog(
-        "[Localization] reconciled %@: %d created, %d refreshed, %d kept, %d differing",
-        url.lastPathComponent, mirror.stats.created, mirror.stats.refreshed,
-        mirror.stats.kept, mirror.stats.differing)
-      return .landed(project)
-    case .failure(let error):
-      saveError = "Couldn't save the catalog's records: \(error.localizedDescription)"
-      return .landed(Reconcile.ensureProject(catalogURL: url, in: TranslationStore.shared.context))
     }
   }
 
@@ -2238,11 +2261,9 @@ final class LocalizationStore {
   /// generation) takes it down with the parse it belongs to.
   private var pendingLoad: Int?
 
-  /// True while a catalog is being opened, parsed or mirrored into the store.
-  ///
-  /// A WRITER, exactly like a run: `mirrorCatalog` writes a whole catalog's
-  /// records into the store the moment the parse lands, so clearing the store
-  /// (7.5) has to wait for one — and says so — instead of racing it.
+  /// True while a load request is still being made ready: the parse, the difference scan
+  /// and the adopt. The MIRROR is not part of it (`isSyncing` is that half), because the
+  /// pane does not wait for it — this flag is what the "Opening catalog…" state reads.
   var isLoading: Bool { pendingLoad != nil }
 
   /// Marks the open catalog as carrying edits the file does not have yet.

@@ -324,15 +324,18 @@ enum StoreClearOutcome: Equatable {
 /// Why the clear cannot run right now, or nil when it can.
 ///
 /// A WRITER in flight is the one hard reason (7.5): a run writes records into the
-/// store as it goes, and an open mirrors a whole catalog into it the moment its
-/// parse lands — so a clear that ran under either would leave a live writer
+/// store as it goes, and an open's mirror writes a whole catalog's slots into it
+/// behind the pane — so a clear that ran under either would leave a live writer
 /// writing into a store that just emptied. The button is disabled on this AND the
 /// flow refuses on it, so the safety does not depend on the button being the only
 /// caller.
 @MainActor
 func storeClearBlocker(localization: LocalizationStore, shell: Translation.Shell) -> String? {
-  if localization.isReconciling || localization.isLoading {
+  if localization.isLoading {
     return "A catalog is opening — clear once it has landed"
+  }
+  if localization.isSyncing {
+    return "The store is still catching up with a catalog — clear once it has"
   }
   if localization.run.isActive || localization.scan.isRunning || localization.isAddingLanguage
     || shell.isRunning {
