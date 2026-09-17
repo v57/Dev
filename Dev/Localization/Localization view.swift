@@ -1390,6 +1390,17 @@ private struct FooterBar: View {
         Text("·").foregroundStyle(.tertiary)
         Text(statusNote).foregroundStyle(.secondary)
       }
+      // The store catching up behind the pane (a whole-catalog mirror, a language seeding):
+      // the table and a run are already usable, so this is a NOTE, not a block — it is what
+      // the badges and the counts are still waiting for.
+      if store.isSyncing {
+        Text("·").foregroundStyle(.tertiary)
+        HStack(spacing: 4) {
+          ProgressView().controlSize(.small)
+          Text("indexing in the background")
+        }
+        .foregroundStyle(.secondary)
+      }
       Spacer()
       TranslateRunStatus(controller: store.run)
     }
