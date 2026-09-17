@@ -102,30 +102,35 @@ nonisolated enum Reconcile {
     }
   }
 
-  /// What the file's own unit says about one slot — the value it carries (`nil` when the
-  /// file leaves it absent or blank, because absence IS the empty state) and the state it
-  /// claims, mapped to the DB's vocabulary. The ONE reading of a unit: the mirror's slot
-  /// upserts and the difference scan both go through it, so a scan can never disagree with
-  /// the mirror about what the file said.
+  /// What the file's own unit says about one slot: the value it carries (`nil` when the file
+  /// leaves it absent or blank, because absence IS the empty state), the state it claims mapped to
+  /// the DB's vocabulary, and the state the file itself printed (the reviewed question is asked in
+  /// the FILE's words — see `isReviewed(fileState:)`). The ONE reading of a unit: the mirror's
+  /// slot upserts, the difference scan and the shape scan all go through it, so no two of them can
+  /// disagree about what the file said.
   private static func unitValue(
     _ unit: StringCatalog.StringUnit?
-  ) -> (value: String?, state: TranslationState?) {
+  ) -> (value: String?, state: TranslationState?, fileState: String?) {
     let raw = unit?.value ?? ""
     let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-    return (trimmed.isEmpty ? nil : raw, unit.map { seedState(fileState: $0.state) })
+    return (
+      trimmed.isEmpty ? nil : raw,
+      unit.map { seedState(fileState: $0.state) },
+      unit?.state
+    )
   }
 
   /// The file's unit for one FLAT (key, language).
   private static func fileUnit(
     _ catalog: StringCatalog, key: String, language: String
-  ) -> (value: String?, state: TranslationState?) {
+  ) -> (value: String?, state: TranslationState?, fileState: String?) {
     unitValue(catalog.strings[key]?.localizations?[language]?.stringUnit)
   }
 
   /// The file's unit for one PLURAL form of a (key, language).
   private static func fileForm(
     _ catalog: StringCatalog, key: String, language: String, category: String
-  ) -> (value: String?, state: TranslationState?) {
+  ) -> (value: String?, state: TranslationState?, fileState: String?) {
     let plural = catalog.strings[key]?.localizations?[language]?.variations?["plural"]
     return unitValue(plural?[category]?.stringUnit)
   }
@@ -135,6 +140,31 @@ nonisolated enum Reconcile {
   /// ownership test, in one place.
   private static func isOwned(_ record: TranslationRecord) -> Bool {
     record.provider != nil || record.edits?.isEmpty == false
+  }
+
+  /// True when the RECORD holds a value a PERSON vouched for.
+  ///
+  /// `.reviewed` alone is not enough: an imported-database copy is `.reviewed` with the auto
+  /// marker set (`autoReviewed`) precisely because nobody confirmed it — that is what the "auto"
+  /// badge says and why the file carries it as `needs_review`. Reviewed means `.reviewed` with
+  /// that marker CLEAR, i.e. a human confirmed this value, and it is the only state worth stopping
+  /// a load for: machine output and imported text are both things a run is free to replace.
+  static func isReviewed(_ record: TranslationRecord) -> Bool {
+    record.state == .reviewed && !record.autoReviewed
+  }
+
+  /// `isReviewed` for a slot that may hold no record at all.
+  static func isReviewed(_ record: TranslationRecord?) -> Bool {
+    guard let record else { return false }
+    return isReviewed(record)
+  }
+
+  /// True when the FILE claims the value was reviewed — its own word for it is `translated`
+  /// (Xcode writes it when a person confirms a translation; `needs_review`, `new`, `stale` and a
+  /// missing state are all unreviewed). The same rule the mirror uses to seed a record's state,
+  /// asked from the other side.
+  static func isReviewed(fileState: String?) -> Bool {
+    fileState == "translated"
   }
 
   // MARK: - project
@@ -255,6 +285,9 @@ nonisolated enum Reconcile {
     /// `DifferenceReport.sampleLimit`). Never the whole set: a real catalog can
     /// differ on thousands of slots and nothing draws them.
     var differenceSample: [SlotDifference] = []
+    /// Records dropped because the slot's SHAPE was settled the other way (see `ShapeConflict`):
+    /// the losing shape's value-carrying, unreviewed rows.
+    var dropped = 0
 
     /// What the pass found, in the form that crosses an actor boundary.
     var differenceReport: DifferenceReport {
@@ -284,12 +317,52 @@ nonisolated enum Reconcile {
     let fileValue: String
     /// What the project's record carries.
     let recordValue: String
+    /// True when the FILE's value is the one a person confirmed (state `translated`).
+    let fileIsReviewed: Bool
+    /// True when the RECORD's value is the one a person confirmed (`isReviewed`).
+    let recordIsReviewed: Bool
 
     /// The slot as the prompt names it: `key (language)` or `key (language, one)`.
     var label: String {
       guard let category else { return "\(key) (\(language))" }
       return "\(key) (\(language), \(category))"
     }
+
+    /// Which side a person vouched for, as the prompt says it.
+    var reviewedSide: String {
+      switch (fileIsReviewed, recordIsReviewed) {
+      case (true, true): return "both"
+      case (true, false): return "the file"
+      default: return "the app"
+      }
+    }
+  }
+
+  /// The shape one side of a slot has: a single value, or one value per CLDR plural form.
+  enum SlotShape: Sendable, Equatable {
+    case flat
+    case plural
+  }
+
+  /// One (key, language) the FILE and the app's records disagree about the SHAPE of — one side
+  /// plural, the other flat — with a REVIEWED value on one of them.
+  ///
+  /// A shape is not a value: the same translation can be stored flat or split over CLDR forms, and
+  /// which of the two a slot has decides what a run may write into it and what the merge can carry
+  /// back to the file (a flat record is never written into a plural slot, and vice versa). When the
+  /// two sides disagree, the value the REVIEWED side holds is the one a person stands behind, so
+  /// its shape is the one worth keeping — `reviewedShape` is that, and the load converts the other
+  /// side to it (see `mirrorOffMainActor`'s shape pass and `LocalizationStore`'s file-side
+  /// conversion). Both sides reviewed is NOT a conflict: nothing here may overrule a person.
+  struct ShapeConflict: Sendable, Equatable {
+    let key: String
+    let language: String
+    /// The shape the slot should end up with (the reviewed side's).
+    let reviewedShape: SlotShape
+    /// What the file holds for it now.
+    let fileShape: SlotShape
+    /// What the project's records hold for it now.
+    let recordShape: SlotShape
   }
 
   /// What a pass found, as an answer the caller can act on: the EXACT number of
@@ -454,11 +527,15 @@ nonisolated enum Reconcile {
   /// The scan itself, over records the caller hands in — pure, so a probe can ask it the
   /// same question the load asks.
   ///
-  /// A slot counts when the file fills it AND the record is DB-OWNED (`isOwned`) and fills
-  /// it with something else. Two shapes deliberately do NOT count: a slot the file has
-  /// nothing for (the app's own unsaved work — the design keeps it alive across a crash
-  /// rather than asking about it on every open) and a slot only the file fills (an unowned
-  /// mirror, which the file already wins).
+  /// A slot counts when the file fills it, the record is DB-OWNED (`isOwned`) and fills it with
+  /// something else, AND a person stands behind one of the two values (`isReviewed`) — the alert
+  /// is about REVIEWED values only, so `needs_review` machine output, imported text and empty
+  /// slots never raise it: those are the app's own working material and a run replaces them
+  /// freely, which is exactly what the mirror's ordinary ownership rule already decides.
+  ///
+  /// Two slot shapes deliberately do NOT count either: a slot the file has nothing for (the app's
+  /// own unsaved work — the design keeps it alive across a crash rather than asking about it on
+  /// every open) and a slot only the file fills (an unowned mirror, which the file already wins).
   static func differences(
     _ catalog: StringCatalog,
     existing: [TranslationRecord]
@@ -472,18 +549,26 @@ nonisolated enum Reconcile {
 
     var count = 0
     var sample: [SlotDifference] = []
-    func compare(_ key: String, _ language: String, _ category: String?, _ fileValue: String?) {
+    func compare(
+      _ key: String, _ language: String, _ category: String?,
+      _ fileValue: String?, _ fileState: String?
+    ) {
       guard let fileValue,
             let record = bySlot[SlotKey(key: key, language: language, category: category ?? "")],
             isOwned(record),
             let recordValue = record.value,
             recordValue != fileValue
       else { return }
+      let fileIsReviewed = isReviewed(fileState: fileState)
+      let recordIsReviewed = isReviewed(record)
+      // Neither side reviewed: not a question. See the rule above.
+      guard fileIsReviewed || recordIsReviewed else { return }
       count += 1
       if sample.count < DifferenceReport.sampleLimit {
         sample.append(SlotDifference(
           key: key, language: language, category: category,
-          fileValue: fileValue, recordValue: recordValue))
+          fileValue: fileValue, recordValue: recordValue,
+          fileIsReviewed: fileIsReviewed, recordIsReviewed: recordIsReviewed))
       }
     }
 
@@ -499,16 +584,123 @@ nonisolated enum Reconcile {
         if !variations.isEmpty, variations["plural"] == nil { continue }
         if let plural = variations["plural"], !plural.isEmpty {
           for category in PluralRules.categories(for: language) {
-            compare(
-              key, language, category,
-              fileForm(catalog, key: key, language: language, category: category).value)
+            let form = fileForm(catalog, key: key, language: language, category: category)
+            compare(key, language, category, form.value, form.fileState)
           }
           continue
         }
-        compare(key, language, nil, fileUnit(catalog, key: key, language: language).value)
+        let unit = fileUnit(catalog, key: key, language: language)
+        compare(key, language, nil, unit.value, unit.fileState)
       }
     }
     return DifferenceReport(count: count, sample: sample)
+  }
+
+  /// The SHAPE scan: every (key, language) where the file and the app's records disagree about the
+  /// shape of the slot — one plural, one flat — while a person stands behind one of them.
+  ///
+  /// Same gating as the value scan, for the same reason: a shape is only worth changing on the
+  /// authority of a reviewed value. Where the reviewed value is plural, the slot should be plural;
+  /// where it is flat, flat. Both sides reviewed is NOT a conflict (nothing here may overrule a
+  /// person), and a side with no value at all is not a shape (an empty form skeleton is the plural
+  /// machinery's, not a translation).
+  static func detectShapeConflicts(
+    _ catalog: StringCatalog,
+    catalogURL: URL,
+    in container: ModelContainer
+  ) async -> [ShapeConflict] {
+    await Task.detached(priority: .userInitiated) {
+      let context = ModelContext(container)
+      guard let project = existingProject(catalogURL: catalogURL, in: context) else { return [] }
+      return shapeConflicts(catalog, existing: records(of: project, in: context))
+    }.value
+  }
+
+  /// The scan itself, over records the caller hands in — pure, like `differences`.
+  ///
+  /// The shape a slot has is read from what each side HOLDS, not from what it could hold: the file
+  /// is plural when its plural variation carries forms, the records are plural when they carry form
+  /// records at all (the empty ones included — a form skeleton is the app saying this slot is a
+  /// plural one, which is the app's own plural workflow's doing).
+  static func shapeConflicts(
+    _ catalog: StringCatalog,
+    existing: [TranslationRecord]
+  ) -> [ShapeConflict] {
+    var bySlot: [SlotKey: TranslationRecord] = [:]
+    bySlot.reserveCapacity(existing.count)
+    for record in existing {
+      bySlot[SlotKey(
+        key: record.key, language: record.language, category: record.category ?? "")] = record
+    }
+
+    func hasValue(_ record: TranslationRecord?) -> Bool {
+      record?.value?.isBlankOrEmpty == false
+    }
+
+    var conflicts: [ShapeConflict] = []
+    let sourceLanguage = catalog.sourceLanguage
+    let languages = catalog.languages
+    for (key, entry) in catalog.strings {
+      if entry.shouldTranslate == false { continue }
+      for language in languages where language != sourceLanguage {
+        let variations = entry.localizations?[language]?.variations ?? [:]
+        if !variations.isEmpty, variations["plural"] == nil { continue }  // device-only
+        let fileShape: SlotShape = (variations["plural"]?.isEmpty ?? true) ? .flat : .plural
+
+        let flat = bySlot[SlotKey(key: key, language: language, category: "")]
+        let forms = PluralRules.categories(for: language).compactMap {
+          bySlot[SlotKey(key: key, language: language, category: $0)]
+        }
+        guard flat != nil || !forms.isEmpty else { continue }  // the store knows nothing: no shape
+
+        // Who may settle it: a reviewed value on one side, and only one.
+        let flatReviewed = isReviewed(flat) && hasValue(flat)
+        let reviewedForms = forms.filter { isReviewed($0) && hasValue($0) }
+        // BOTH reviewed: a person's flat value and a person's per-form values. Nothing here may
+        // overrule either, so the slot is left exactly as it is — no conversion, and the value scan
+        // will not ask about a flat value against a form either.
+        if flatReviewed, !reviewedForms.isEmpty { continue }
+
+        let reviewedShape: SlotShape
+        if flatReviewed {
+          reviewedShape = .flat
+        } else if !reviewedForms.isEmpty {
+          reviewedShape = .plural
+        } else {
+          // No reviewed record, so the file's own claim is the only authority there is — and
+          // without it there is nothing to convert on.
+          guard isReviewed(fileState: fileOrFormState(
+            catalog, key: key, language: language, isPlural: fileShape == .plural))
+          else { continue }
+          reviewedShape = fileShape
+        }
+        // The conflict is the FILE's shape against the shape the reviewed value says the slot
+        // should have — not against the records' own shape, which is often the file's shape plus a
+        // stale row from an earlier era (a flat value a person typed while the file was flat, a
+        // form skeleton the plural workflow made). Those are exactly the rows this pass is here
+        // to settle.
+        guard fileShape != reviewedShape else { continue }
+        // What the records hold, as a shape — the reviewed value's when there is one.
+        let recordShape: SlotShape = flatReviewed
+          ? .flat
+          : (!reviewedForms.isEmpty ? .plural : (forms.isEmpty ? .flat : .plural))
+        conflicts.append(ShapeConflict(
+          key: key, language: language, reviewedShape: reviewedShape,
+          fileShape: fileShape, recordShape: recordShape))
+      }
+    }
+    return conflicts
+  }
+
+  /// The file's own state for a slot, plural or flat — the reviewed question asked of the artifact.
+  private static func fileOrFormState(
+    _ catalog: StringCatalog, key: String, language: String, isPlural: Bool
+  ) -> String? {
+    guard isPlural else { return fileUnit(catalog, key: key, language: language).fileState }
+    let states = PluralRules.categories(for: language).compactMap {
+      fileForm(catalog, key: key, language: language, category: $0).fileState
+    }
+    return states.first { isReviewed(fileState: $0) } ?? states.first
   }
 
   /// Mirrors `catalog` into the store on a BACKGROUND `ModelContext` — the open/reload
@@ -531,7 +723,8 @@ nonisolated enum Reconcile {
     _ catalog: StringCatalog,
     catalogURL: URL,
     in container: ModelContainer,
-    policy: DifferencePolicy = .appWins
+    policy: DifferencePolicy = .appWins,
+    shapeConflicts: [ShapeConflict] = []
   ) async -> Result<MirrorResult, Error> {
     await Task.detached(priority: .userInitiated) {
       // The watermark for "the app wrote this slot while the pass was running".
@@ -546,6 +739,22 @@ nonisolated enum Reconcile {
       var stats = upsertFromCatalog(
         catalog, project: project, existing: existing, context: context,
         policy: policy, fileWrites: log, liveWriters: true)
+      // THE SHAPE PASS' OTHER HALF. The file side of a shape conflict was already converted by the
+      // load (`LocalizationStore.land`), so what is left here is the records: the LOSING shape's
+      // rows go. Only the ones that carry a value and have nobody behind them — an empty form
+      // skeleton is the plural machinery's own (deleting it would break the key's plural workflow),
+      // and a reviewed record is a person's, which nothing in a load may overrule.
+      for conflict in shapeConflicts {
+        for record in existing
+        where record.key == conflict.key && record.language == conflict.language {
+          let isForm = record.category != nil
+          let losingShape = conflict.reviewedShape == .flat ? isForm : !isForm
+          guard losingShape, record.value?.isBlankOrEmpty == false, !isReviewed(record)
+          else { continue }
+          context.delete(record)
+          stats.dropped += 1
+        }
+      }
       // THE APP'S OWN WRITES, read here — as late as the pass can read them and still act: they
       // are the slots this pass gives back (`revertFileWrites`). What a read at this point
       // cannot catch (a write committed between it and the commit) is the repair below's job.
@@ -826,8 +1035,11 @@ nonisolated enum Reconcile {
       }
 
       if !created.isEmpty {
-        // ONE bulk append instead of a to-one assignment per insert.
-        project.records = (project.records ?? []) + created
+        // ONE bulk append instead of a to-one assignment per insert — and read from the store NOW,
+        // because this save writes the membership and the app may have linked a record while the
+        // pass ran (see `upsertFromCatalog`'s live-writers note: an array built from a snapshot
+        // drops what is not in it, and a dropped child's inverse is nullified).
+        project.records = records(of: project, in: context) + created
       }
       do {
         try context.save()
@@ -951,8 +1163,9 @@ nonisolated enum Reconcile {
       }
 
       if !created.isEmpty {
-        // ONE bulk append instead of a to-one assignment per insert.
-        project.records = (project.records ?? []) + created
+        // ONE bulk append instead of a to-one assignment per insert, read from the store NOW for
+        // the same reason as the plural pass above.
+        project.records = records(of: project, in: context) + created
       }
       do {
         try context.save()
@@ -1276,7 +1489,11 @@ nonisolated enum Reconcile {
     if stats.differenceSample.count < DifferenceReport.sampleLimit {
       stats.differenceSample.append(SlotDifference(
         key: record.key, language: record.language, category: record.category,
-        fileValue: fileValue, recordValue: recordValue))
+        fileValue: fileValue, recordValue: recordValue,
+        // The mapped state carries the same answer as the raw one: `translated` is the only file
+        // state that seeds `.reviewed` (see `seedState(fileState:)`).
+        fileIsReviewed: fileSlot.state == .reviewed,
+        recordIsReviewed: isReviewed(record)))
     }
     if policy == .fileWins {
       adoptFile(fileSlot, into: record, context: context, fileWrites: fileWrites)
@@ -1369,9 +1586,22 @@ nonisolated enum Reconcile {
           contextVersions: persistableVersions(ContextVersions()),
           category: category)
         context.insert(record)
-        record.project = project
+        // Deliberately NOT linked here: the link is what makes the save write the project's whole
+        // membership, so it is made below, AFTER the membership has been read back.
         return record
       }()
+
+    // THE MEMBERSHIP IS WRITTEN BY THIS SAVE, so it must be read NOW. Linking the record below
+    // makes SwiftData dirty the project's to-many, and the save then writes it as this CONTEXT
+    // holds it: a record another writer linked in the meantime (a mirror pass, a plural skeleton,
+    // an add-language seeding — all of them run behind the pane now) would be replaced out of the
+    // membership and its inverse nullified, i.e. orphaned and invisible to every reader in the app.
+    // One scoped fetch, only on the path that INSERTES a record, which is the only path here that
+    // touches the relationship at all.
+    if record.project == nil {
+      project.records = records(of: project, in: context)
+      record.project = project
+    }
 
     let valueChanged = record.value != value
     if valueChanged {

@@ -330,6 +330,34 @@ nonisolated struct StringCatalog: Codable, Sendable {
     strings[key] = entry
   }
 
+  /// Collapses ONE language's plural variation for `key` back to a flat stringUnit ("other" wins,
+  /// else the first filled form) and drops the variation. The language-scoped half of
+  /// `removePlurals(key:)`: a load that follows a reviewed FLAT value has to be able to flatten the
+  /// file's slot for that language without touching the key's other languages (which may well be
+  /// legitimately plural).
+  mutating func flatten(key: String, language: String) {
+    guard var entry = strings[key], var localizations = entry.localizations,
+          var loc = localizations[language], var variations = loc.variations,
+          let plural = variations["plural"]
+    else { return }
+    let ordered = (["other"] + plural.keys.sorted()).uniqued()
+    var winner: StringUnit?
+    for category in ordered {
+      if let unit = plural[category]?.stringUnit, unit.value != nil {
+        winner = unit
+        break
+      }
+    }
+    variations.removeValue(forKey: "plural")
+    loc.variations = variations.isEmpty ? nil : variations
+    if loc.stringUnit == nil {
+      loc.stringUnit = winner
+    }
+    localizations[language] = loc
+    entry.localizations = localizations
+    strings[key] = entry
+  }
+
   /// Sets one plural form's value/state, creating the variation skeleton as
   /// needed. Empty text removes the form's stringUnit (absence IS empty).
   mutating func setPluralValue(_ text: String, state: String?, key: String, language: String, category: String) {

@@ -423,6 +423,47 @@ are catalog data, and the count asks which keys hold a filled `needs_review` REC
         count published back (a badge may lag a tick); it is a new concurrency path, so it waits for
         the reader's word rather than arriving unasked.
 
+### The alert asks about REVIEWED values only, and the shape follows them (2026-09-18)
+
+Reader: "Alert to use .xcstrings or db data should only apply to reviewed values, no needs_review or
+empty. If reviewed value is a plural and others not - it should change them to plurals, same should
+be for backwards."
+
+Two rules, both about the same thing: the app only raises a question where a PERSON is behind one of
+the two values, and where a person is, what they did wins.
+
+  - [x] The difference scan (`Reconcile.differences`) counts a pair only when a REVIEWED value is on
+        one side: a record is reviewed when `state == .reviewed` with the auto marker CLEAR (an
+        imported value is `.reviewed` with nobody behind it — that is what "auto" means and why the
+        file carries it as `needs_review`), and the file is reviewed when it says `translated`.
+        Machine output against machine output, empty slots and the app's own unsaved work are never
+        asked about — the mirror's ordinary ownership rule decides those, as it always did. The
+        alert's text says so now ("One side is a value a person confirmed").
+  - [x] The SHAPE scan (`Reconcile.shapeConflicts`): where the file and the records disagree about
+        the SHAPE of a slot — one plural, the other flat — and a reviewed value is on one of them,
+        the reviewed side's shape wins, both ways: the file's node is varied by plural (the flat
+        value moves into "other") or flattened (`StringCatalog.flatten`, a new language-scoped
+        half of `removePlurals`), and the LOSING shape's rows go — only the ones that carry a value
+        and have nobody behind them (an empty form skeleton is the plural machinery's; a reviewed
+        row is a person's). Shape is NOT part of the question: the answer decides values, the
+        reviewed value decides the shape, either way. A reshaped document is dirty by definition, so
+        Save is live with the file's new shape.
+  - [x] BOTH sides reviewed is not a conflict: a person's flat value and a person's per-form values
+        cannot be settled by a rule, so the slot is left exactly as it is (and the value scan does
+        not compare across shapes, so it cannot ask a nonsense question about a flat value against a
+        form either).
+  - [x] The probe found a second instance of the orphan class while setting this up, now fixed: a
+        door that INSERTS a record (`applyHumanEdit`'s create path) makes the save write the
+        project's whole membership from this context's view, so a record a background pass linked in
+        the meantime was replaced out of it and orphaned. The membership is now read back before
+        that link is made — and the plural-skeleton and add-language passes read it at their own
+        tails for the same reason.
+  - [x] Probe `/tmp/dev-load-ask-probe`: **GREEN 80/80**, **RED 63/80** with the open waiting for the
+        mirror, the guard/repair off, the reviewed gate inverted and the file-side shape conversion
+        off. New checks cover both conversion directions, the records dropped by each, the reviewed
+        row surviving both, the unreviewed pair NOT being asked about, and the reshaped document
+        being an edit Save is live on.
+
 ### The big work is queued, and an open does not wait for it (2026-09-17)
 
 Reader: "Make all large operations asynchronous and queue them when needed. So i can open project,

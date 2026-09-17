@@ -369,6 +369,12 @@ final class LocalizationStore {
     let url: URL
     let purpose: LoadPurpose
     let generation: Int
+    /// The shape conflicts the load found, to hand to the mirror once the question is answered
+    /// (they are not part of the question: the reviewed value's shape wins either way).
+    let shapeConflicts: [Reconcile.ShapeConflict]
+    /// True when the load already converted the FILE's side of them, which makes the parsed
+    /// document differ from the file on disk — i.e. the pane has something to Save.
+    let reshaped: Bool
   }
 
   /// The store app-level code (the quit prompt) asks; STRONG, so a closed
@@ -1810,16 +1816,44 @@ final class LocalizationStore {
       // The scan is a fetch: a newer open/reload may have started and finished in the
       // meantime, so re-check before this one takes over the pane.
       guard generation == loadGeneration else { return }
+      // THE SHAPE PASS, file half: where the file and the records disagree about the SHAPE of a
+      // slot (one plural, one flat) and a person stands behind one of them, the REVIEWED side's
+      // shape wins — converted here on the parsed document, and handed to the mirror for the
+      // records. Shape is not part of the versions question: the answer decides VALUES, while the
+      // reviewed value decides the shape, either way (a plural slot translated flat, or a flat slot
+      // that a person filled form by form, is a slot the two halves of the app would otherwise
+      // never agree about).
+      let shapeConflicts = await Reconcile.detectShapeConflicts(
+        catalog, catalogURL: url, in: TranslationStore.container)
+      guard generation == loadGeneration else { return }
+      var parsed = catalog
+      var reshaped = false
+      for conflict in shapeConflicts where conflict.fileShape != conflict.reviewedShape {
+        switch conflict.reviewedShape {
+        case .plural:
+          parsed.varyByPlural(key: conflict.key, languages: [conflict.language])
+        case .flat:
+          parsed.flatten(key: conflict.key, language: conflict.language)
+        }
+        reshaped = true
+      }
+      if reshaped {
+        NSLog(
+          "[Localization] %d slot shape(s) followed the reviewed value in %@",
+          shapeConflicts.count, url.lastPathComponent)
+      }
       guard differences.isEmpty else {
         heldLoad = HeldLoad(
-          catalog: catalog, url: url, purpose: purpose, generation: generation)
+          catalog: parsed, url: url, purpose: purpose, generation: generation,
+          shapeConflicts: shapeConflicts, reshaped: reshaped)
         pendingDifferences = differences.sample
         pendingDifferenceCount = differences.count
         isVersionsPromptPresented = true
         return
       }
       await openCatalog(
-        catalog, url: url, generation: generation, purpose: purpose, policy: .appWins)
+        parsed, url: url, generation: generation, purpose: purpose, policy: .appWins,
+        shapeConflicts: shapeConflicts, reshaped: reshaped)
     case .failure(let error):
       finishLoadFailure(error, purpose: purpose)
       if pendingLoad == generation { pendingLoad = nil }
@@ -1840,7 +1874,9 @@ final class LocalizationStore {
     url: URL,
     generation: Int,
     purpose: LoadPurpose,
-    policy: Reconcile.DifferencePolicy
+    policy: Reconcile.DifferencePolicy,
+    shapeConflicts: [Reconcile.ShapeConflict] = [],
+    reshaped: Bool = false
   ) async {
     let context = TranslationStore.shared.context
     let project = Reconcile.ensureProject(catalogURL: url, in: context)
@@ -1851,7 +1887,14 @@ final class LocalizationStore {
     // URL). One save of the registry here is cheaper than a reconciliation later.
     try? context.save()
     finishLoad(catalog, project: project, url: url, purpose: purpose)
-    submitMirror(catalog, url: url, generation: generation, policy: policy)
+    // A reshaped document is NOT a fresh parse any more: the pane holds an edit the file does not
+    // have (the load changed a slot's shape), so Save is live and the unsaved-changes prompt will
+    // say so — `finishLoad`/`adopt` clear the flag for a freshly parsed catalog, and this is the
+    // one case where that would be a lie.
+    if reshaped { markDirty(records: false) }
+    submitMirror(
+      catalog, url: url, generation: generation, policy: policy,
+      shapeConflicts: shapeConflicts)
     if pendingLoad == generation { pendingLoad = nil }
   }
 
@@ -1867,11 +1910,13 @@ final class LocalizationStore {
     _ catalog: StringCatalog,
     url: URL,
     generation: Int,
-    policy: Reconcile.DifferencePolicy
+    policy: Reconcile.DifferencePolicy,
+    shapeConflicts: [Reconcile.ShapeConflict] = []
   ) {
     StoreWork.shared.submit { [weak self] in
       let result = await Reconcile.mirrorOffMainActor(
-        catalog, catalogURL: url, in: TranslationStore.container, policy: policy)
+        catalog, catalogURL: url, in: TranslationStore.container, policy: policy,
+        shapeConflicts: shapeConflicts)
       self?.mirrorLanded(result, url: url, generation: generation)
     }
   }
@@ -1891,9 +1936,10 @@ final class LocalizationStore {
     case .success(let mirror):
       NSLog(
         "[Localization] mirrored %@ behind the pane: %d created, %d refreshed, %d kept, "
-          + "%d differing, %d given back, %d re-linked",
+          + "%d differing, %d given back, %d re-linked, %d dropped by shape",
         url.lastPathComponent, mirror.stats.created, mirror.stats.refreshed,
-        mirror.stats.kept, mirror.stats.differing, mirror.reverted, mirror.repaired)
+        mirror.stats.kept, mirror.stats.differing, mirror.reverted, mirror.repaired,
+        mirror.stats.dropped)
       guard generation == loadGeneration, catalogURL == url else { return }
       // The mirror wrote on its OWN context, so this one's copies of those rows are stale
       // — fetch by identity, then re-read the records it wrote (see `rebuildRecordIndex`).
@@ -2099,14 +2145,18 @@ final class LocalizationStore {
     "Which version should load?"
   }
 
-  /// Body of the versions alert: how many slots are in play, a few of them by name, and
-  /// what each answer does — including the part that is invisible from the pane, that
-  /// keeping the app's records leaves the file's values to be overwritten by the next
-  /// Save.
+  /// Body of the versions alert: how many slots are in play, a few of them by name, what a person
+  /// confirmed about them, and what each answer does — including the part that is invisible from
+  /// the pane, that keeping the app's records leaves the file's values to be overwritten by the
+  /// next row save.
+  ///
+  /// The alert only ever asks about slots with a REVIEWED value on one side (see
+  /// `Reconcile.differences`): machine output, imported text and empty slots never raise it, which
+  /// is why the question can say what it is about.
   var versionsPromptMessage: String {
     let count = pendingDifferenceCount
     let named = pendingDifferences.prefix(3)
-    var text = "The file and the app's records carry different values for "
+    var text = "One side is a value a person confirmed and the two disagree, for "
       + "\(count) \(count == 1 ? "slot" : "slots") — "
       + named.map(\.label).joined(separator: ", ")
     if count > named.count { text += " (and \(count - named.count) more)" }
@@ -2115,6 +2165,13 @@ final class LocalizationStore {
       + "the replaced values stay in the row's edit history."
     text += "\n\nKeeping the app's records leaves the file's values out of the app — the row "
       + "still holds the app's value, and saving that row writes it back over the file's."
+    // The shape work is NOT part of the question — the reviewed value's shape wins either way (see
+    // `LocalizationStore.land`) — so the alert only reports it.
+    let shapes = heldLoad?.shapeConflicts.count ?? 0
+    if shapes > 0 {
+      text += "\n\n\(shapes) of them also changed shape (plural vs single): the shape follows "
+        + "the value a person confirmed."
+    }
     if heldLoad?.purpose == .open { text += " Cancelling leaves the catalog closed." }
     return text
   }
@@ -2151,7 +2208,7 @@ final class LocalizationStore {
     let policy: Reconcile.DifferencePolicy = choice == .file ? .fileWins : .appWins
     await openCatalog(
       held.catalog, url: held.url, generation: held.generation, purpose: held.purpose,
-      policy: policy)
+      policy: policy, shapeConflicts: held.shapeConflicts, reshaped: held.reshaped)
   }
 
   /// Opens a catalog that has already been mirrored into the DB: the document,
