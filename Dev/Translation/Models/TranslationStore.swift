@@ -65,6 +65,7 @@ final class TranslationStore {
       ContextEdit.self,
       TranslationMemoryEntry.self,
       RunCursor.self,
+      ServerConnection.self,
     ])
     // Explicit per-app store: a SwiftData app that omits a URL lands on
     // default.store in whatever Application Support resolves to — for an

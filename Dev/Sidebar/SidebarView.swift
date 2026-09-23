@@ -25,10 +25,23 @@ struct SidebarView: View {
   /// a project whose catalog it is showing (unsaved edits / a run in flight
   /// refuse the removal, and an idle open catalog is closed with the row).
   @Environment(LocalizationStore.self) private var localization
+  /// The localize servers this app works against, and their last check.
+  @Environment(ServerStore.self) private var servers
+  /// Which server the form sheet is adding or editing (nil = no sheet). Owned
+  /// here so the toolbar button, the empty-state row and a row's Edit… all open
+  /// the SAME sheet.
+  @State private var serverSheet: ServerSheet?
 
   var body: some View {
     @Bindable var model = model
     List(selection: $model.selection) {
+      // Servers first: they are where the app's data comes from, and the
+      // 'Add Connection' button has to be visible without opening anything.
+      ServersSidebarSection(
+        store: servers,
+        selection: $model.selection) { sheet in
+          serverSheet = sheet
+        }
       Section("Projects") {
         if model.projects.isEmpty {
           dropHintRow
@@ -47,6 +60,37 @@ struct SidebarView: View {
       }
     }
     .listStyle(.sidebar)
+    .toolbar {
+      ToolbarItem(placement: .primaryAction) {
+        Button {
+          serverSheet = .add
+        } label: {
+          Label("Add Connection", systemImage: "plus")
+        }
+        .help("Add a localize server to work against")
+      }
+    }
+    .sheet(item: $serverSheet) { sheet in
+      switch sheet {
+      case .add:
+        ServerFormView { name, endpoint, key in
+          // The id the new server gets is not needed here: the sheet closes and
+          // the row appears in the list. An untouched key field arrives as nil
+          // and means the shared key, i.e. no own keychain item.
+          _ = servers.add(name: name, endpoint: endpoint, key: key ?? "")
+        }
+      case .edit(let id):
+        ServerFormView(editing: servers.connection(id: id)) { name, endpoint, key in
+          servers.update(id: id, name: name, endpoint: endpoint, key: key)
+        }
+      }
+    }
+    // First sight of the sidebar: build the rows, then ask every server how it
+    // is doing. Nothing polls after this — a check is a reader action.
+    .task {
+      servers.refresh()
+      await servers.checkAll()
+    }
     // Projectless tools live here, not in the toolbar picker: the picker is
     // project-bound and only exists while a project is open.
     .safeAreaBar(edge: .bottom) {

@@ -44,6 +44,10 @@ enum SidebarSelection: Hashable {
   case tool(DevTool)
   /// A directory/catalog project from the Projects section.
   case project(PersistentIdentifier)
+  /// A localize server from the Servers section. Keyed by the server's own
+  /// string id rather than its PersistentIdentifier, because the id is what its
+  /// keychain item and its status are keyed by too.
+  case server(String)
 }
 
 /// What the sidebar's one alert is about. A single value rather than one

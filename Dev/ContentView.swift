@@ -16,6 +16,10 @@ struct ContentView: View {
   @State private var model = SidebarViewModel()
   @State private var createIcon = CreateIcon()
   @State private var localizationStore = LocalizationStore()
+  /// The localize servers the sidebar lists and the server pane reads: one
+  /// instance for both, so a check that flips a dot is the same fact the pane
+  /// shows.
+  @State private var servers = ServerStore()
   /// The redesign's shell (Design notes 8.1): the bridge that builds a project's
   /// `Translation.Workspace` over the same SwiftData container the browser reads
   /// (10.16), so the toolbar's Start, the panes' overlays and the panes' status bars
@@ -32,6 +36,7 @@ struct ContentView: View {
     }
     .environment(createIcon)
     .environment(localizationStore)
+    .environment(servers)
     .environment(translation)
     // Unsaved-changes prompt: Reload…, Open…, a sidebar project switch and
     // quitting all hold their request here until it is answered, because
@@ -149,6 +154,8 @@ struct ContentView: View {
       } else {
         ContentUnavailableView("Project not found", systemImage: "folder.badge.questionmark")
       }
+    case .server(let id):
+      ServerDetailView(serverID: id, store: servers)
     case nil:
       ContentUnavailableView("Select a project", systemImage: "sidebar.left")
     }
