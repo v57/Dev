@@ -73,6 +73,13 @@ struct ServerDetailView: View {
         }
         if !rows.isEmpty {
           statsTable
+        } else if store.statuses[serverID]?.isOnline == true {
+          // Registered but untranslated is the normal state of a fresh
+          // deployment: the boot registration fills the inventory, values
+          // appear only after a client's run.
+          Text("No translated values in any locale yet — the inventory is registered, nothing is translated.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
         }
       }
       .padding(20)
