@@ -23,6 +23,11 @@ struct ServerDetailView: View {
   @State private var loadError: String?
   @State private var isLoading = false
   @State private var editing = false
+  /// The pane's translation run: started from the bar, its progress and its
+  /// summary are shown beside the stats the run moves.
+  @State private var run = ServerRun()
+  /// Namespaces present in the corpus, for the scope picker. Read once per pane.
+  @State private var namespaces: [String] = []
 
   private var row: ServerRow? { store.row(id: serverID) }
   private var status: ServerStatus { store.statuses[serverID] ?? .unknown }
@@ -67,6 +72,15 @@ struct ServerDetailView: View {
       VStack(alignment: .leading, spacing: 18) {
         header(row)
         statusBlock
+        // The run bar sits with the stats it moves: press Translate below and
+        // these numbers are what changes.
+        ServerRunBar(
+          row: row,
+          store: store,
+          run: run,
+          onFinished: { Task { await check() } },
+          serverLocales: rows,
+          namespaces: namespaces)
         if let loadError {
           Label(loadError, systemImage: "exclamationmark.triangle.fill")
             .foregroundStyle(.orange)
@@ -177,9 +191,23 @@ struct ServerDetailView: View {
       rows = stats.rows.sorted { $0.locale < $1.locale }
       messages = stats.messages
       commented = stats.commented
+      await loadNamespaces(client)
     } catch {
       rows = []
       loadError = (error as? LocalizeClient.Error)?.description ?? "\(error)"
+    }
+  }
+
+  /// The namespaces the corpus actually uses, for the run bar's scope picker.
+  /// One page is enough to name them, and a failure here only costs the scope
+  /// control — it must not blank the pane's stats, which did load.
+  private func loadNamespaces(_ client: LocalizeClient) async {
+    do {
+      let page = try await client.post(
+        "localize/messages", ["limit": 1000], as: LocalizeInventory.self)
+      namespaces = Array(Set(page.items.map(\.namespace))).sorted()
+    } catch {
+      namespaces = []
     }
   }
 }
