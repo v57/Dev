@@ -161,6 +161,118 @@ nonisolated struct LocalizeInventory: Decodable, Sendable {
   let more: Bool
 }
 
+/// `POST localize/worklist` — one page of what still needs work in a locale.
+/// The server decides what "needs work" means (`filter`), and a client steps
+/// `cursor` until `more` is false; the run reads page by page rather than
+/// holding the whole corpus.
+nonisolated struct LocalizeWorklist: Decodable, Sendable {
+  nonisolated struct Item: Decodable, Sendable {
+    let source: String
+    let comment: String?
+    let namespace: String
+    let locale: String
+    let revision: Int
+    let value: String?
+    let origin: String?
+    /// `null`/absent means "not stale" on the wire.
+    let stale: Bool?
+
+    var isStale: Bool { stale ?? false }
+  }
+  let items: [Item]
+  let cursor: String?
+  let more: Bool
+}
+
+/// One row of `POST localize/values`: `gold` is a human's decision, `machine`
+/// the model's, and the server never lets a machine value overwrite a gold one.
+nonisolated struct LocalizeValueEntry: Sendable {
+  var source: String
+  var locale: String
+  var value: String
+  var origin: String = "machine"
+  var model: String? = nil
+
+  /// The node's wire shape for this row.
+  var dictionary: [String: Any] {
+    var entry: [String: Any] = ["source": source, "locale": locale, "value": value, "origin": origin]
+    if let model { entry["model"] = model }
+    return entry
+  }
+}
+
+/// What a `localize/values` write reported: how many rows landed, how many the
+/// server refused (a machine value against a gold one) and why.
+nonisolated struct LocalizeWriteResult: Decodable, Sendable {
+  let written: Int
+  let skipped: Int
+  let stale: Int?
+  let reason: String?
+}
+
+extension LocalizeClient {
+  /// One page of the worklist. `filter` is the server's own vocabulary:
+  /// `empty` (no value in this locale), `stale` (a machine value marked for
+  /// redo), `machine`, `all`.
+  func worklist(
+    locale: String,
+    filter: String = "empty",
+    limit: Int = 1000,
+    cursor: String? = nil
+  ) async throws -> LocalizeWorklist {
+    var body: [String: Any] = ["locale": locale, "filter": filter, "limit": limit]
+    if let cursor { body["cursor"] = cursor }
+    return try await post("localize/worklist", body, as: LocalizeWorklist.self)
+  }
+
+  /// The worklist AS BATCHES, pulled on demand: a page is fetched only when the
+  /// previous one has been consumed, so a run holds one batch instead of the
+  /// whole corpus, and a run that stops early stops reading. The filters are
+  /// walked in order, each to exhaustion, and no sentence is served twice.
+  ///
+  /// `Swift.Error`, not the nested `LocalizeClient.Error`: inside this type a
+  /// bare `Error` names our own enum and would make the stream's failure type
+  /// wrong.
+  func worklistBatches(
+    locale: String,
+    filters: [String] = ["empty"],
+    limit: Int = 1000
+  ) -> AsyncThrowingStream<[LocalizeWorklist.Item], Swift.Error> {
+    AsyncThrowingStream { continuation in
+      let task = Task {
+        do {
+          var seen = Set<String>()
+          for filter in filters {
+            var cursor: String? = nil
+            var more = true
+            while more {
+              try Task.checkCancellation()
+              let page = try await worklist(locale: locale, filter: filter, limit: limit, cursor: cursor)
+              let fresh = page.items.filter { seen.insert($0.source).inserted }
+              if !fresh.isEmpty { continuation.yield(fresh) }
+              more = page.more
+              cursor = page.cursor
+              // A page that promises more but hands back no cursor would spin.
+              if more && cursor == nil { more = false }
+            }
+          }
+          continuation.finish()
+        } catch {
+          continuation.finish(throwing: error)
+        }
+      }
+      continuation.onTermination = { _ in task.cancel() }
+    }
+  }
+
+  /// Writes values (the server caps a chunk at 1000 rows).
+  @discardableResult
+  func writeValues(_ entries: [LocalizeValueEntry]) async throws -> LocalizeWriteResult {
+    try await post(
+      "localize/values", ["entries": entries.map(\.dictionary)], as: LocalizeWriteResult.self)
+  }
+}
+
 extension LocalizeClient {
   /// What the sidebar's server row shows: configured or not, reachable or not,
   /// and the corpus' own size when it answered.
