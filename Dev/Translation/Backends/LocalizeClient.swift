@@ -201,6 +201,14 @@ nonisolated struct LocalizeValueEntry: Sendable {
   }
 }
 
+/// What a `localize/comments` write reported: how many messages were written,
+/// and how many of their machine values the write stamped `stale` (a gold value
+/// is never stamped).
+nonisolated struct LocalizeCommentResult: Decodable, Sendable {
+  let written: Int
+  let stale: Int
+}
+
 /// What a `localize/values` write reported: how many rows landed, how many the
 /// server refused (a machine value against a gold one) and why.
 nonisolated struct LocalizeWriteResult: Decodable, Sendable {
@@ -211,6 +219,36 @@ nonisolated struct LocalizeWriteResult: Decodable, Sendable {
 }
 
 extension LocalizeClient {
+  /// One page of the inventory: every sentence with its comment, its namespace
+  /// and (when `locale` is named) that locale's state for it. `comment` is the
+  /// server's own vocabulary — `missing` is its own worklist for sentences that
+  /// have none. The caller steps `cursor` until `more` is false; a page holds at
+  /// most 1000 rows.
+  func inventory(
+    locale: String? = nil,
+    namespace: String? = nil,
+    comment: String? = nil,
+    limit: Int = 200,
+    cursor: String? = nil
+  ) async throws -> LocalizeInventory {
+    var body: [String: Any] = ["limit": limit]
+    if let locale { body["locale"] = locale }
+    if let namespace { body["namespace"] = namespace }
+    if let comment { body["comment"] = comment }
+    if let cursor { body["cursor"] = cursor }
+    return try await post("localize/messages", body, as: LocalizeInventory.self)
+  }
+
+  /// Writes comments (the server caps a chunk at 1000). A CHANGED comment bumps
+  /// the message's revision and stamps that message's machine values `stale` —
+  /// the reply's `stale` counts the ones it stamped. It never translates
+  /// anything, and a `gold` value is left alone.
+  @discardableResult
+  func writeComments(_ entries: [(source: String, comment: String)]) async throws -> LocalizeCommentResult {
+    let rows: [[String: Any]] = entries.map { ["source": $0.source, "comment": $0.comment] }
+    return try await post("localize/comments", ["entries": rows], as: LocalizeCommentResult.self)
+  }
+
   /// One page of the worklist. `filter` is the server's own vocabulary:
   /// `empty` (no value in this locale), `stale` (a machine value marked for
   /// redo), `machine`, `all`.

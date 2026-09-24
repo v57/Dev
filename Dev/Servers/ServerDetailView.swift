@@ -28,6 +28,9 @@ struct ServerDetailView: View {
   @State private var run = ServerRun()
   /// Namespaces present in the corpus, for the scope picker. Read once per pane.
   @State private var namespaces: [String] = []
+  /// The corpus itself, as the table below shows it: one locale, read a page at
+  /// a time (the service caps a page at 1000 rows).
+  @State private var corpus = ServerCorpus()
 
   private var row: ServerRow? { store.row(id: serverID) }
   private var status: ServerStatus { store.statuses[serverID] ?? .unknown }
@@ -68,37 +71,50 @@ struct ServerDetailView: View {
   // MARK: - content
 
   private func content(_ row: ServerRow) -> some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: 18) {
-        header(row)
-        statusBlock
-        // The run bar sits with the stats it moves: press Translate below and
-        // these numbers are what changes.
-        ServerRunBar(
-          row: row,
-          store: store,
-          run: run,
-          onFinished: { Task { await check() } },
-          serverLocales: rows,
-          namespaces: namespaces)
-        if let loadError {
-          Label(loadError, systemImage: "exclamationmark.triangle.fill")
-            .foregroundStyle(.orange)
-        }
-        if !rows.isEmpty {
-          statsTable
-        } else if store.statuses[serverID]?.isOnline == true {
-          // Registered but untranslated is the normal state of a fresh
-          // deployment: the boot registration fills the inventory, values
-          // appear only after a client's run.
-          Text("No translated values in any locale yet — the inventory is registered, nothing is translated.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-        }
+    VStack(alignment: .leading, spacing: 18) {
+      header(row)
+      statusBlock
+      // The run bar sits with the stats it moves: press Translate below and
+      // these numbers are what changes.
+      ServerRunBar(
+        row: row,
+        store: store,
+        run: run,
+        onFinished: runFinished,
+        serverLocales: rows,
+        namespaces: namespaces)
+      if let loadError {
+        Label(loadError, systemImage: "exclamationmark.triangle.fill")
+          .foregroundStyle(.orange)
       }
-      .padding(20)
-      .frame(maxWidth: .infinity, alignment: .leading)
+      if !rows.isEmpty {
+        statsTable
+      } else if store.statuses[serverID]?.isOnline == true {
+        // Registered but untranslated is the normal state of a fresh
+        // deployment: the boot registration fills the inventory, values
+        // appear only after a client's run.
+        Text("No translated values in any locale yet — the inventory is registered, nothing is translated.")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+      corpusSection
     }
+    .padding(20)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+  }
+
+  /// The corpus, line by line — the pane's second table, and the only part of it
+  /// that writes: a value goes in as `gold` (a person typed it), a comment
+  /// through the service's own comments route. It takes the height the header
+  /// above leaves, because it reads its own pages as the reader scrolls them
+  /// rather than holding the corpus.
+  private var corpusSection: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      Text("Lines")
+        .font(.headline)
+      ServerCorpusTable(corpus: corpus, serverLocales: rows)
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
   }
 
   private func header(_ row: ServerRow) -> some View {
@@ -192,10 +208,29 @@ struct ServerDetailView: View {
       messages = stats.messages
       commented = stats.commented
       await loadNamespaces(client)
+      await startCorpus(client)
     } catch {
       rows = []
       loadError = (error as? LocalizeClient.Error)?.description ?? "\(error)"
     }
+  }
+
+  /// Points the line table at the server that just answered: the busiest locale
+  /// first (that is where the work is), then whatever the reader picked. A
+  /// re-check leaves a table that is already reading where it is — the reader's
+  /// place in the corpus is theirs, and a value the run moved is reported by the
+  /// table itself instead.
+  private func startCorpus(_ client: LocalizeClient) async {
+    let wanted = corpus.locale.isEmpty ? ServerRunBar.defaultLocale(from: rows) : corpus.locale
+    await corpus.start(client: client, locale: wanted)
+  }
+
+  /// A finished run wrote values: the table's rows are behind the server now, and
+  /// only the reader can decide to drop their place in the corpus, so the table
+  /// says so and the stats are re-read here.
+  private func runFinished() {
+    corpus.noteRunFinished()
+    Task { await check() }
   }
 
   /// The namespaces the corpus actually uses, for the run bar's scope picker.
