@@ -719,7 +719,7 @@ extension Translation {
           // The button checks this before a run starts (5.2), so meeting it here
           // means the credential went away: one failure, not one per batch.
           throw BackendError.notConfigured(
-            "Muse is not configured: set \(CommandCodeKeychain.envName) in the login "
+            "Muse is not configured: set \(OpenCodeKeychain.envName) in the login "
               + "keychain, the environment, or ~/.hermes/.env.")
         }
         try await runOperations(run)

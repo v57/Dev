@@ -13,7 +13,7 @@ import SwiftData
 /// The "Translate" run orchestrator. One run, in order:
 ///
 ///   0. LEARN   — fold pending user-confirmed TranslationEdits into the
-///                language ContextDoc (Command Code, OVERRIDE authority,
+///                language ContextDoc (Muse, OVERRIDE authority,
 ///                audit + version bump) and upsert the reviewed TM entry.
 ///   1. TM      — resolve records that need a target value against exact
 ///                (sourceText, targetLanguage) TranslationMemory hits:
@@ -25,13 +25,13 @@ import SwiftData
 ///                translations as .reviewed + autoReviewed (the UI shows the
 ///                auto badge until a human confirms); misses fall through.
 ///   3. TRANSLATE — every remaining record is translated in per-language
-///                batches by the model router (free tiers first, Muse last),
+///                batches by the model router (Muse on OpenCode Go),
 ///                validated, repaired singly, then passed through the paid
 ///                verification gate.
 ///
 /// There is deliberately NO local draft stage. Apple Translation and Ollama
 /// (translategemma) used to pre-fill records, but a draft could only ever
-/// *pre-empt* Command Code — never improve on it — because no stage was ever
+/// *pre-empt* Muse — never improve on it — because no stage was ever
 /// shown the previous stage's value (only source text and context ever reach
 /// a backend). Each pass therefore cost a full
 /// on-device sweep of the catalog (Apple and translategemma both run at
@@ -755,7 +755,7 @@ struct TranslationPipeline {
         targetLanguage: language == nil ? item.record.language : nil)
     }
 
-    // 1. Batched translation — free tiers first, paid destination last.
+    // 1. Batched translation — the model router (Muse on OpenCode Go).
     let batch: BatchOutcome
     if let language {
       batch = await router.translateBatch(items, from: env.sourceLanguage, to: language)

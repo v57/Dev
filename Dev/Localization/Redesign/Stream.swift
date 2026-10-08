@@ -4,7 +4,12 @@
 //
 //  Created by Dmitry on 15.09.26.
 //
-//  One chat completion, read as it is written.
+//  One completion, read as it is written.
+//
+//  Two protocols arrive through this file, picked by `Wire` (OpenAIChatClient.swift):
+//  Muse answers in the Responses protocol on OpenCode Go, whose frames name their own
+//  event type; the chat wire's `choices`/`delta` frames are read as before. Everything
+//  downstream is identical for both — this file only turns frames into text.
 //
 //  The redesign's requirement is that a row reaches the run the moment the model finishes
 //  writing it, not when the whole batch does (5.5): a 33-row reply is minutes of writing,
@@ -24,7 +29,7 @@
 //      and the run loses the numbers rather than the batch.
 //
 //  The wire details — endpoint, model, keychain, `BackendError`'s taxonomy — follow
-//  Translation/Backends/OpenAIChatClient.swift and CommandCodeTranslator.swift, read as
+//  Translation/Backends/OpenAIChatClient.swift and OpenCodeTranslator.swift, read as
 //  the precedent and never called: the redesign carries its own client (see `Router`).
 
 import Foundation
@@ -37,10 +42,14 @@ extension Translation {
   /// no REPLY: the SSE frames are the envelope, and the text inside them is passed on
   /// untouched for the party that asked the question to read (`Validator.Scanner`).
   struct ChatStream {
-    /// Full chat-completions URL (provider root + `/chat/completions`).
+    /// Full completion URL (provider root + the wire protocol's path).
     let endpoint: URL
     let apiKey: String
     let model: String
+    /// Which wire protocol `endpoint` speaks (see `Wire` in OpenAIChatClient).
+    var wire: Wire = .chatCompletions
+    /// Extra headers a provider requires (OpenCode Go's session id, ...).
+    var headers: [String: String] = [:]
     var timeout: TimeInterval = 180
 
     /// What the provider reported about the call. Every number is optional because a
@@ -87,17 +96,34 @@ extension Translation {
       request.timeoutInterval = timeout
       request.setValue("application/json", forHTTPHeaderField: "Content-Type")
       request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+      for (name, value) in headers {
+        request.setValue(value, forHTTPHeaderField: name)
+      }
       do {
-        request.httpBody = try JSONEncoder().encode(
-          Request(
-            model: model,
-            messages: [
-              Request.Message(role: "system", content: system),
-              Request.Message(role: "user", content: user),
-            ],
-            temperature: temperature,
-            stream: true,
-            stream_options: includeUsage ? Request.StreamOptions(include_usage: true) : nil))
+        switch wire {
+        case .chatCompletions:
+          request.httpBody = try JSONEncoder().encode(
+            Request(
+              model: model,
+              messages: [
+                Request.Message(role: "system", content: system),
+                Request.Message(role: "user", content: user),
+              ],
+              temperature: temperature,
+              stream: true,
+              stream_options: includeUsage ? Request.StreamOptions(include_usage: true) : nil))
+        case .responses:
+          // The Responses API streams usage in its closing frame and knows no
+          // `stream_options`, so the includeUsage retry below only ever fires
+          // for the chat wire.
+          request.httpBody = try JSONEncoder().encode(
+            ResponsesRequest(
+              model: model,
+              instructions: system,
+              input: [ResponsesRequest.Item(role: "user", content: user)],
+              temperature: temperature,
+              stream: true))
+        }
       } catch {
         throw BackendError.network("could not encode request: \(error.localizedDescription)")
       }
@@ -230,6 +256,30 @@ extension Translation {
         let message = error["message"] as? String, !message.isEmpty {
         throw BackendError.badStatus(200, message)
       }
+      // A Responses-API frame names its own event type; the chat wire's frames
+      // carry no `type` and fall through to the `choices` reading below.
+      if let type = object["type"] as? String {
+        switch type {
+        case "response.output_text.delta":
+          return (object["delta"] as? String, nil)
+        case "response.completed", "response.incomplete":
+          // The closing frame carries the usage; an `incomplete` answer is a
+          // cut reply, which the caller's validator reports, not this reader.
+          guard let response = object["response"] as? [String: Any],
+            let reported = response["usage"] as? [String: Any]
+          else { return (nil, nil) }
+          return (nil, responsesUsage(of: reported))
+        case "response.failed":
+          let response = object["response"] as? [String: Any]
+          let message = ((response?["error"] as? [String: Any])?["message"] as? String)
+            ?? "the model call failed"
+          throw BackendError.badStatus(200, message)
+        default:
+          // created / in_progress / output_item.* / content_part.* / reasoning
+          // deltas: read for nothing, passed over.
+          return (nil, nil)
+        }
+      }
       var text: String?
       if let choices = object["choices"] as? [[String: Any]], let choice = choices.first {
         if let delta = choice["delta"] as? [String: Any] {
@@ -257,6 +307,18 @@ extension Translation {
       return usage.isEmpty ? nil : usage
     }
 
+    /// The usage numbers of a Responses-API frame: `input_tokens` /
+    /// `output_tokens`, cache hits under `input_tokens_details`.
+    private static func responsesUsage(of object: [String: Any]) -> Usage? {
+      var usage = Usage()
+      usage.promptTokens = object["input_tokens"] as? Int
+      usage.completionTokens = object["output_tokens"] as? Int
+      if let details = object["input_tokens_details"] as? [String: Any] {
+        usage.cachedTokens = details["cached_tokens"] as? Int
+      }
+      return usage.isEmpty ? nil : usage
+    }
+
     // MARK: - wire shapes
 
     private struct Request: Encodable {
@@ -273,6 +335,21 @@ extension Translation {
 
       struct StreamOptions: Encodable {
         var include_usage: Bool
+      }
+    }
+
+    /// The Responses-API request body (Muse on OpenCode Go). It streams usage
+    /// in its closing frame; there is no `stream_options` in this protocol.
+    private struct ResponsesRequest: Encodable {
+      var model: String
+      var instructions: String
+      var input: [Item]
+      var temperature: Double
+      var stream: Bool
+
+      struct Item: Encodable {
+        var role: String
+        var content: String
       }
     }
 

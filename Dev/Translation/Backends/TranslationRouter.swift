@@ -57,8 +57,9 @@ nonisolated enum BatchLayout: Sendable {
 
 /// The single translation entry point the pipeline calls.
 ///
-/// Two operations, both walking the same `RoutedModel.chain` and both falling
-/// through to the paid `muse` model when the free tiers are exhausted:
+/// Two operations, both walking the same `RoutedModel.chain` — one candidate
+/// today, Muse on OpenCode Go — with candidate cooldowns, pacing, validation
+/// and trace shared between them:
 ///
 ///  - `translateBatch` — the language-uniform batch path (whole language
 ///    groups; one target language per request).
@@ -71,8 +72,8 @@ nonisolated enum BatchLayout: Sendable {
 /// cooldowns, validation and trace through the private `routeBatch`; only the
 /// prompt assembly and the trace title differ.
 ///
-/// A third operation, `verifyBatch`, ALWAYS runs on the paid model: review is
-/// never routed to a free tier.
+/// A third operation, `verifyBatch`, ALWAYS runs on `RoutedModel.muse`
+/// directly: review is never routed through the chain.
 ///
 /// `@Observable` so the run footer can show which model is answering and how
 /// much of the prompt the provider served from cache. The HTTP calls stay
@@ -140,11 +141,12 @@ final class TranslationRouter: TranslatorBackend {
 
   // MARK: - TranslatorBackend
 
-  nonisolated var id: BackendID { .commandcode }
+  nonisolated var id: BackendID { .opencode }
 
-  /// Records persist the ACCOUNT that produced a value, not the model id, so
-  /// the editor stamp stays stable across free/paid routing.
-  nonisolated var displayName: String { "Command Code" }
+  /// Records persist the ACCOUNT that produced a value, not the model id —
+  /// the model rides in `lastEditor` — so the stamp names the account the
+  /// run's calls went to.
+  nonisolated var displayName: String { "OpenCode Go" }
 
   /// Eligible whenever at least one candidate has a usable key.
   nonisolated func isEligible(from: String, to: String) async -> Bool {
@@ -460,7 +462,7 @@ final class TranslationRouter: TranslatorBackend {
       }
     }
     throw lastFailure ?? BackendError.notConfigured(
-      "No translation model is available: no provider key is configured and every free tier is cooling down.")
+      "No translation model is available: no provider key is configured and every candidate is cooling down.")
   }
 
   // MARK: - shared plumbing
@@ -474,7 +476,8 @@ final class TranslationRouter: TranslatorBackend {
     jsonObject: Bool
   ) async throws -> ChatReply {
     let client = OpenAIChatClient(
-      endpoint: candidate.provider.chatEndpoint,
+      endpoint: candidate.endpoint,
+      wire: candidate.wire,
       apiKey: apiKey,
       model: candidate.model,
       headers: candidate.headers)
@@ -538,7 +541,7 @@ final class TranslationRouter: TranslatorBackend {
     return "\(requests) request(s) · \(cachedPromptTokens)/\(totalPromptTokens) prompt tokens cached (\(share)%) · \(quotaRefusals) quota refusal(s)"
   }
 
-  /// Clears quota cooldowns and telemetry (a manual "try free tiers again").
+  /// Clears quota cooldowns and telemetry (a manual "try Muse again").
   func resetCooldowns() {
     cooldowns.removeAll()
     callsByModel.removeAll()

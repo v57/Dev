@@ -20,7 +20,7 @@ nonisolated protocol TranslatorBackend: Sendable {
   var id: BackendID { get }
   /// Human-readable name for UI lists and logs.
   var displayName: String { get }
-  /// Cheap capability probe: today, whether the Command Code API key is
+  /// Cheap capability probe: today, whether the OpenCode Go API key is
   /// present. The (from, to) pair is accepted for backends that need it.
   func isEligible(from: String, to: String) async -> Bool
   /// Translates one string. Throws `BackendError` on failure; never crashes,

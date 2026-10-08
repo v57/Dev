@@ -5,6 +5,26 @@
 
 import Foundation
 
+// MARK: - Wire
+
+/// Which OpenAI wire protocol a call speaks.
+///
+/// `chatCompletions` is the classic shape — `messages` in, `choices` out.
+/// `responses` is the Responses API — `instructions` + `input` in, `output`
+/// items out — which is what Muse speaks on OpenCode Go.
+nonisolated enum Wire: String, Sendable {
+  case chatCompletions
+  case responses
+
+  /// Path under the provider root.
+  var path: String {
+    switch self {
+    case .chatCompletions: return "chat/completions"
+    case .responses: return "responses"
+    }
+  }
+}
+
 // MARK: - ChatReply
 
 /// One model reply plus the token accounting the provider reported.
@@ -20,15 +40,17 @@ nonisolated struct ChatReply: Sendable {
 
 // MARK: - OpenAIChatClient
 
-/// One OpenAI-compatible `POST {endpoint}` chat completion. Every hosted
-/// provider the router talks to (Command Code, OpenCode Zen, OpenRouter)
-/// speaks this shape, so the wire code lives here exactly once.
+/// One OpenAI-wire `POST {endpoint}` completion, in either protocol the
+/// hosted providers speak (see `Wire`). The router, the translators and the
+/// learn client all call this, so the wire code lives here exactly once.
 nonisolated struct OpenAIChatClient: Sendable {
-  /// Full chat-completions URL (provider root + `/chat/completions`).
+  /// Full completion URL (provider root + the wire protocol's path).
   let endpoint: URL
+  /// Which protocol `endpoint` speaks.
+  var wire: Wire = .chatCompletions
   let apiKey: String
   let model: String
-  /// Extra headers a provider requires (OpenRouter attribution, ...).
+  /// Extra headers a provider requires (OpenCode Go's session id, ...).
   var headers: [String: String] = [:]
   var timeout: TimeInterval = 180
 
@@ -48,18 +70,33 @@ nonisolated struct OpenAIChatClient: Sendable {
       request.setValue(value, forHTTPHeaderField: name)
     }
     do {
-      var body = Request(
-        model: model,
-        messages: [
-          Request.Message(role: "system", content: system),
-          Request.Message(role: "user", content: user),
-        ],
-        temperature: temperature,
-        max_tokens: maxTokens)
-      // JSON mode keeps batch replies parseable; providers that ignore it are
-      // unaffected because the validator parses tolerantly either way.
-      body.response_format = jsonObject ? Request.ResponseFormat(type: "json_object") : nil
-      request.httpBody = try JSONEncoder().encode(body)
+      switch wire {
+      case .chatCompletions:
+        var body = Request(
+          model: model,
+          messages: [
+            Request.Message(role: "system", content: system),
+            Request.Message(role: "user", content: user),
+          ],
+          temperature: temperature,
+          max_tokens: maxTokens)
+        // JSON mode keeps batch replies parseable; providers that ignore it
+        // are unaffected because the validator parses tolerantly either way.
+        body.response_format = jsonObject ? Request.ResponseFormat(type: "json_object") : nil
+        request.httpBody = try JSONEncoder().encode(body)
+      case .responses:
+        // `jsonObject` models the chat protocol's response_format; the
+        // Responses API would take `text.format`, but no caller asks for it
+        // today — the prompts ask for JSON in words, and the validator
+        // parses tolerantly either way.
+        let body = ResponsesRequest(
+          model: model,
+          instructions: system,
+          input: [ResponsesRequest.Item(role: "user", content: user)],
+          temperature: temperature,
+          max_output_tokens: maxTokens)
+        request.httpBody = try JSONEncoder().encode(body)
+      }
     } catch {
       throw BackendError.network("could not encode request: \(error.localizedDescription)")
     }
@@ -83,24 +120,57 @@ nonisolated struct OpenAIChatClient: Sendable {
       throw BackendError.badStatus(http.statusCode, excerpt)
     }
 
-    let decoded: Response
+    let reply: (content: String?, promptTokens: Int?, completionTokens: Int?, cachedTokens: Int?)
     do {
-      decoded = try JSONDecoder().decode(Response.self, from: data)
+      switch wire {
+      case .chatCompletions:
+        let decoded = try JSONDecoder().decode(Response.self, from: data)
+        if let apiError = decoded.error?.message, !apiError.isEmpty {
+          throw BackendError.badStatus(http.statusCode, apiError)
+        }
+        reply = (
+          decoded.choices?.first?.message?.content,
+          decoded.usage?.prompt_tokens,
+          decoded.usage?.completion_tokens,
+          decoded.usage?.cachedTokens)
+      case .responses:
+        let decoded = try JSONDecoder().decode(ResponsesResponse.self, from: data)
+        if let apiError = decoded.error?.message, !apiError.isEmpty {
+          throw BackendError.badStatus(http.statusCode, apiError)
+        }
+        reply = (
+          Self.text(of: decoded),
+          decoded.usage?.input_tokens,
+          decoded.usage?.output_tokens,
+          decoded.usage?.cachedTokens)
+      }
+    } catch let error as BackendError {
+      throw error
     } catch {
       throw BackendError.decoding(excerpt ?? "invalid JSON")
     }
-    if let apiError = decoded.error?.message, !apiError.isEmpty {
-      throw BackendError.badStatus(http.statusCode, apiError)
-    }
-    guard let content = decoded.choices?.first?.message?.content,
-          !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+    guard let content = reply.content,
+      !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    else {
       throw BackendError.emptyResult(model)
     }
     return ChatReply(
       content: content.trimmingCharacters(in: .whitespacesAndNewlines),
-      promptTokens: decoded.usage?.prompt_tokens,
-      completionTokens: decoded.usage?.completion_tokens,
-      cachedTokens: decoded.usage?.cachedTokens)
+      promptTokens: reply.promptTokens,
+      completionTokens: reply.completionTokens,
+      cachedTokens: reply.cachedTokens)
+  }
+
+  /// The answer text of a Responses payload: every `output_text` part of
+  /// every message item, in order. Reasoning items are not the answer.
+  private static func text(of decoded: ResponsesResponse) -> String? {
+    var parts: [String] = []
+    for item in decoded.output ?? [] where item.type == "message" {
+      for part in item.content ?? [] where part.type == "output_text" {
+        if let text = part.text { parts.append(text) }
+      }
+    }
+    return parts.isEmpty ? nil : parts.joined()
   }
 
   /// `Retry-After` in seconds, when the provider sent one.
@@ -154,6 +224,49 @@ nonisolated struct OpenAIChatClient: Sendable {
     }
 
     var choices: [Choice]?
+    var error: APIError?
+    var usage: Usage?
+  }
+
+  /// The Responses-API request body (Muse on OpenCode Go).
+  private struct ResponsesRequest: Encodable {
+    var model: String
+    var instructions: String
+    var input: [Item]
+    var temperature: Double
+    var max_output_tokens: Int?
+
+    struct Item: Encodable {
+      var role: String
+      var content: String
+    }
+  }
+
+  /// The Responses-API reply: `output` items carrying `output_text` parts,
+  /// usage under `input_tokens` / `output_tokens`.
+  private struct ResponsesResponse: Decodable {
+    struct OutputItem: Decodable {
+      struct ContentPart: Decodable {
+        var type: String?
+        var text: String?
+      }
+
+      var type: String?
+      var content: [ContentPart]?
+    }
+
+    struct APIError: Decodable { var message: String? }
+
+    struct Usage: Decodable {
+      struct InputDetails: Decodable { var cached_tokens: Int? }
+      var input_tokens: Int?
+      var output_tokens: Int?
+      var input_tokens_details: InputDetails?
+
+      var cachedTokens: Int? { input_tokens_details?.cached_tokens }
+    }
+
+    var output: [OutputItem]?
     var error: APIError?
     var usage: Usage?
   }

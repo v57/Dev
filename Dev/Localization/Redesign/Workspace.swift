@@ -161,7 +161,7 @@ extension Translation {
     var canStartRun: Bool { canStart && !status.isRunning }
 
     private static let notConfigured =
-      "Muse is not configured: set \(CommandCodeKeychain.envName) in the login keychain, "
+      "Muse is not configured: set \(OpenCodeKeychain.envName) in the login keychain, "
       + "the environment, or ~/.hermes/.env."
 
     // MARK: - runs

@@ -20,7 +20,7 @@ enum TranslateStage: String, CaseIterable, Sendable {
   case stage0Learn
   case tmResolve
   case dbResolve
-  /// The one AI stage: Command Code translates every remaining record.
+  /// The one AI stage: Muse (OpenCode Go) translates every remaining record.
   case translate
   case done
 
@@ -142,7 +142,7 @@ nonisolated struct PipelineRunSummary: Sendable {
   // Imported-DB resolve (Phase D)
   var dbFilled = 0            // empty slot filled from the imported DB
   var dbUpgraded = 0          // machine value replaced/promoted by a DB hit
-  // Translate — the only AI stage (model router: free tiers, Muse fallback)
+  // Translate — the only AI stage (model router: Muse on OpenCode Go)
   var translatedFilled = 0    // empty slot got a model translation
   var translatedRewritten = 0 // existing machine value replaced by the model
   /// Values the paid verification gate corrected.

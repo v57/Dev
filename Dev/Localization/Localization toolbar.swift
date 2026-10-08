@@ -102,7 +102,7 @@ struct ControlsBar: ToolbarContent {
       .disabled(!store.canTranslate)
       .help(store.run.isActive
         ? "A translation run is in progress — cancel it from the footer"
-        : "Run the translation pipeline: learn from confirmed edits, resolve translation memory and the imported DB, then translate every remaining string with Command Code")
+        : "Run the translation pipeline: learn from confirmed edits, resolve translation memory and the imported DB, then translate every remaining string with Muse on OpenCode Go")
 
       Button {
         store.requestUpdateTranslations()

@@ -1,28 +1,26 @@
 //
-//  CommandCodeKeychain.swift
+//  OpenCodeKeychain.swift
 //  Dev
-//
-//  Created by Dmitry on 08.09.26.
 //
 
 import Foundation
 import Security
 
-// MARK: - CommandCodeKeychain
+// MARK: - OpenCodeKeychain
 
-/// Reads and writes the Command Code API key (COMMANDCODE_API_KEY).
+/// Reads and writes the OpenCode Go API key (OPENCODE_GO_API_KEY).
 ///
 /// Lookup order: login keychain → process environment → ~/.hermes/.env.
 /// The key VALUE is never hardcoded in source — only the variable name is.
 /// Every failure path returns nil / false (mock-first: an unconfigured
 /// backend reports "not configured", it never crashes).
-nonisolated enum CommandCodeKeychain {
+nonisolated enum OpenCodeKeychain {
   /// Name of the secret everywhere (keychain account, env var, .env line).
-  static let envName = "COMMANDCODE_API_KEY"
+  static let envName = "OPENCODE_GO_API_KEY"
   /// kSecAttrService for the generic-password item.
-  static let service = "commandcode"
+  static let service = "opencode"
   /// kSecAttrAccount for the generic-password item.
-  static let account = "COMMANDCODE_API_KEY"
+  static let account = "OPENCODE_GO_API_KEY"
   /// The .env fallback location (Hermes' credential file).
   static let dotEnvURL = URL(fileURLWithPath: NSHomeDirectory())
     .appendingPathComponent(".hermes")

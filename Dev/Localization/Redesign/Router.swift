@@ -19,8 +19,8 @@
 //
 //  Real implementation, unlike the rest of this folder's stubs. Semantics are in
 //  "Design notes.md" 5.2 and the rules at the top of that file. The wire details and
-//  the keychain lookup follow Translation/Backends/CommandCodeTranslator.swift,
-//  CommandCodeKeychain.swift and OpenAIChatClient.swift; nothing here calls
+//  the keychain lookup follow Translation/Backends/OpenCodeTranslator.swift,
+//  OpenCodeKeychain.swift and OpenAIChatClient.swift; nothing here calls
 //  TranslationRouter or reaches into its chain, because the redesign has no chain to
 //  walk.
 //
@@ -53,11 +53,11 @@ extension Translation {
     }
 
     /// The single candidate the redesign ever calls. The model id comes from
-    /// `CommandCodeTranslator` — the same constant its own client names — so the
+    /// `OpenCodeTranslator` — the same constant its own client names — so the
     /// transport and the router cannot end up speaking to two different models.
     static let defaultMuse = Candidate(
-      id: "commandcode:\(CommandCodeTranslator.model)",
-      model: CommandCodeTranslator.model)
+      id: "opencode:\(OpenCodeTranslator.model)",
+      model: OpenCodeTranslator.model)
 
     let muse: Candidate
 
@@ -66,7 +66,7 @@ extension Translation {
       self.muse = muse
     }
 
-    /// Muse on Command Code — what the app builds unless something hands in a candidate
+    /// Muse on OpenCode Go — what the app builds unless something hands in a candidate
     /// of its own.
     init() {
       muse = Self.defaultMuse
@@ -132,13 +132,14 @@ extension Translation {
 
     // MARK: - admission
 
-    /// Command Code's conservative per-minute request budget — the same number as
-    /// `RoutedModel.Provider.commandCode.requestsPerMinute`, kept here so the redesign's
+    /// OpenCode Go's conservative per-minute request budget — the same number as
+    /// `RoutedModel.Provider.openCode.requestsPerMinute`, kept here so the redesign's
     /// router never reaches into the chain table for a provider figure.
     ///
-    /// Low deliberately, as it was there: a burst that exhausts the budget returns 429s
-    /// for every later record, which costs far more than waiting a few seconds up front.
-    static let requestsPerMinute = 60
+    /// Low deliberately, as it was there: a burst that exhausts the budget costs error
+    /// retries for every later record, which is far more than waiting a few seconds up
+    /// front.
+    static let requestsPerMinute = 30
 
     /// Candidate id → instants of recent requests, for the per-minute budget.
     private var recentCalls: [String: [Date]] = [:]
@@ -231,19 +232,21 @@ extension Translation {
         // waits inside it are awaits, so nothing here blocks the main actor while a reply
         // is being read.
         let task = Task { @MainActor in
-          guard let apiKey = CommandCodeKeychain.apiKey() else {
+          guard let apiKey = OpenCodeKeychain.apiKey() else {
             continuation.finish(
               throwing: BackendError.notConfigured(
-                "Muse is not configured: set \(CommandCodeKeychain.envName) in the login keychain, "
+                "Muse is not configured: set \(OpenCodeKeychain.envName) in the login keychain, "
                   + "the environment, or ~/.hermes/.env."))
             return
           }
           var arrived = false
           let client = ChatStream(
-            endpoint: CommandCodeTranslator.endpoint,
+            endpoint: OpenCodeTranslator.endpoint,
             apiKey: apiKey,
             model: candidate.model,
-            timeout: CommandCodeTranslator.requestTimeout)
+            wire: .responses,
+            headers: OpenCodeTranslator.headers,
+            timeout: OpenCodeTranslator.requestTimeout)
           do {
             let usage = try await client.send(
               system: request.system,
@@ -293,10 +296,10 @@ extension Translation {
     /// credential, the other is a wait, and only the caller can word that.
     var isEligible: Bool { isConfigured && !isCoolingDown }
 
-    /// True when the Command Code key is present in the login keychain, the environment
+    /// True when the OpenCode Go key is present in the login keychain, the environment
     /// or ~/.hermes/.env. Muse has no second credential and no second provider, so this
     /// is the app's only "can it translate at all" question — checked here rather than
     /// per batch.
-    var isConfigured: Bool { CommandCodeKeychain.apiKey() != nil }
+    var isConfigured: Bool { OpenCodeKeychain.apiKey() != nil }
   }
 }

@@ -121,15 +121,14 @@ struct TranslateRunStatus: View {
         Text("· \(progress.failed) failed")
           .foregroundStyle(.orange)
       }
-      // Which model is answering right now (free tier or paid fallback). No
-      // model is in use while the run is being prepared, so the line stays out
-      // until the pipeline actually starts.
+      // Which model is answering right now. No model is in use while the run
+      // is being prepared, so the line stays out until the pipeline actually
+      // starts.
       if controller.isRunning {
         Text("· \(TranslationRouter.shared.currentModel)")
-          .foregroundStyle(TranslationRouter.shared.isUsingPaidModel ? Color.secondary : Color.green)
+          .foregroundStyle(.secondary)
           .lineLimit(1)
           .help("Routing: \(TranslationRouter.shared.currentProvider)"
-            + (TranslationRouter.shared.isUsingPaidModel ? " (paid fallback)" : " (free tier)")
             + "\n" + TranslationRouter.shared.telemetrySummary)
       }
       Button("Cancel") {
@@ -155,7 +154,7 @@ struct TranslateRunStatus: View {
         .foregroundStyle(.secondary)
         .lineLimit(1)
       Text("· \(TranslationRouter.shared.currentModel)")
-        .foregroundStyle(TranslationRouter.shared.isUsingPaidModel ? Color.secondary : Color.green)
+        .foregroundStyle(.secondary)
         .lineLimit(1)
         .help("Last model used: \(TranslationRouter.shared.currentProvider)"
           + "\n" + TranslationRouter.shared.telemetrySummary)

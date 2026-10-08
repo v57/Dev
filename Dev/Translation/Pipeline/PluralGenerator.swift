@@ -20,7 +20,7 @@ import Foundation
 nonisolated enum PluralGenerator {
   /// Asks the model for the source-language plural forms. Returns
   /// category -> text (only categories with non-empty text). Throws
-  /// `BackendError` (notConfigured when no Command Code key, decoding on an
+  /// `BackendError` (notConfigured when no OpenCode Go key, decoding on an
   /// unusable reply) — never crashes.
   static func sourceForms(
     key: String,

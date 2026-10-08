@@ -10,113 +10,37 @@ import SwiftData
 
 // MARK: - Stage0ModelClient
 
-/// Raw chat channel for the Stage-0 LEARN calls (deepseek via Command Code).
+/// Raw call channel for the Stage-0 LEARN calls (and plural authoring) —
+/// Muse on OpenCode Go.
 ///
 /// Translating strings goes through `TranslatorBackend.translate`, but
 /// learning is a different task (fold a confirmed edit into a glossary
-/// document with OVERRIDE authority), so it needs its own prompt — and its
-/// own wire call. The wire is deliberately a mirror of
-/// `CommandCodeTranslator` (same endpoint/model/key lookup, same OpenAI chat
-/// shape); the two live in different cards' folders (Backends vs Pipeline),
-/// and the constants below are reused rather than duplicated.
+/// document with OVERRIDE authority), so it needs its own prompt — not its
+/// own wire: the call goes through `OpenAIChatClient` speaking Muse's
+/// protocol on Go (the Responses API), with the same constants the
+/// translator's own client names.
 nonisolated enum Stage0ModelClient {
   /// True when a key is configured somewhere (keychain/env/.env).
   static var isConfigured: Bool {
-    CommandCodeKeychain.apiKey() != nil
+    OpenCodeKeychain.apiKey() != nil
   }
 
-  /// One chat completion. Throws `BackendError` on any failure (never
-  /// crashes); returns the trimmed message content.
+  /// One completion. Throws `BackendError` on any failure (never crashes);
+  /// returns the trimmed reply text.
   static func complete(system: String, user: String) async throws -> String {
-    guard let apiKey = CommandCodeKeychain.apiKey() else {
+    guard let apiKey = OpenCodeKeychain.apiKey() else {
       throw BackendError.notConfigured(
-        "Command Code is not configured: set COMMANDCODE_API_KEY in the login keychain, "
-          + "the environment, or ~/.hermes/.env."
-      )
+        "OpenCode Go is not configured: set \(OpenCodeKeychain.envName) in the login keychain, "
+          + "the environment, or ~/.hermes/.env.")
     }
-
-    let body: Data
-    do {
-      body = try JSONEncoder().encode(
-        Request(
-          model: CommandCodeTranslator.model,
-          messages: [
-            Request.Message(role: "system", content: system),
-            Request.Message(role: "user", content: user),
-          ]
-        )
-      )
-    } catch {
-      throw BackendError.network("could not encode request: \(error.localizedDescription)")
-    }
-
-    var request = URLRequest(url: CommandCodeTranslator.endpoint)
-    request.httpMethod = "POST"
-    request.timeoutInterval = CommandCodeTranslator.requestTimeout
-    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-    request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-    request.httpBody = body
-
-    let data: Data
-    let response: URLResponse
-    do {
-      (data, response) = try await URLSession.shared.data(for: request)
-    } catch {
-      throw BackendError.network(error.localizedDescription)
-    }
-    guard let http = response as? HTTPURLResponse else {
-      throw BackendError.network("no HTTP response from Command Code")
-    }
-    guard (200..<300).contains(http.statusCode) else {
-      throw BackendError.badStatus(http.statusCode, BackendError.bodyExcerpt(data))
-    }
-
-    let decoded: Response
-    do {
-      decoded = try JSONDecoder().decode(Response.self, from: data)
-    } catch {
-      throw BackendError.decoding(BackendError.bodyExcerpt(data) ?? "invalid JSON")
-    }
-    if let apiError = decoded.error?.message, !apiError.isEmpty {
-      throw BackendError.badStatus(http.statusCode, apiError)
-    }
-    guard
-      let content = decoded.choices?.first?.message?.content,
-      !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    else {
-      throw BackendError.emptyResult("Command Code (\(CommandCodeTranslator.model)) learn call")
-    }
-    return content.trimmingCharacters(in: .whitespacesAndNewlines)
-  }
-
-  // MARK: - wire shapes (mirror of CommandCodeTranslator)
-
-  private struct Request: Encodable {
-    var model: String
-    var messages: [Message]
-    var temperature: Double = 0.0
-
-    struct Message: Encodable {
-      var role: String
-      var content: String
-    }
-  }
-
-  private struct Response: Decodable {
-    struct Choice: Decodable {
-      struct Message: Decodable {
-        var content: String?
-      }
-
-      var message: Message?
-    }
-
-    struct APIError: Decodable {
-      var message: String?
-    }
-
-    var choices: [Choice]?
-    var error: APIError?
+    let client = OpenAIChatClient(
+      endpoint: OpenCodeTranslator.endpoint,
+      wire: .responses,
+      apiKey: apiKey,
+      model: OpenCodeTranslator.model,
+      headers: OpenCodeTranslator.headers,
+      timeout: OpenCodeTranslator.requestTimeout)
+    return try await client.complete(system: system, user: user, temperature: 0.0).content
   }
 }
 
@@ -274,12 +198,12 @@ struct Stage0Learner {
     }
     pending.sort { $0.edit.createdAt < $1.edit.createdAt }
 
-    // One upfront configuration gate: without Command Code the whole stage is
+    // One upfront configuration gate: without Muse the whole stage is
     // inert — folding AND the compression pass below — and every edit simply
     // stays pending for a later run.
     if !pending.isEmpty, !Stage0ModelClient.isConfigured {
-      outcome.failures.append("Stage 0 learning skipped: Command Code is not configured")
-      progress?.fail(key: nil, message: "learning skipped: Command Code is not configured")
+      outcome.failures.append("Stage 0 learning skipped: OpenCode Go is not configured")
+      progress?.fail(key: nil, message: "learning skipped: OpenCode Go is not configured")
       try? env.context.save()
       return outcome
     }
@@ -345,7 +269,7 @@ struct Stage0Learner {
     guard !oversized.isEmpty else { return }
     guard Stage0ModelClient.isConfigured else {
       outcome.failures.append(
-        "Stage 0 compression skipped: Command Code is not configured "
+        "Stage 0 compression skipped: OpenCode Go is not configured "
           + "(\(oversized.count) doc(s) over \(limit) chars)"
       )
       return
@@ -606,7 +530,7 @@ struct Stage0Learner {
 
     guard Stage0ModelClient.isConfigured else {
       outcome.failures.append(
-        "Stage 0 learning skipped: Command Code is not configured"
+        "Stage 0 learning skipped: OpenCode Go is not configured"
       )
       return
     }

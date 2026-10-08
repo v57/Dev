@@ -19,7 +19,7 @@ import SwiftData
 /// plus a key, and the app speaks the node's API rather than Mongo.
 ///
 /// The KEY is never stored in SwiftData: the row keeps only the keychain
-/// ACCOUNT (`keyAccount`) to look it up under, exactly like `CommandCodeKeychain`
+/// ACCOUNT (`keyAccount`) to look it up under, exactly like `OpenCodeKeychain`
 /// keeps the provider secret out of source and out of the store. A server with
 /// no own key falls back to the shared `LOCALIZE_KEY`, which is what makes a
 /// fresh local server work with no setup at all.
@@ -116,7 +116,7 @@ final class ServerConnection {
 
 /// The per-server key store.
 ///
-/// Same convention as `CommandCodeKeychain`: the login keychain holds the value
+/// Same convention as `OpenCodeKeychain`: the login keychain holds the value
 /// under a service/account pair, only variable NAMES live in source, and every
 /// failure path returns nil instead of throwing. The shared fallback key keeps
 /// its own name (`LOCALIZE_KEY`) so the node's `.env` and the app agree on what

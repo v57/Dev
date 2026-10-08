@@ -10,7 +10,7 @@ import Foundation
 // MARK: - TranslationContext
 
 /// Everything the pipeline knows about one string besides its text and the
-/// language pair. Command Code folds it into the prompt via
+/// language pair. The backend folds it into the prompt via
 /// `ContextPromptBuilder`.
 ///
 /// The three context texts are the bodies of the versioned ContextDocs
