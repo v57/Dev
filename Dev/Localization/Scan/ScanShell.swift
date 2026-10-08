@@ -85,21 +85,21 @@ nonisolated enum ScanShell {
 
     let outBox = DataBox()
     let errBox = DataBox()
+    // One `enter` per pipe, left at its EOF: the process exiting does not mean
+    // the handlers have read the last of its output yet, and closing the pipes
+    // before they have drops the tail (an SDK path, the end of a build log).
+    let drained = DispatchGroup()
 
-    outPipe.fileHandleForReading.readabilityHandler = { handle in
-      let chunk = handle.availableData
-      if chunk.isEmpty {
-        handle.readabilityHandler = nil
-      } else {
-        outBox.append(chunk)
-      }
-    }
-    errPipe.fileHandleForReading.readabilityHandler = { handle in
-      let chunk = handle.availableData
-      if chunk.isEmpty {
-        handle.readabilityHandler = nil
-      } else {
-        errBox.append(chunk)
+    for (pipe, box) in [(outPipe, outBox), (errPipe, errBox)] {
+      drained.enter()
+      pipe.fileHandleForReading.readabilityHandler = { handle in
+        let chunk = handle.availableData
+        if chunk.isEmpty {
+          handle.readabilityHandler = nil
+          drained.leave()
+        } else {
+          box.append(chunk)
+        }
       }
     }
 
@@ -109,6 +109,8 @@ nonisolated enum ScanShell {
     do {
       try process.run()
     } catch {
+      outPipe.fileHandleForReading.readabilityHandler = nil
+      errPipe.fileHandleForReading.readabilityHandler = nil
       return ScanShellResult(
         status: -1, stdout: "",
         stderr: "failed to launch \(executable): \(error)")
@@ -129,6 +131,12 @@ nonisolated enum ScanShell {
     }
     unregister(process)
 
+    // Bounded: a grandchild that inherited the pipes can hold them open past
+    // the process itself, and the result must not wait on it forever.
+    if drained.wait(timeout: .now() + 5) == .timedOut {
+      outPipe.fileHandleForReading.readabilityHandler = nil
+      errPipe.fileHandleForReading.readabilityHandler = nil
+    }
     outPipe.fileHandleForReading.closeFile()
     errPipe.fileHandleForReading.closeFile()
 
