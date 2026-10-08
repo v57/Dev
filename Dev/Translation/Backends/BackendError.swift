@@ -1,5 +1,5 @@
 //
-//  TranslatorBackend.swift
+//  BackendError.swift
 //  Dev
 //
 //  Created by Dmitry on 08.09.26.
@@ -7,35 +7,9 @@
 
 import Foundation
 
-// MARK: - TranslatorBackend
-
-/// A uniform translation source for the self-improving translator.
-///
-/// Adapters are stateless `nonisolated` structs so the pipeline can drive
-/// several of them concurrently off the main actor (the module defaults to
-/// MainActor isolation). `isEligible` never throws and never crashes: it only
-/// reports whether the backend can serve the language pair right now.
-nonisolated protocol TranslatorBackend: Sendable {
-  /// Stable identifier; raw value matches what records persist.
-  var id: BackendID { get }
-  /// Human-readable name for UI lists and logs.
-  var displayName: String { get }
-  /// Cheap capability probe: today, whether the OpenCode Go API key is
-  /// present. The (from, to) pair is accepted for backends that need it.
-  func isEligible(from: String, to: String) async -> Bool
-  /// Translates one string. Throws `BackendError` on failure; never crashes,
-  /// even when the backend is not configured.
-  func translate(
-    _ text: String,
-    from: String,
-    to: String,
-    context: TranslationContext?
-  ) async throws -> String
-}
-
 // MARK: - BackendError
 
-/// Failure taxonomy shared by all backends. `errorDescription` is safe to
+/// Failure taxonomy shared by every model client. `errorDescription` is safe to
 /// show in UI and logs — it never contains credentials or key material.
 nonisolated enum BackendError: LocalizedError {
   /// Credential/config missing. This is a first-class state (mock-first

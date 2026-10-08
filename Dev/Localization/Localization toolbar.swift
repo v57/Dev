@@ -23,7 +23,6 @@ struct ControlsBar: ToolbarContent {
     ToolbarItemGroup(placement: .primaryAction) {
       if allowsOpenCatalog {
         Button("Open…") { store.openPanelAndLoad() }
-          .disabled(store.run.isActive)
       }
       Button {
         store.startScan()
@@ -47,7 +46,7 @@ struct ControlsBar: ToolbarContent {
       } label: {
         Label("Reload", systemImage: "arrow.clockwise")
       }
-      .disabled(!store.isLoaded || store.run.isActive)
+      .disabled(!store.isLoaded)
     }
     ToolbarItemGroup(placement: .principal) {
       Picker(
@@ -93,28 +92,6 @@ struct ControlsBar: ToolbarContent {
       .disabled(!store.isLoaded)
       .help("Edit the project context rules the translator follows — one rule per line, and deleting a line retracts it")
 
-      Button {
-        store.startTranslate()
-      } label: {
-        Label("Translate", systemImage: "translate")
-      }
-      .buttonStyle(.borderedProminent)
-      .disabled(!store.canTranslate)
-      .help(store.run.isActive
-        ? "A translation run is in progress — cancel it from the footer"
-        : "Run the translation pipeline: learn from confirmed edits, resolve translation memory and the imported DB, then translate every remaining string with Muse on OpenCode Go")
-
-      Button {
-        store.requestUpdateTranslations()
-      } label: {
-        Label(
-          store.updateSlotCount > 0
-            ? "Update Translations (\(store.updateSlotCount))"
-            : "Update Translations",
-          systemImage: "arrow.triangle.2.circlepath")
-      }
-      .disabled(!store.canUpdateTranslations)
-      .help(store.updateTranslationsHelp)
     }
   }
   struct ToggleButtonStyle: ToggleStyle {

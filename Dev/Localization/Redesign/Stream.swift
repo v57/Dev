@@ -29,7 +29,7 @@
 //      and the run loses the numbers rather than the batch.
 //
 //  The wire details — endpoint, model, keychain, `BackendError`'s taxonomy — follow
-//  Translation/Backends/OpenAIChatClient.swift and OpenCodeTranslator.swift, read as
+//  Translation/Backends/OpenAIChatClient.swift and RoutedModel.swift, read as
 //  the precedent and never called: the redesign carries its own client (see `Router`).
 
 import Foundation

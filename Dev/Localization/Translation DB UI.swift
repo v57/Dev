@@ -43,6 +43,8 @@ struct TranslationDBControl: View {
 /// scan), coverage of the CURRENT catalog's languages, and import/remove.
 private struct ImportedDBInfoView: View {
   let store: LocalizationStore
+  /// A run resolves slots from the imported DB, so it is not swapped out mid-run.
+  @Environment(Translation.Shell.self) private var shell
 
   var body: some View {
     let db = ImportedTranslationDB.shared
@@ -214,11 +216,11 @@ private struct ImportedDBInfoView: View {
       Button("Replace…") {
         Task { await db.importViaPanel() }
       }
-      .disabled(store.run.isActive)
+      .disabled(shell.isRunning)
       Button("Remove", role: .destructive) {
         db.remove()
       }
-      .disabled(store.run.isActive)
+      .disabled(shell.isRunning)
       Spacer()
     }
     .controlSize(.small)

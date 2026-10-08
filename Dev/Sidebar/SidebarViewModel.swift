@@ -248,10 +248,10 @@ final class SidebarViewModel {
           message: "The open catalog has edits the file does not have yet. Save or discard them in Localization, then remove the project.")
         return
       }
-      if localization.run.isActive || localization.scan.isRunning || localization.isSyncing {
+      if localization.scan.isRunning || localization.isSyncing {
         alert = SidebarAlert(
           title: "Work in progress",
-          message: "Work on this project's catalog is still going — a run, or the store catching up with the catalog it was opened from. Let it finish or cancel it, then remove the project.")
+          message: "Work on this project's catalog is still going — a scan, or the store catching up with the catalog it was opened from. Let it finish or cancel it, then remove the project.")
         return
       }
       localization.closeCatalog()

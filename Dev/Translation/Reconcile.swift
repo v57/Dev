@@ -902,27 +902,7 @@ nonisolated enum Reconcile {
     return reverted
   }
 
-  // MARK: - plural skeleton (run preparation, off the main actor)
-
-  /// Progress of one plural-skeleton pass, yielded from the background task.
-  struct PluralSkeletonProgress: Sendable {
-    let completed: Int
-    let total: Int
-    let key: String?
-  }
-
-  /// What a skeleton pass produced. The catalog crosses the actor boundary as
-  /// a VALUE (it is a Sendable struct), so the caller adopts the varied
-  /// document without the file being touched — Save stays the only writer.
-  struct PluralSkeletonOutcome: Sendable {
-    let catalog: StringCatalog
-    /// True when the catalog gained plural variations.
-    let varied: Bool
-    /// Form records created.
-    let inserted: Int
-    /// True when the pass stopped early because the user cancelled.
-    let cancelled: Bool
-  }
+  // MARK: - slot identity
 
   /// One (key, language, form) slot, as a Set member — the per-form
   /// existence check.
@@ -930,125 +910,6 @@ nonisolated enum Reconcile {
     let key: String
     let language: String
     let category: String
-  }
-
-  /// Creates the missing plural-form records + the CLDR form skeleton a run
-  /// needs, OFF the main actor, and returns the catalog to adopt.
-  ///
-  /// This is the step that used to block the UI for a whole-catalog run: it
-  /// asked `record(key:language:category:in:)` — a LINEAR SCAN of the
-  /// project's records — once per (key, language, category), walked the
-  /// relationship to collect the keys, recomputed the catalog's languages
-  /// inside the key loop (computed property: walks every entry), and linked
-  /// every inserted record with its own `record.project = project` assignment
-  /// (SwiftData inverse maintenance per insert). It now runs in one background
-  /// context with the existing slots in a Set, `catalog.languages` hoisted, and
-  /// the project link applied in ONE bulk append.
-  ///
-  /// Mirrors the pipeline's reconcile rule: only keys whose SOURCE is
-  /// plural-varied gain forms; a single-key run with no languages selected
-  /// creates nothing. Cancelling stops the scan where it is and KEEPS what was
-  /// already inserted (the same policy as a cancelled run: forms are additive
-  /// and correct, nothing is rolled back); the caller decides not to start the
-  /// run.
-  static func ensurePluralForms(
-    catalog: StringCatalog,
-    projectID: PersistentIdentifier,
-    key: String?,
-    languages: Set<String>?,
-    in container: ModelContainer,
-    isCancelled: @escaping @Sendable () -> Bool = { false },
-    progress: (@Sendable (PluralSkeletonProgress) -> Void)? = nil
-  ) async -> Result<PluralSkeletonOutcome, Error> {
-    await Task.detached(priority: .userInitiated) {
-      let context = ModelContext(container)
-      guard let project = project(id: projectID, in: context) else {
-        // The project is gone (removed while the run was being prepared):
-        // nothing to create forms for.
-        return .success(PluralSkeletonOutcome(
-          catalog: catalog, varied: false, inserted: 0, cancelled: false))
-      }
-
-      // One scoped fetch for the existing slots — this context is cold, so the
-      // relationship would fault per row.
-      let existing = records(of: project, in: context)
-      var slots = Set<SlotKey>()
-      slots.reserveCapacity(existing.count)
-      for record in existing {
-        slots.insert(SlotKey(
-          key: record.key, language: record.language, category: record.category ?? ""))
-      }
-
-      var mutated = catalog
-      let keys = key.map { [$0] } ?? existing.map(\.key).uniqued()
-      // Computed (walks every entry): hoisted out of the key loop.
-      let sourceLanguages = mutated.languages.filter { $0 != mutated.sourceLanguage }
-      var varied = false
-      var created: [TranslationRecord] = []
-      var completed = 0
-      var cancelled = false
-      progress?(PluralSkeletonProgress(completed: 0, total: keys.count, key: nil))
-
-      for (index, targetKey) in keys.enumerated() {
-        // Reported per key, throttled: the footer needs a live count, not a
-        // main-actor hop per key of a 1382-key catalog.
-        defer {
-          completed = index + 1
-          if completed % 16 == 0 || completed == keys.count {
-            progress?(PluralSkeletonProgress(
-              completed: completed, total: keys.count, key: targetKey))
-          }
-        }
-        if isCancelled() {
-          cancelled = true
-          break
-        }
-        guard mutated.hasPlurals(for: targetKey, language: mutated.sourceLanguage) else { continue }
-        let targetLanguages: [String]
-        if let languages {
-          if languages.isEmpty { continue }
-          targetLanguages = languages.sorted()
-        } else {
-          targetLanguages = sourceLanguages
-        }
-        for language in targetLanguages {
-          if !mutated.hasPlurals(for: targetKey, language: language) {
-            mutated.varyByPlural(key: targetKey, languages: [language])
-            varied = true
-          }
-          guard mutated.hasPlurals(for: targetKey, language: language) else { continue }
-          for category in PluralRules.categories(for: language) {
-            let slot = SlotKey(key: targetKey, language: language, category: category)
-            if slots.contains(slot) { continue }
-            let record = TranslationRecord(
-              key: targetKey,
-              sourceText: mutated.sourcePluralDisplay(for: targetKey, category: category),
-              language: language,
-              value: nil, provider: nil, state: .empty,
-              contextVersions: persistableVersions(ContextVersions()),
-              category: category)
-            context.insert(record)
-            created.append(record)
-            slots.insert(slot)
-          }
-        }
-      }
-
-      if !created.isEmpty {
-        // ONE bulk append instead of a to-one assignment per insert — and read from the store NOW,
-        // because this save writes the membership and the app may have linked a record while the
-        // pass ran (see `upsertFromCatalog`'s live-writers note: an array built from a snapshot
-        // drops what is not in it, and a dropped child's inverse is nullified).
-        project.records = records(of: project, in: context) + created
-      }
-      do {
-        try context.save()
-      } catch {
-        return .failure(error)
-      }
-      return .success(PluralSkeletonOutcome(
-        catalog: mutated, varied: varied, inserted: created.count, cancelled: cancelled))
-    }.value
   }
 
   // MARK: - adding a language (off the main actor)
@@ -1631,6 +1492,51 @@ nonisolated enum Reconcile {
     return record
   }
 
+  // MARK: - translation memory (gold)
+
+  /// Promotes or creates the translation-memory entry for a value a human just
+  /// confirmed. Entries are unique per (sourceText, sourceLanguage,
+  /// targetLanguage): an existing machine hint is upgraded in place, and an
+  /// existing gold entry with a different value is overwritten — the newer
+  /// confirmation wins. The caller saves.
+  @discardableResult
+  static func upsertGoldMemory(
+    in context: ModelContext,
+    sourceText: String,
+    sourceLanguage: String,
+    targetLanguage: String,
+    value: String,
+    contextVersions: ContextVersions,
+    projectTag: String?
+  ) -> TranslationMemoryEntry {
+    let descriptor = FetchDescriptor<TranslationMemoryEntry>(
+      predicate: #Predicate {
+        $0.sourceText == sourceText
+          && $0.sourceLanguage == sourceLanguage
+          && $0.targetLanguage == targetLanguage
+      })
+    let entry: TranslationMemoryEntry
+    if let existing = try? context.fetch(descriptor).first {
+      entry = existing
+    } else {
+      entry = TranslationMemoryEntry(
+        sourceText: sourceText,
+        sourceLanguage: sourceLanguage,
+        targetLanguage: targetLanguage,
+        value: value,
+        contextVersions: contextVersions)
+      context.insert(entry)
+    }
+    entry.value = value
+    entry.provider = .manual  // a human vouched for this value
+    entry.state = .reviewed
+    entry.projectTag = projectTag
+    entry.contextVersions = contextVersions
+    entry.confirmedAt = .now
+    entry.confidence = nil
+    return entry
+  }
+
   // MARK: - row review state (DB side)
 
   /// Marks a whole key's filled slots as `reviewed` (human-confirmed — keeps
@@ -1701,9 +1607,8 @@ nonisolated enum Reconcile {
   /// writes a ContextEdit with `author == .manual` and bumps the version; a
   /// note re-saved unchanged writes nothing.
   ///
-  /// The project version is stamped on records for provenance and is the
-  /// signal the Update Translations pass reads; it deliberately does NOT
-  /// auto-enqueue records (see PipelineRunContext.isStale).
+  /// The project version is stamped on records for provenance; it
+  /// deliberately does NOT auto-enqueue records.
   @discardableResult
   static func applyNote(
     key: String,

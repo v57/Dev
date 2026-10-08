@@ -30,10 +30,6 @@ import Foundation
 ///
 /// Reordering these blocks silently destroys the cache hit rate, so keep the
 /// `TEXT TO TRANSLATE` / `ITEMS` payload dead last.
-///
-/// The Update Translations row batch deliberately departs from this order:
-/// its request is mixed-language, so no single L1 block can exist — see
-/// `assembleRowBatch` for the resulting prefix order and its cost.
 nonisolated struct ContextPromptBuilder {
   // MARK: - limits
 
@@ -53,28 +49,6 @@ nonisolated struct ContextPromptBuilder {
   static let maxCommentCharacters = 600
   static let maxKeyCharacters = 200
 
-  // MARK: - batch sizing
-
-  /// Approximate payload cost of ONE batch item, in characters: its source
-  /// text plus the per-item key/comment overhead the JSON payload carries. The
-  /// batch budget is spent on these; the context blocks are on top of it.
-  ///
-  /// Deliberately NOT a token estimate: the routed models carry very large
-  /// context windows, so a grapheme count is accurate enough and free. Batches
-  /// are sized by this instead of by record count because records vary from a
-  /// label to a sentence — a fixed count is either wasteful or oversized.
-  static func batchCost(sourceText: String, context: TranslationContext?) -> Int {
-    var cost = sourceText.count
-    if let key = context?.key {
-      cost += min(key.count, maxKeyCharacters)
-    }
-    if let comment = context?.comment {
-      cost += min(comment.count, maxCommentCharacters)
-    }
-    // JSON scaffolding: id, quotes, field names, separators.
-    return cost + 24
-  }
-
   // MARK: - output
 
   /// Two chat messages any OpenAI-style client can send verbatim.
@@ -89,11 +63,6 @@ nonisolated struct ContextPromptBuilder {
     var id: Int
     var sourceText: String
     var context: TranslationContext?
-    /// Per-item target language, emitted into the item JSON when set. The
-    /// language-uniform batch leaves it nil (the language is the request's L1
-    /// block); the Update Translations row batch sets it so one mixed-language
-    /// request can name a language per item.
-    var targetLanguage: String? = nil
   }
 
   // MARK: - single-item assembly
@@ -140,71 +109,12 @@ nonisolated struct ContextPromptBuilder {
         sharedContext: sharedContext))
   }
 
-  // MARK: - row batch assembly (Update Translations)
-
-  /// Builds one request that translates ONE ROW (catalog key) across ALL of
-  /// its target languages: each item names its own target language, so the
-  /// request is mixed-language.
-  ///
-  /// ## Prefix order — a deliberate departure from the L0/L1/L2 contract
-  ///
-  /// A row batch spans several languages at once, so **no single L1 block
-  /// exists**: there is no one language doc or register sample to pick without
-  /// lying about the other items. The row prompt is therefore **L0 → ITEMS**,
-  /// with the per-item target language carried INSIDE each item:
-  ///
-  ///  - **L0** (cacheable): the system prompt plus the global + project docs.
-  ///    Both are language-independent and repeat on every row request, which is
-  ///    the whole reason the pass groups a row at all.
-  ///  - **ITEMS** (not cacheable): id, target language, source, key, comment
-  ///    and plural data, per item. L1 material (language docs, register
-  ///    samples) is omitted ENTIRELY, and neighbors with it — a "same
-  ///    language" sample set cannot exist in a mixed-language request.
-  ///
-  /// The cost is accepted and bounded: a row sweeping K languages pays the L0
-  /// block once instead of K times, and gives up the language-level lessons
-  /// those languages would otherwise receive. The pass exists to apply a
-  /// project-wide rule, which is L0 material.
-  static func assembleRowBatch(
-    items: [BatchItem],
-    sourceLanguage: String,
-    sharedContext: TranslationContext?
-  ) -> AssembledPrompt {
-    AssembledPrompt(
-      system: systemPrompt(
-        sourceLanguage: sourceLanguage, batch: true, perItemTargetLanguage: true),
-      user: rowBatchUserPrompt(items: items, sharedContext: sharedContext))
-  }
-
-  /// L0 → the whole ITEMS payload, last. See `assembleRowBatch`.
-  private static func rowBatchUserPrompt(
-    items: [BatchItem],
-    sharedContext: TranslationContext?
-  ) -> String {
-    var sections: [String] = []
-
-    // L0 — identical for every row request (the only cacheable run here).
-    appendSharedLeading(&sections, context: sharedContext)
-
-    sections.append("ITEMS\n" + itemsJSON(items))
-    return sections.joined(separator: "\n\n")
-  }
-
   // MARK: - system prompt
 
   /// Fixed role text: job, direction and output rules. The TARGET language is
   /// deliberately absent so this block is byte-identical for every target
   /// language in a run — it is the outermost cacheable prefix.
-  ///
-  /// `perItemTargetLanguage` is set only by the mixed-language row batch
-  /// (`assembleRowBatch`): there is no single TARGET LANGUAGE section and no
-  /// EXISTING TRANSLATIONS sample there, so the direction clause and rule 6
-  /// are worded per item instead.
-  static func systemPrompt(
-    sourceLanguage: String,
-    batch: Bool,
-    perItemTargetLanguage: Bool = false
-  ) -> String {
+  static func systemPrompt(sourceLanguage: String, batch: Bool) -> String {
     let output = batch
       ? """
       1. Output ONLY a JSON array — no prose, no markdown fences. Each element \
@@ -218,19 +128,10 @@ nonisolated struct ContextPromptBuilder {
       2. The text to translate is the last section of the user message, \
       headed "TEXT TO TRANSLATE".
       """
-    let direction = perItemTargetLanguage
-      ? "named on each item in the \"ITEMS\" section of the user message"
-      : "named in the \"TARGET LANGUAGE\" section of the user message"
-    let register = perItemTargetLanguage
-      ? "6. Each item names its own TARGET LANGUAGE and there is no "
-        + "\"EXISTING TRANSLATIONS\" section: use the register that language's "
-        + "UI copy would naturally use, and stay internally consistent."
-      : "6. \"EXISTING TRANSLATIONS\" shows the register already used in this "
-        + "target language; stay consistent with it."
     return """
     You are a careful software-localization translator. Translate product \
     strings and app content from "\(sourceLanguage)" into the target language \
-    \(direction).
+    named in the "TARGET LANGUAGE" section of the user message.
 
     Rules:
     \(output)
@@ -240,7 +141,8 @@ nonisolated struct ContextPromptBuilder {
     glossary and terminology there over your defaults.
     5. The COMMENT states where the string appears — keep the translation \
     idiomatic for that spot.
-    \(register)
+    6. "EXISTING TRANSLATIONS" shows the register already used in this \
+    target language; stay consistent with it.
     7. When a "PLURAL FORM" section is present, the text is ONE plural \
     category of a localized string: translate it with the number agreement \
     of that category in the target language (e.g. the "one" form reads \
@@ -318,11 +220,6 @@ nonisolated struct ContextPromptBuilder {
         "id": String(item.id),
         "source": item.sourceText,
       ]
-      // Only the mixed-language row batch sets this; the uniform batch's JSON
-      // is unchanged (the language is its L1 block).
-      if let language = item.targetLanguage, !language.isEmpty {
-        row["targetLanguage"] = language
-      }
       if let key = item.context?.key, !key.isEmpty {
         row["key"] = clamp(key, to: maxKeyCharacters)
       }

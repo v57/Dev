@@ -381,7 +381,7 @@ func storeClearBlocker(localization: LocalizationStore, shell: Translation.Shell
   if localization.isSyncing {
     return "The store is still catching up with a catalog — clear once it has"
   }
-  if localization.run.isActive || localization.scan.isRunning || localization.isAddingLanguage
+  if localization.scan.isRunning || localization.isAddingLanguage
     || shell.isRunning {
     return "A run is in flight — finish or cancel it first"
   }

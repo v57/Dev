@@ -53,8 +53,7 @@ struct LocalizationView: View {
   /// project's `Translation.Workspace`, whose run this pane presents — its
   /// overlay over the catalog, and its status bar at the pane's foot. It is
   /// what the toolbar's Start (ContentView) and this pane share, so the two
-  /// are always talking about the same run. The old pipeline's own run is a
-  /// different one and is untouched (10.9).
+  /// are always talking about the same run.
   @Environment(Translation.Shell.self) private var shell
 
   /// The catalog of the selected project this instance is bound to, or nil
@@ -117,13 +116,6 @@ struct LocalizationView: View {
       Button("Generate") { Task { await generate() } }
     } message: {
       Text(generateMessage)
-    }
-    // Single-row diagnostic overlay (row menu "Inspect Row…").
-    .sheet(isPresented: Binding(
-      get: { store.inspectedKey != nil },
-      set: { if !$0 { store.closeInspector() } }
-    )) {
-      RowInspectorView(store: store)
     }
     // Scan Strings report (toolbar "Scan Strings", and the tail of Generate).
     .sheet(isPresented: Binding(
@@ -341,18 +333,6 @@ struct LocalizationView: View {
     .toolbar {
       ControlsBar(store: store, allowsOpenCatalog: allowsOpenCatalog)
     }
-    // Update Translations: the paid sweep always asks first, with the pre-run
-    // count in the message. Attached here (not on the outer Group) so it
-    // cannot collide with the load/save error alert.
-    .alert("Update Translations", isPresented: Binding(
-      get: { store.updateConfirmationPresented },
-      set: { if !$0 { store.cancelUpdateTranslations() } }
-    )) {
-      Button("Cancel", role: .cancel) { store.cancelUpdateTranslations() }
-      Button("Run Update") { store.confirmUpdateTranslations() }
-    } message: {
-      Text(store.updateConfirmationMessage)
-    }
   }
 
   /// Projectless empty state: no catalog open. The test catalog is auto-opened
@@ -447,7 +427,7 @@ private struct LanguageButtonsRow: View {
     }
     .buttonStyle(.plain)
     .disabled(!store.isLoaded || store.isAddingLanguage)
-    .help("Pick languages this catalog does not carry yet — their columns appear here and Translate fills them. The catalog file only gains a language where a translation exists to save")
+    .help("Pick languages this catalog does not carry yet — their columns appear here and a run fills them. The catalog file only gains a language where a translation exists to save")
   }
 }
 
@@ -483,7 +463,7 @@ private struct AddLanguagesView: View {
           .font(.caption)
           .foregroundStyle(.secondary)
       }
-      Text("Every language Apple ships as a keyboard or UI language. Picked ones get a column now and are ready for Translate; the catalog file only gains a language where a translation exists to save.")
+      Text("Every language Apple ships as a keyboard or UI language. Picked ones get a column now and are ready for a run; the catalog file only gains a language where a translation exists to save.")
         .font(.caption)
         .foregroundStyle(.secondary)
         .fixedSize(horizontal: false, vertical: true)
@@ -677,7 +657,7 @@ private struct LanguageCell: View {
       isEditable: row.isTranslatable, record: nil, pluralRecords: [:])
     return HStack(spacing: 5) {
       if cell.hasPlurals {
-        PluralCellStatusAccessory(cell: cell, run: store.run)
+        PluralCellStatusAccessory(cell: cell)
         if cell.pluralRecords.values.contains(where: { $0.lastEditor == ProvenanceMarkers.translationMemory }) {
           Image(systemName: "clock.arrow.circlepath")
             .font(.system(size: 9))
@@ -692,9 +672,7 @@ private struct LanguageCell: View {
           .foregroundStyle(.tertiary)
           .help("Device variations present — read-only in this phase")
       } else {
-        CellStatusAccessory(
-          record: cell.record,
-          isInFlight: store.run.isInFlight(cell.record))
+        CellStatusAccessory(record: cell.record)
         if let record = cell.record,
            record.lastEditor == ProvenanceMarkers.translationMemory {
           TranslationMemoryBadge(record: record)
@@ -721,29 +699,19 @@ private struct LanguageCell: View {
 
 // MARK: - Row context menu
 
-/// Right-click menu for a row: Translate (single item) / Vary by plural /
-/// Reviewed / Needs Review. Translate is disabled while a run is active
-/// and for non-translatable keys; the review/plural actions are hidden for
-/// them (they hold no records).
+/// Right-click menu for a row: Note / Max Width / Vary by plural /
+/// Reviewed / Needs Review. The review/plural actions are hidden for
+/// non-translatable keys (they hold no records).
 private struct RowContextMenu: View {
   let row: CatalogRow
   let store: LocalizationStore
 
   var body: some View {
     Button {
-      store.inspect(row.key)
-    } label: {
-      Label("Inspect Row…", systemImage: "magnifyingglass.circle")
-    }
-    .disabled(store.run.isActive || store.isInspecting)
-    .help("Run one row end to end and show which model was used and what was learned")
-
-    Button {
       store.editNote(row.key)
     } label: {
       Label("Note…", systemImage: "text.bubble")
     }
-    .disabled(store.run.isActive)
     .help("Attach a reviewer note to this row — a project rule guides the translator, a plain note stays in the app")
 
     Menu {
@@ -765,40 +733,19 @@ private struct RowContextMenu: View {
 
     Divider()
 
-    Button {
-      store.translateKey(row.key)
-    } label: {
-      Label("Translate", systemImage: "translate")
-    }
-    .disabled(!row.isTranslatable || store.run.isActive)
-
     if row.isTranslatable {
       if row.hasPlurals {
-        Button {
-          store.generatePlural(key: row.key)
-        } label: {
-          Label("Generate plural", systemImage: "sparkles")
-        }
-        .disabled(store.run.isActive)
         Button {
           store.removePlurals(key: row.key)
         } label: {
           Label("Remove plural variations", systemImage: "ellipsis.curlybraces")
         }
-        .disabled(store.run.isActive)
       } else {
         Button {
           store.varyByPlural(key: row.key)
         } label: {
           Label("Vary by plural", systemImage: "ellipsis.curlybraces")
         }
-        .disabled(store.run.isActive)
-        Button {
-          store.generatePlural(key: row.key)
-        } label: {
-          Label("Generate plural", systemImage: "sparkles")
-        }
-        .disabled(store.run.isActive)
       }
       // One-click human confirm for every imported-DB auto-reviewed slot of
       // the row (badge click does the same per cell).
@@ -1123,28 +1070,21 @@ private struct LanguageEditCell: View {
   }
 }
 
-/// Plural slot status: spinner while ANY form is in flight, else the worst
-/// form dot (needs_review orange wins, then reviewed green, else none).
+/// Plural slot status: the worst form dot (needs_review orange wins, then
+/// reviewed green, else none).
 private struct PluralCellStatusAccessory: View {
   let cell: LangCell
-  let run: TranslateRunController
 
   var body: some View {
-    if cell.isInFlight(run: run) {
-      ProgressView()
-        .controlSize(.small)
-        .help("Translating…")
-    } else {
-      let dot: TranslationState? = cell.pluralRecords.values
-        .map(\.state)
-        .sorted { rank($0) < rank($1) }
-        .first { $0 != .empty }
-      if let dot, dot != .empty {
-        Circle()
-          .fill(dot.dotColor)
-          .frame(width: 6, height: 6)
-          .help(pluralHelp)
-      }
+    let dot: TranslationState? = cell.pluralRecords.values
+      .map(\.state)
+      .sorted { rank($0) < rank($1) }
+      .first { $0 != .empty }
+    if let dot, dot != .empty {
+      Circle()
+        .fill(dot.dotColor)
+        .frame(width: 6, height: 6)
+        .help(pluralHelp)
     }
   }
 
@@ -1402,7 +1342,6 @@ private struct FooterBar: View {
         .foregroundStyle(.secondary)
       }
       Spacer()
-      TranslateRunStatus(controller: store.run)
     }
     .font(.caption)
     .lineLimit(1)

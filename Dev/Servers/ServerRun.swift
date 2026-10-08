@@ -231,8 +231,7 @@ final class ServerRun {
             ContextPromptBuilder.BatchItem(
               id: index,
               sourceText: item.source,
-              context: learned.context(comment: item.comment, namespace: item.namespace),
-              targetLanguage: nil)
+              context: learned.context(comment: item.comment, namespace: item.namespace))
           }
           sourceCharacters += chunk.reduce(0) { $0 + $1.source.count }
 

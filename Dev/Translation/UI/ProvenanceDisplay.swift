@@ -9,10 +9,10 @@ import Foundation
 
 // MARK: - Provenance markers
 
-/// Stable marker strings the pipeline writes into `TranslationRecord.lastEditor`,
+/// Stable marker strings a run writes into `TranslationRecord.lastEditor`,
 /// mirrored here so the UI checks survive in one place. The literals MUST
-/// match what Dev/Translation/Pipeline writes (e.g. TranslationMemory.resolve
-/// stamps "Translation Memory") — do not rename one side only.
+/// match what the writers stamp (`Translation.Runner.memoryEditor` writes
+/// "Translation Memory") — do not rename one side only.
 enum ProvenanceMarkers {
   /// Set when a value was copied from the translation memory — the UI shows
   /// the "resolved from cache" indicator for these cells.
@@ -125,8 +125,7 @@ extension TranslationRecord {
 
 // MARK: - String
 
-/// `nonisolated`: a pure predicate, callable from the pipeline's off-main
-/// stages too.
+/// `nonisolated`: a pure predicate, callable from off-main store work too.
 nonisolated extension String {
   var isBlankOrEmpty: Bool {
     trimmingCharacters(in: .whitespacesAndNewlines).isEmpty

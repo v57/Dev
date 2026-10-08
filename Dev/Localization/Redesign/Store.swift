@@ -18,11 +18,10 @@
 //  writer of the artifact, and it keeps writing through the catalog model the app
 //  already has.
 //
-//  Nothing here calls the old pipeline either (`LocalizationStore`,
-//  `TranslationPipeline`, `TranslationRouter`, `Stage0Learner`, `Reconcile`): the
-//  two implementations share the MODELS, not code. What IS shared on purpose is
-//  the storage the app already has, which is why the two rules below are the old
-//  implementation's rules, restated here instead of called:
+//  Nothing here calls the catalog pane's own code either (`LocalizationStore`,
+//  `Reconcile`): the two share the MODELS, not code. What IS shared on purpose is
+//  the storage the app already has, which is why the two rules below are the
+//  pane's rules, restated here instead of called:
 //
 //    - the SENTINEL rule: SwiftData on this SDK decomposes `ContextVersions` into
 //      nullable columns and crashes re-faulting a row whose versions are ALL nil,
@@ -181,8 +180,8 @@ extension Translation {
     /// The redesign addresses a project by a STRING, and the app already has one:
     /// the project's `name`, which is what the existing project-scope `ContextDoc`
     /// carries as its `identifier` (Reconcile.swift: `identifier: project.name`) and
-    /// what translation memory carries as its `projectTag` (Stage0Learner's reviewed
-    /// upsert). The catalog and root paths are accepted as well, so a caller that
+    /// what translation memory carries as its `projectTag` (`Reconcile.upsertGoldMemory`).
+    /// The catalog and root paths are accepted as well, so a caller that
     /// hands over a URL-derived id lands on the same row: this function is the ONLY
     /// place the string is resolved, so a different id costs one function, not every
     /// call site.

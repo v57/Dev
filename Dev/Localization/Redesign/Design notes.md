@@ -42,10 +42,11 @@ Constraints on the whole redesign, not gaps in it. Everything below assumes them
   or `Reconcile`, and nothing in the old pipeline calls into these types. They
   share exactly two surfaces, deliberately — the `.xcstrings` artifact (Save is
   still its only writer) and the SwiftData models the store maps onto — which they
-  SHARE (10.16, settled). The old flow keeps working untouched while the new one is
-  built, and it STAYS when the new one lands (10.9, reader 2026-09-14): there is no
-  cut-over and no deletion, so the app carries both pipelines, each reachable from
-  its own control, until the reader says otherwise.
+  SHARE (10.16, settled). The old flow was kept beside the new one while it was
+  built (10.9, reader 2026-09-14) and REMOVED on 2026-10-08 (reader): the catalog
+  pane's Translate / Update Translations / Generate plural / Inspect Row and the
+  `TranslationPipeline`, `Stage0Learner`, `TranslateRunController` behind them are
+  gone. `TranslationRouter` survives only as the server pane's client.
 - **One `Start` does the whole thing.** A single control runs the main flow's whole
   plan in order — prepare, prelearn, learn, translate (4.2) — instead of the user
   walking stages. The stage rail becomes PROGRESS, not a menu; a step with nothing
@@ -1306,6 +1307,7 @@ The operation classes know what to send, nothing knows how to send it.
       existing controls and the new one from its own `Start`, until the reader says
       otherwise. This also removes the reason the recommendation existed — a second
       pipeline was the price, and it is now the intent.
+      **Superseded 2026-10-08 (reader): the old pipeline is deleted.**
 - [ ] 10.10 Global cap 10 000 (the redesign's `Global.init`) versus the current
       builder's 5 000: one number, in `Translation.Limits`.
 - [ ] 10.11 How a CHANGED project rule reaches machine-translated slots. Now that

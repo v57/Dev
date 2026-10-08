@@ -19,7 +19,7 @@
 //
 //  Real implementation, unlike the rest of this folder's stubs. Semantics are in
 //  "Design notes.md" 5.2 and the rules at the top of that file. The wire details and
-//  the keychain lookup follow Translation/Backends/OpenCodeTranslator.swift,
+//  the keychain lookup follow Translation/Backends/RoutedModel.swift,
 //  OpenCodeKeychain.swift and OpenAIChatClient.swift; nothing here calls
 //  TranslationRouter or reaches into its chain, because the redesign has no chain to
 //  walk.
@@ -53,13 +53,16 @@ extension Translation {
     }
 
     /// The single candidate the redesign ever calls. The model id comes from
-    /// `OpenCodeTranslator` — the same constant its own client names — so the
-    /// transport and the router cannot end up speaking to two different models.
+    /// `RoutedModel.muse` — the same constant the transport reads its endpoint and
+    /// headers from — so the two cannot end up speaking to different models.
     static let defaultMuse = Candidate(
-      id: "opencode:\(OpenCodeTranslator.model)",
-      model: OpenCodeTranslator.model)
+      id: "opencode:\(RoutedModel.muse.model)",
+      model: RoutedModel.muse.model)
 
     let muse: Candidate
+
+    /// Per-request budget; a long batch reply can take minutes to write.
+    static let requestTimeout: TimeInterval = 180
 
     /// The one candidate, which is the whole point: there is nothing to choose between.
     init(muse: Candidate) {
@@ -241,12 +244,12 @@ extension Translation {
           }
           var arrived = false
           let client = ChatStream(
-            endpoint: OpenCodeTranslator.endpoint,
+            endpoint: RoutedModel.muse.endpoint,
             apiKey: apiKey,
             model: candidate.model,
-            wire: .responses,
-            headers: OpenCodeTranslator.headers,
-            timeout: OpenCodeTranslator.requestTimeout)
+            wire: RoutedModel.muse.wire,
+            headers: RoutedModel.muse.headers,
+            timeout: Self.requestTimeout)
           do {
             let usage = try await client.send(
               system: request.system,

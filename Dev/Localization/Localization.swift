@@ -100,7 +100,7 @@ struct LangCell {
   let hasPlurals: Bool
   let isEditable: Bool
   /// Live SwiftData record of the (key, language) slot — the cell's dot,
-  /// spinner, provenance tooltip and mid-run text read it directly. Nil for
+  /// provenance tooltip and mid-run text read it directly. Nil for
   /// plural holders (see pluralRecords), device holders and
   /// non-translatable keys, which reconcile does not model flat.
   let record: TranslationRecord?
@@ -108,13 +108,6 @@ struct LangCell {
   /// flat cells. Each form is a full translation slot with its own value,
   /// state and provenance.
   let pluralRecords: [String: TranslationRecord]
-
-  /// True while the run is active AND any of this cell's records is a
-  /// not-yet-written run target.
-  func isInFlight(run: TranslateRunController) -> Bool {
-    if let record, run.isInFlight(record) { return true }
-    return pluralRecords.values.contains { run.isInFlight($0) }
-  }
 
   /// No value at all: no parsed unit, no override, and no variations to show.
   /// Plural slots are missing only when no form carries anything.
@@ -591,7 +584,7 @@ final class LocalizationStore {
     catalog?.strings.values.filter { $0.shouldTranslate == false }.count ?? 0
   }
 
-  // MARK: - SwiftData working store (records + run)
+  // MARK: - SwiftData working store (records)
 
   /// Live SwiftData records of the open project, indexed (key, language,
   /// form-or-flat). Rebuilt on every reconcile (open/reload); record objects
@@ -599,20 +592,16 @@ final class LocalizationStore {
   /// valid. The "" form key is the flat slot; named keys are plural forms.
   private var recordIndex: [String: [String: [String: TranslationRecord]]] = [:]
 
-  /// Drives the Translate run lifecycle — progress, cancel, per-cell
-  /// in-flight state and the last-run summary. One instance per store.
-  let run = TranslateRunController()
-
   /// Drives Scan Strings — live progress, cancel, the finished report and
   /// the merge it proposes. One instance per store, so the toolbar button
   /// and the report sheet share it.
   let scan = ScanController()
 
   /// True when the Scan Strings button may start a scan: a project-bound
-  /// catalog is open, its project has a root to scan and no other run is in
+  /// catalog is open, its project has a root to scan and no scan is in
   /// flight.
   var canScan: Bool {
-    isLoaded && project != nil && scanRoot != nil && !run.isActive && !scan.isRunning
+    isLoaded && project != nil && scanRoot != nil && !scan.isRunning
   }
 
   /// The folder Scan Strings scans: the project's own root when the project
@@ -687,355 +676,11 @@ final class LocalizationStore {
     return true
   }
 
-  /// True when the Translate button may start a run.
-  var canTranslate: Bool { isLoaded && project != nil && !run.isActive && !scan.isRunning }
-
-  // MARK: - Update Translations (explicit project-context sweep)
-
-  /// Slots (records) the "Update Translations" pass would send right now —
-  /// the records that predate the current project context doc. Cached:
-  /// recomputed by `refreshUpdateCounts()` off `buildRows()` and the record
-  /// index, never derived on render (the selection walks every record).
-  private(set) var updateSlotCount = 0
-  /// Distinct rows (keys) among those slots — the pass sends ONE request per
-  /// row, carrying every target language of the row.
-  private(set) var updateRowCount = 0
-
-  /// Why the Update Translations button cannot run, or nil when it can.
-  var updateUnavailableReason: String? {
-    if project == nil { return "Open a project catalog first." }
-    if project?.contextDoc == nil {
-      return "No project context yet — add a rule under \"Context Rules\" first; there is nothing for the update pass to re-apply."
-    }
-    if updateSlotCount == 0 {
-      return "Every slot already reflects the current project context."
-    }
-    return nil
-  }
-
-  /// True when the Update Translations button may start the paid sweep.
-  var canUpdateTranslations: Bool {
-    isLoaded && !run.isActive && !scan.isRunning && updateUnavailableReason == nil
-  }
-
-  /// Button tooltip: the count, the shape of the pass, and the limit that
-  /// reviewed / hand-typed slots are skipped.
-  var updateTranslationsHelp: String {
-    if run.isActive {
-      return "A translation run is in progress — cancel it from the footer"
-    }
-    if let reason = updateUnavailableReason { return reason }
-    let version = project?.contextDoc?.version ?? 0
-    return "Re-run \(updateSlotCount) slot(s) in \(updateRowCount) row(s) that predate project context v\(version) — a paid sweep, one request per row carrying every target language of that row. Reviewed or hand-typed slots are NOT touched: un-confirm them first (row menu → \"Needs Review\")."
-  }
-
-  /// True while the paid-sweep confirmation is presented. Drives the alert.
-  var updateConfirmationPresented = false
-
-  /// Confirmation text: the pre-run count, the request shape, and the limit.
-  var updateConfirmationMessage: String {
-    let version = project?.contextDoc?.version ?? 0
-    return """
-    \(updateSlotCount) slot(s) in \(updateRowCount) row(s) predate project context v\(version).
-
-    This is a paid sweep: one request per row, carrying every target language of that row. Translation memory is consulted first; the imported database stage is skipped.
-
-    Reviewed and hand-typed slots are NOT touched — un-confirm them first (row menu → "Needs Review") if a rule must reach them.
-    """
-  }
-
   /// True when the Save button may write the artifact.
   var canSave: Bool { isDirty && isLoaded && project != nil }
 
   /// True when the open catalog carries edits the file does not have yet.
   var hasUnsavedChanges: Bool { isDirty && isLoaded }
-
-  /// Kicks the pipeline off from the Translate button (async Task; re-entry
-  /// is guarded by `begin`). When the run returns, its DB output is merged
-  /// into the OPEN in-memory catalog — never written: the artifact changes
-  /// only on Save, so a run cannot touch a file behind the user's back.
-  func startTranslate() {
-    guard let project else { return }
-    Task {
-      guard await beginRun(project: project, key: nil, languages: nil, force: false) else { return }
-      await performTranslate(project: project, key: nil)
-    }
-  }
-
-  /// Prepares a run's scope, then starts its lifecycle. Plural forms the
-  /// catalog does not have yet are varied FIRST (in memory — the artifact is
-  /// written only by Save), so the controller's spinner candidates include
-  /// them; that pass runs OFF the main actor, so the footer shows its progress
-  /// and the window stays responsive (see `TranslateRunController.ensurePluralForms`).
-  /// False when a run is already active, or when the preparation was
-  /// cancelled — a cancelled preparation keeps the records it created but does
-  /// not start a run.
-  private func beginRun(
-    project: Project, key: String?, languages: Set<String>?, force: Bool
-  ) async -> Bool {
-    guard !run.isActive else { return false }
-    if let varied = await run.ensurePluralForms(
-      project: project, catalog: catalog, key: key, languages: languages) {
-      catalog = varied
-      markDirty()
-    }
-    guard !run.progress.isCancelled else { return false }
-    return run.begin(project: project, key: key, languages: languages, force: force)
-  }
-
-  /// Row-menu "Translate": runs the pipeline scoped to a single key AND only
-  /// the currently-selected language columns (the visible sections), with the
-  /// freshness gate lifted so even a fresh `needs_review` machine value is
-  /// re-translated/reviewed. Reuses the shared run controller so the footer
-  /// shows progress and re-entry is guarded. No columns selected => no
-  /// targets (nothing is translated).
-  func translateKey(_ key: String) {
-    let languages = Set(selectedLanguages)
-    guard let project else { return }
-    Task {
-      guard await beginRun(project: project, key: key, languages: languages, force: true) else { return }
-      await performTranslate(project: project, key: key, languages: languages, force: true)
-    }
-  }
-
-  /// Toolbar "Update Translations": opens the paid-sweep confirmation. The
-  /// pass is explicit because a project-context bump no longer auto-enqueues
-  /// anything, so this is the only channel a project rule has to the records
-  /// that predate it.
-  func requestUpdateTranslations() {
-    guard canUpdateTranslations else { return }
-    updateConfirmationPresented = true
-  }
-
-  /// Dismisses the confirmation without running.
-  func cancelUpdateTranslations() {
-    updateConfirmationPresented = false
-  }
-
-  /// Confirmed: closes the alert and starts the pass.
-  func confirmUpdateTranslations() {
-    updateConfirmationPresented = false
-    startUpdateTranslations()
-  }
-
-  /// Starts the explicit Update Translations pass (async Task; re-entry is
-  /// guarded by `beginRun`). Plural skeletons are prepared first like any run,
-  /// the footer shows progress / Cancel, and the run's output merges into the
-  /// OPEN catalog — never written: Save stays the only artifact writer.
-  func startUpdateTranslations() {
-    guard let project else { return }
-    Task {
-      guard await beginRun(project: project, key: nil, languages: nil, force: true) else { return }
-      await performTranslate(project: project, update: true)
-    }
-  }
-
-  // MARK: - row inspection (diagnostics)
-
-  /// The key whose inspector overlay is open, or nil.
-  var inspectedKey: String?
-  /// Trace of the current (or last) inspection.
-  let trace = TranslationTrace()
-  /// True while an inspection is running.
-  private(set) var isInspecting = false
-
-  /// Opens the inspector for `key` and runs the appropriate test: a full
-  /// pipeline run for a row with no reviewed slot, or just the learning fold
-  /// for a reviewed one.
-  func inspect(_ key: String) {
-    guard !run.isActive, !isInspecting else { return }
-    inspectedKey = key
-    Task { await runInspection(key) }
-  }
-
-  func closeInspector() {
-    inspectedKey = nil
-  }
-
-  private func runInspection(_ key: String) async {
-    guard let project else { return }
-    let records = (project.records ?? []).filter { $0.key == key }
-    // Reviewed slots are tested for what the pipeline LEARNS from them;
-    // everything still open is tested by translating it. A row can be both.
-    let reviewed = records
-      .filter { $0.state == .reviewed }
-      .sorted { ($0.language, $0.category ?? "") < ($1.language, $1.category ?? "") }
-    let runnable = records
-      .filter { $0.state != .reviewed && $0.provider != .manual }
-      .sorted { ($0.language, $0.category ?? "") < ($1.language, $1.category ?? "") }
-
-    let mode: TranslationTrace.Mode
-    switch (reviewed.isEmpty, runnable.isEmpty) {
-    case (false, false): mode = .mixed
-    case (false, true): mode = .learning
-    case (true, _): mode = .fullRun
-    }
-
-    trace.begin(key: key, mode: mode)
-    isInspecting = true
-    defer {
-      isInspecting = false
-      trace.finish()
-    }
-
-    switch mode {
-    case .fullRun:
-      trace.note("No reviewed slot on this row — running the full pipeline for the key.")
-      await inspectFullRun(key: key, project: project, languages: languages(of: runnable))
-    case .learning:
-      trace.note("\(reviewed.count) reviewed slot(s) — folding the human edits into the context docs instead of translating.")
-      await inspectLearning(project: project, records: reviewed)
-    case .mixed:
-      trace.note("\(reviewed.count) reviewed slot(s) to learn, \(runnable.count) slot(s) to translate — doing both.")
-      await inspectLearning(project: project, records: reviewed)
-      await inspectFullRun(key: key, project: project, languages: languages(of: runnable))
-    }
-  }
-
-  /// Languages of the slots a full run should touch, or nil when unknown.
-  private func languages(of records: [TranslationRecord]) -> Set<String>? {
-    let languages = Set(records.map(\.language))
-    return languages.isEmpty ? nil : languages
-  }
-
-  /// Untranslated / needs-review row: run the whole pipeline for this one key.
-  private func inspectFullRun(key: String, project: Project, languages: Set<String>?) async {
-    // `languages` nil means "every target language of the key". The run gets
-    // the OPEN catalog (never the file): unsaved edits are its prompt context,
-    // and a run writes nothing to the artifact.
-    let summary = await TranslationPipeline.run(
-      project: project,
-      key: key,
-      languages: languages,
-      force: true,
-      catalog: catalog,
-      trace: trace)
-    trace.note("Run finished: \(summary.recordsTouched) record(s) touched, \(summary.failures.count) failure(s)")
-
-    // Fold the writes back into the catalog/table — in memory, exactly like a
-    // normal run.
-    if let catalog {
-      let merged = Reconcile.merge(catalog, project: project, keys: [key])
-      self.catalog = merged.catalog
-      rebuildRecordIndex()
-      buildRows()
-      if merged.changed {
-        markDirty()
-      }
-    }
-  }
-
-  /// Reviewed row: fold each reviewed slot's confirmed edit and show the
-  /// ContextDoc before/after. Writes context docs only — never catalog values.
-  private func inspectLearning(project: Project, records: [TranslationRecord]) async {
-    let env = PipelineRunContext(
-      context: TranslationStore.shared.context,
-      project: project,
-      targetKey: nil,
-      targetLanguages: nil,
-      force: false)
-    for record in records {
-      _ = await Stage0Learner.learnOne(env: env, record: record, trace: trace)
-    }
-    rebuildRecordIndex()
-    buildRows()
-  }
-
-  /// Runs the pipeline — or, when `update`, the explicit Update Translations
-  /// pass — then merges its DB output into the OPEN catalog.
-  private func performTranslate(project: Project, key: String? = nil, languages: Set<String>? = nil, force: Bool = false, update: Bool = false) async {
-    let summary = update
-      ? await run.executeUpdate(project: project, catalog: catalog)
-      : await run.execute(
-        project: project, key: key, languages: languages, force: force, catalog: catalog)
-    defer { run.finish(summary) }
-    // The run writes the DB only — its output reaches the artifact by merging
-    // into the OPEN in-memory catalog, never by re-reading the file (which
-    // predates every unsaved edit in this window, and is not written by
-    // anything but Save).
-    guard let catalog else { return }
-    let merged = Reconcile.merge(catalog, project: project, keys: key.map { [$0] })
-    self.catalog = merged.catalog
-    rebuildRecordIndex()
-    saveError = nil
-    buildRows()
-    if merged.changed {
-      markDirty()
-    }
-  }
-
-  /// Row-menu "Generate plural": AI-authors the SOURCE forms for a flat key,
-  /// varies the source + selected columns, then runs the normal single-key
-  /// Translate to fill the targets. Steps:
-  ///   1. Vary by plural (skeleton; flat value -> "other", empty forms).
-  ///   2. Ask the model for the missing source forms (existing ones are sent
-  ///      for consistency and never overwritten); write them to the file.
-  ///   3. Kick the forced single-key run over the selected columns.
-  /// A no-key backend surfaces saveError and stops (the skeleton stays, so a
-  /// retry costs nothing). Guarded by the shared run controller.
-  func generatePlural(key: String) {
-    guard catalog != nil, project != nil else { return }
-    varyByPlural(key: key)
-    guard let project else { return }
-    let languages = Set(selectedLanguages)
-    Task {
-      guard await beginRun(project: project, key: key, languages: languages, force: true) else { return }
-      await performGeneratePlural(project: project, key: key, languages: languages)
-    }
-  }
-
-  /// Async half of Generate plural: author source forms, then fill targets.
-  /// Runs off-main (the model call is async); every store mutation hops back
-  /// to the main actor, matching the rest of the store.
-  private func performGeneratePlural(project: Project, key: String, languages: Set<String>) async {
-    // Step 2: author the missing source forms before the stages run.
-    if let catalog = self.catalog {
-      let source = catalog.sourceLanguage
-      let categories = PluralRules.categories(for: source)
-      let flat = catalog.sourceDisplay(for: key)
-      var existing: [String: String] = [:]
-      var missing: [String] = []
-      for category in categories {
-        if let value = catalog.pluralValue(for: key, language: source, category: category),
-           !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-          existing[category] = value
-        } else {
-          missing.append(category)
-        }
-      }
-      if !missing.isEmpty {
-        do {
-          let forms = try await PluralGenerator.sourceForms(
-            key: key,
-            comment: catalog.strings[key]?.comment,
-            text: missing.count == categories.count ? flat : (existing["other"] ?? flat),
-            language: source,
-            categories: categories,
-            existing: existing)
-          var mutated = catalog
-          for category in missing {
-            if let text = forms[category] {
-              mutated.setSourcePluralValue(text, key: key, category: category)
-            }
-          }
-          markDirty()
-          await MainActor.run {
-            self.catalog = mutated
-            buildRows()
-          }
-        } catch {
-          let message = error.localizedDescription
-          await MainActor.run {
-            self.saveError = message
-            self.run.finish(PipelineRunSummary())
-          }
-          return
-        }
-      }
-    }
-    // Step 3: the forced single-key run fills the target forms.
-    await performTranslate(project: project, key: key, languages: languages, force: true)
-  }
 
   /// Row-menu "Vary by plural": builds the CLDR plural skeleton for the
   /// source language + every selected non-source column, seeds one record
@@ -1145,16 +790,11 @@ final class LocalizationStore {
   var projectContextText: String { project?.contextDoc?.content ?? "" }
 
   /// Saves the hand-edited project context (audit + one version bump; a no-op
-  /// when unchanged). Records do NOT become stale from this: the project
-  /// version deliberately stopped auto-enqueueing re-runs — "Update
-  /// Translations" is the explicit pass that re-sends them.
+  /// when unchanged).
   func setProjectContext(_ text: String) {
     guard let project else { return }
     let context = TranslationStore.shared.context
     Reconcile.applyProjectDoc(content: text, project: project, context: context)
-    // A bump changes what the Update Translations pass would sweep; refresh
-    // the toolbar count now (this path does not rebuild rows).
-    refreshUpdateCounts()
   }
 
   /// The row's max-width guideline (nil = none), read from the live records.
@@ -1201,7 +841,7 @@ final class LocalizationStore {
     record.reviewedAt = .now
     record.updatedAt = .now
     // Gold is gold: the human vouched for this (sourceText, target) triple.
-    TranslationMemory.upsertReviewed(
+    Reconcile.upsertGoldMemory(
       in: context,
       sourceText: record.sourceText,
       sourceLanguage: catalog.sourceLanguage,
@@ -1521,26 +1161,21 @@ final class LocalizationStore {
   func dismissError() {
     loadError = nil
     saveError = nil
-    run.clearPreparationError()
   }
 
-  /// True when the catalog failed to load, a save failed, or a run's plural
-  /// preparation could not write its records.
+  /// True when the catalog failed to load or a save failed.
   var hasError: Bool {
-    loadError != nil || saveError != nil || run.preparationError != nil
+    loadError != nil || saveError != nil
   }
 
   /// Alert title for the current error.
   var errorTitle: String {
-    if saveError != nil { return "Couldn't save catalog" }
-    if run.preparationError != nil { return "Couldn't prepare the run" }
-    return "Couldn't open catalog"
+    saveError != nil ? "Couldn't save catalog" : "Couldn't open catalog"
   }
 
-  /// Alert message for the current error (save error wins, then a failed run
-  /// preparation, then the load error).
+  /// Alert message for the current error (save error wins, then the load error).
   var errorMessage: String? {
-    saveError ?? run.preparationError ?? loadError
+    saveError ?? loadError
   }
 
   // MARK: - save (the only writer)
@@ -1706,7 +1341,6 @@ final class LocalizationStore {
     sortOrder = [CatalogSort(.source)]
     selectedLanguages = []
     addedLanguages = []
-    run.reset()
     // A blank catalog has no values to disagree about, so it never asks: it is opened at
     // once and its (empty) mirror goes to the queue behind the pane like any other load.
     let project = Reconcile.ensureProject(catalogURL: url, in: TranslationStore.shared.context)
@@ -1978,8 +1612,6 @@ final class LocalizationStore {
       sortOrder = [CatalogSort(.source)]
       selectedLanguages = []
       addedLanguages = []
-      // A different catalog: drop the previous project's run summary.
-      run.reset()
     }
     adopt(catalog, project: project, url: url)
   }
@@ -2036,7 +1668,6 @@ final class LocalizationStore {
     loadGeneration += 1
     pendingLoad = nil
     revision += 1
-    run.reset()
   }
 
   // MARK: - clearing the store (Design notes 7.5)
@@ -2052,9 +1683,6 @@ final class LocalizationStore {
   /// supplied goes; the parsed DOCUMENT stays, because it is the artifact's
   /// in-memory form and Save is its only writer — `rebuildAfterStoreClear`
   /// re-derives the rows from it in the same turn.
-  ///
-  /// The old pipeline's last-run summary goes too: it counts values the store no
-  /// longer holds.
   func dropStoreMirror() {
     recordIndex = [:]
     rows = []
@@ -2073,7 +1701,6 @@ final class LocalizationStore {
     loadGeneration += 1
     pendingLoad = nil
     revision += 1
-    run.reset()
   }
 
   /// Re-derives the table from the artifact, once the store has been emptied.
@@ -2378,35 +2005,11 @@ final class LocalizationStore {
     visibleRows = shown.sorted(using: sort)
   }
 
-  /// Recomputes the cached Update Translations counts from the live record
-  /// index. Rides `buildRows` on purpose: the toolbar count, the confirmation
-  /// text and the pass's OWN selection have to agree, and the index changes
-  /// underneath a row un-review just as a run's writes change the records'
-  /// context versions. Walks the index (not the catalog), so it stays cheap.
-  private func refreshUpdateCounts() {
-    let version = project?.contextDoc?.version
-    var slots = 0
-    var keys = Set<String>()
-    for (key, byLanguage) in recordIndex {
-      guard !key.isEmpty else { continue }
-      for forms in byLanguage.values {
-        for record in forms.values
-        where UpdateTranslations.qualifies(record, projectVersion: version) {
-          slots += 1
-          keys.insert(key)
-        }
-      }
-    }
-    updateSlotCount = slots
-    updateRowCount = keys.count
-  }
-
   /// (Re)builds `rows` from the open catalog — the strings -> rows
   /// conversion — then re-applies the current filters. Called from
   /// reconcile (every load) and after every commit/save, so `rows` always
   /// mirrors the artifact that was just written.
   private func buildRows() {
-    refreshUpdateCounts()
     browserLanguages = computeBrowserLanguages()
     guard let catalog else {
       rows = []
