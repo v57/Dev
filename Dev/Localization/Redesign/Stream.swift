@@ -145,7 +145,9 @@ extension Translation {
         // A provider that does not know `stream_options` rejects the field with a 400, and
         // it says so before it writes a byte of the reply — so the retry cannot lose text,
         // it only loses the token numbers the run would have counted (5.7).
-        if http.statusCode == 400, includeUsage {
+        // Only the chat wire sends `stream_options`: on the Responses wire the retry would
+        // resend the very same body, so a 400 there is an answer, not a field to drop.
+        if http.statusCode == 400, includeUsage, wire == .chatCompletions {
           return try await attempt(
             system: system, user: user, temperature: temperature,
             includeUsage: false, onChunk: onChunk)
@@ -190,8 +192,8 @@ extension Translation {
     }
 
     /// A reply from a provider that ignored `stream`: the whole body is one JSON object
-    /// with the message in it, and it is handed over as a single chunk so the caller's
-    /// scanner sees the same thing either way.
+    /// with the message in it — in the shape of the wire it was asked on — and it is
+    /// handed over as a single chunk so the caller's scanner sees the same thing either way.
     private func whole(
       of bytes: URLSession.AsyncBytes, onChunk: (String) -> Void
     ) async throws -> Usage? {
@@ -202,19 +204,34 @@ extension Translation {
         if Task.isCancelled { throw CancellationError() }
         throw BackendError.network(error.localizedDescription)
       }
-      guard let decoded = try? JSONDecoder().decode(Whole.self, from: data) else {
-        throw BackendError.decoding(BackendError.bodyExcerpt(data) ?? "invalid JSON")
+      let content: String?
+      let usage: Usage?
+      switch wire {
+      case .chatCompletions:
+        guard let decoded = try? JSONDecoder().decode(Whole.self, from: data) else {
+          throw BackendError.decoding(BackendError.bodyExcerpt(data) ?? "invalid JSON")
+        }
+        if let message = decoded.error?.message, !message.isEmpty {
+          throw BackendError.badStatus(200, message)
+        }
+        content = decoded.choices?.first?.message?.content
+        usage = decoded.usage?.usage
+      case .responses:
+        // The Responses shape: `output` items, the answer in their `output_text` parts.
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+          throw BackendError.decoding(BackendError.bodyExcerpt(data) ?? "invalid JSON")
+        }
+        if let message = Self.errorMessage(in: object) {
+          throw BackendError.badStatus(200, message)
+        }
+        content = Self.outputText(of: object)
+        usage = (object["usage"] as? [String: Any]).flatMap(Self.responsesUsage(of:))
       }
-      if let message = decoded.error?.message, !message.isEmpty {
-        throw BackendError.badStatus(200, message)
-      }
-      guard let content = decoded.choices?.first?.message?.content,
-        !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-      else {
+      guard let content, !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
         throw BackendError.emptyResult(model)
       }
       onChunk(content)
-      return decoded.usage?.usage
+      return usage
     }
 
     /// A short excerpt of a failed response's body, bounded so a provider that answers an
@@ -252,8 +269,7 @@ extension Translation {
       guard let data = payload.data(using: .utf8),
         let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
       else { return (nil, nil) }
-      if let error = object["error"] as? [String: Any],
-        let message = error["message"] as? String, !message.isEmpty {
+      if let message = errorMessage(in: object) {
         throw BackendError.badStatus(200, message)
       }
       // A Responses-API frame names its own event type; the chat wire's frames
@@ -274,6 +290,10 @@ extension Translation {
           let message = ((response?["error"] as? [String: Any])?["message"] as? String)
             ?? "the model call failed"
           throw BackendError.badStatus(200, message)
+        case "error":
+          // The Responses stream's own error event carries its message at the top level
+          // (`{"type": "error", "code": …, "message": …}`), not under `error`.
+          throw BackendError.badStatus(200, (object["message"] as? String) ?? "the model call failed")
         default:
           // created / in_progress / output_item.* / content_part.* / reasoning
           // deltas: read for nothing, passed over.
@@ -291,6 +311,27 @@ extension Translation {
       }
       guard let reported = object["usage"] as? [String: Any] else { return (text, nil) }
       return (text, usage(of: reported))
+    }
+
+    /// The message of an `error` object a frame or a whole reply carries, when it has one.
+    private static func errorMessage(in object: [String: Any]) -> String? {
+      guard let error = object["error"] as? [String: Any],
+        let message = error["message"] as? String, !message.isEmpty
+      else { return nil }
+      return message
+    }
+
+    /// The answer text of a whole Responses reply: every `output_text` part of every
+    /// `message` item, in order. Reasoning items are not the answer.
+    private static func outputText(of object: [String: Any]) -> String? {
+      var parts: [String] = []
+      for item in object["output"] as? [[String: Any]] ?? [] where item["type"] as? String == "message" {
+        for part in item["content"] as? [[String: Any]] ?? []
+        where part["type"] as? String == "output_text" {
+          if let text = part["text"] as? String { parts.append(text) }
+        }
+      }
+      return parts.isEmpty ? nil : parts.joined()
     }
 
     /// The usage numbers of one JSON object, read tolerantly: the two cache keys are the
