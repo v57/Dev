@@ -394,7 +394,7 @@ final class ServerRun {
         .filter { $0.key != locale }
         .mapValues(\.value)
       let disagrees = siblings.values.contains {
-        TranslationValidator.placeholders($0).sorted() != TranslationValidator.placeholders(mine).sorted()
+        !TranslationValidator.placeholdersMatch(source: $0, target: mine)
       }
       guard !issues.isEmpty || disagrees else { continue }
 

@@ -7,17 +7,21 @@ import Foundation
 
 // MARK: - TranslationValidator
 
-/// Deterministic checks on model output. Runs BEFORE any paid review pass, so
-/// the failures that matter most (dropped placeholders, empty replies,
-/// untranslated echoes, misaligned batch ids) are caught for free.
+/// Deterministic checks on model output, so the failures that matter most
+/// (dropped placeholders, empty replies, misaligned batch ids) are caught for
+/// free.
+///
+/// An answer IDENTICAL to its source is NOT rejected: a language reuses a
+/// source word far more often than a check can tell ("Status" in German,
+/// "Total" in Spanish), and rejecting it left those slots unfillable while
+/// paying for a repair call each time. The redesign's validator made the same
+/// call (`Translation.Validator.defects`).
 nonisolated enum TranslationValidator {
   /// A reason a translation was rejected.
   enum Issue: Equatable, Sendable {
     case empty
     /// Placeholder multiset differs from the source's.
     case placeholders(expected: [String], got: [String])
-    /// The "translation" is the source text unchanged.
-    case echo
     /// The batch response did not cover every requested id.
     case missingIDs([Int])
     /// The reply looks CUT OFF — the model stopped mid-array, so the ids it
@@ -34,8 +38,6 @@ nonisolated enum TranslationValidator {
         return "empty response"
       case .placeholders(let expected, let got):
         return "placeholders changed (expected \(expected.joined(separator: " ")), got \(got.joined(separator: " ")))"
-      case .echo:
-        return "untranslated (identical to source)"
       case .missingIDs(let ids):
         return "missing ids \(ids.map(String.init).joined(separator: ","))"
       case .truncated(let covered, let expected):
@@ -70,9 +72,28 @@ nonisolated enum TranslationValidator {
   }
 
   /// Multiset comparison: translations legitimately reorder placeholders, so
-  /// only the SET of tokens (with duplicates) has to survive.
+  /// only the SET of tokens (with duplicates) has to survive. Positions are
+  /// compared without their `N$` index, because reordering is exactly what an
+  /// index is for: `%@ %@` may come back as `%2$@ %1$@`.
   static func placeholdersMatch(source: String, target: String) -> Bool {
-    placeholders(source).sorted() == placeholders(target).sorted()
+    comparable(placeholders(source)) == comparable(placeholders(target))
+  }
+
+  /// Tokens in the form they are compared in: sorted, with a printf
+  /// specifier's positional index (`%2$@` → `%@`) removed.
+  static func comparable(_ tokens: [String]) -> [String] {
+    tokens.map { $0.replacingOccurrences(of: #"^%\d+\$"#, with: "%", options: .regularExpression) }
+      .sorted()
+  }
+
+  /// `value` with the source's own leading and trailing whitespace. Replies are
+  /// trimmed on the way in (a model pads freely), which would otherwise strip
+  /// the space a source like `"Name: "` carries on purpose.
+  static func keepingEdges(of source: String, _ value: String) -> String {
+    let leading = source.prefix { $0.isWhitespace }
+    let trailing = source.reversed().prefix { $0.isWhitespace }.reversed()
+    guard leading.count < source.count else { return value }
+    return String(leading) + value.trimmingCharacters(in: .whitespacesAndNewlines) + String(trailing)
   }
 
   // MARK: - single item
@@ -86,12 +107,6 @@ nonisolated enum TranslationValidator {
       issues.append(.placeholders(
         expected: placeholders(source).sorted(),
         got: placeholders(target).sorted()))
-    }
-    // Only meaningful for strings long enough that an unchanged copy is not a
-    // legitimate loanword/acronym.
-    let sourceTrimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
-    if sourceTrimmed.count > 4, trimmed.caseInsensitiveCompare(sourceTrimmed) == .orderedSame {
-      issues.append(.echo)
     }
     return issues
   }

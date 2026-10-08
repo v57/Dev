@@ -148,7 +148,7 @@ final class TranslationRouter {
       }
       let issues = TranslationValidator.validate(source: item.sourceText, target: value)
       if issues.isEmpty {
-        outcome.values[item.id] = value
+        outcome.values[item.id] = TranslationValidator.keepingEdges(of: item.sourceText, value)
       } else {
         outcome.failedIDs.append(item.id)
         outcome.notes.append("#\(item.id): " + issues.map(\.description).joined(separator: "; "))
@@ -181,7 +181,7 @@ final class TranslationRouter {
           context: context)
         let reply = try await Self.call(
           candidate, apiKey: key, system: prompt.system, user: prompt.user)
-        return reply.content
+        return TranslationValidator.keepingEdges(of: text, reply.content)
       } catch let error as BackendError {
         lastFailure = error
         cool(candidate, error: error)
