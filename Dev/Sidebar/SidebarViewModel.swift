@@ -120,6 +120,10 @@ final class SidebarViewModel {
   /// Fresh per-project rows, rebuilt by `refresh()`.
   private(set) var projects: [SidebarProjectRow] = []
 
+  init() {
+    observeSaves()
+  }
+
   /// The alert the sidebar shows (import failure, refused removal), or nil.
   var alert: SidebarAlert?
 
@@ -152,24 +156,28 @@ final class SidebarViewModel {
   /// changes — a reconcile usually follows a selection, so this keeps the
   /// badges tracking record state within one interaction.
   ///
-  /// The badges are counted from ONE properties-limited fetch of the record
-  /// table grouped in memory, never from `project.records`. Walking the
-  /// relationship costs a query PER RECORD — measured 7.6 s for a
-  /// 67,844-record store (two projects: the 1382-key playgra catalog and the
-  /// Dev fixture) — while the same work over a flat fetch is ~1.5 s. So this
-  /// stays off the per-row relationship graph, and a `refresh()` triggered by
-  /// a selection change does not stall the UI.
+  /// The rows are built at once from the badge counts already in hand; the
+  /// counts themselves are a fetch of the WHOLE record table (measured ~1.5 s
+  /// for a 67,844-record store even properties-limited, and 7.6 s through
+  /// `project.records`), so they are recounted OFF the main actor, and only
+  /// when something has saved since the last count (`countsAreStale`). A
+  /// selection change over an unchanged store costs a project fetch and
+  /// nothing else; the badges catch up when a recount lands.
   func refresh() {
+    rebuildRows()
+    if countsAreStale { recount() }
+  }
+
+  private func rebuildRows() {
     let context = TranslationStore.shared.context
     let fetched = (try? context.fetch(FetchDescriptor<Project>())) ?? []
-    let counts = recordCounts(in: context)
     let fm = FileManager.default
     projects = fetched
       .sorted {
         $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending
       }
       .map { project in
-        let badge = counts[project.persistentModelID] ?? BadgeCounts()
+        let badge = badgeCounts[project.persistentModelID] ?? BadgeCounts()
         return SidebarProjectRow(
           id: project.persistentModelID,
           name: project.displayName,
@@ -182,41 +190,68 @@ final class SidebarViewModel {
       }
   }
 
-  /// Per-project badge counts: (key COUNT, needs-review key count) — the same
-  /// semantics as before (`needs_review` records count when their value is
-  /// non-blank; both are DISTINCT keys).
-  private struct BadgeCounts {
+  /// Per-project badge counts: the DISTINCT keys a project's records cover,
+  /// and how many records it has.
+  private struct BadgeCounts: Sendable {
     var keys = 0
-    var needsReviewKeys = 0
     var records = 0
   }
 
-  private func recordCounts(in context: ModelContext) -> [PersistentIdentifier: BadgeCounts] {
+  /// The last counts, by project.
+  @ObservationIgnored private var badgeCounts: [PersistentIdentifier: BadgeCounts] = [:]
+  /// True when a context has saved since `badgeCounts` was taken (or none was
+  /// ever taken). Set by `ModelContext.didSave` from ANY context — the
+  /// background mirror and the passes save on their own — so a recount is paid
+  /// once per change, not once per click.
+  @ObservationIgnored private var countsAreStale = true
+  @ObservationIgnored private var recountTask: Task<Void, Never>?
+  @ObservationIgnored private var saveObserver: NSObjectProtocol?
+
+  /// Starts watching for saves. Idempotent; called from `init`.
+  private func observeSaves() {
+    guard saveObserver == nil else { return }
+    saveObserver = NotificationCenter.default.addObserver(
+      forName: ModelContext.didSave, object: nil, queue: .main
+    ) { [weak self] _ in
+      MainActor.assumeIsolated { self?.countsAreStale = true }
+    }
+  }
+
+  private func recount() {
+    countsAreStale = false
+    recountTask?.cancel()
+    recountTask = Task { [weak self] in
+      let counts = await Task.detached(priority: .utility) {
+        Self.recordCounts(in: ModelContext(TranslationStore.container))
+      }.value
+      guard !Task.isCancelled, let self else { return }
+      self.badgeCounts = counts
+      self.rebuildRows()
+    }
+  }
+
+  /// One properties-limited fetch of the record table, grouped in memory —
+  /// never `project.records` (see `refresh`). On a context of its own, off the
+  /// main actor.
+  private nonisolated static func recordCounts(
+    in context: ModelContext
+  ) -> [PersistentIdentifier: BadgeCounts] {
     var descriptor = FetchDescriptor<TranslationRecord>()
-    // Only the six fields the badges read, so the fetch builds no object graph
+    // Only the two fields the badges read, so the fetch builds no object graph
     // and no relationship fault per record.
-    descriptor.propertiesToFetch = [\.key, \.language, \.category, \.state, \.value, \.project]
+    descriptor.propertiesToFetch = [\.key, \.project]
     let rows = (try? context.fetch(descriptor)) ?? []
     var keys: [PersistentIdentifier: Set<String>] = [:]
-    var reviewKeys: [PersistentIdentifier: Set<String>] = [:]
     var counts: [PersistentIdentifier: Int] = [:]
     for record in rows {
       guard let project = record.project else { continue }
       let id = project.persistentModelID
       counts[id, default: 0] += 1
       keys[id, default: []].insert(record.key)
-      if let value = record.value,
-         !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-         record.state == .needs_review {
-        reviewKeys[id, default: []].insert(record.key)
-      }
     }
     var out: [PersistentIdentifier: BadgeCounts] = [:]
     for (id, count) in counts {
-      out[id] = BadgeCounts(
-        keys: keys[id]?.count ?? 0,
-        needsReviewKeys: reviewKeys[id]?.count ?? 0,
-        records: count)
+      out[id] = BadgeCounts(keys: keys[id]?.count ?? 0, records: count)
     }
     return out
   }
