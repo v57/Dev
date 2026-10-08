@@ -1025,7 +1025,7 @@ final class LocalizationStore {
     buildRows()
     // A COMMENT is not record state: the count cannot have moved, and the comment pass calls this
     // once per key (ScanController's on-device pass), so it must not pay a whole-project fetch.
-    markDirty(records: false)
+    markDirty()
     return true
   }
 
@@ -1041,7 +1041,7 @@ final class LocalizationStore {
       self.catalog = catalog
       saveError = nil
       buildRows()
-      markDirty(records: false)
+      markDirty()
       return
     }
     let context = TranslationStore.shared.context
@@ -1185,10 +1185,14 @@ final class LocalizationStore {
   /// not a Translate run, not the plural skeletons a run creates.
   func save() async {
     guard let catalog, let url = project?.catalogURL ?? catalogURL else { return }
+    // The write is awaited, and edits keep landing while it runs: only an edit
+    // made BEFORE the snapshot is on disk now, so the flag clears only when
+    // nothing marked the catalog dirty in between.
+    let snapshot = dirtyGeneration
     do {
       try await CatalogFileIO.write(catalog, to: url)
       saveError = nil
-      isDirty = false
+      if dirtyGeneration == snapshot { isDirty = false }
     } catch {
       saveError = error.localizedDescription
     }
@@ -1525,7 +1529,7 @@ final class LocalizationStore {
     // have (the load changed a slot's shape), so Save is live and the unsaved-changes prompt will
     // say so — `finishLoad`/`adopt` clear the flag for a freshly parsed catalog, and this is the
     // one case where that would be a lie.
-    if reshaped { markDirty(records: false) }
+    if reshaped { markDirty() }
     submitMirror(
       catalog, url: url, generation: generation, policy: policy,
       shapeConflicts: shapeConflicts)
@@ -1954,21 +1958,14 @@ final class LocalizationStore {
   /// Every catalog mutation funnels here instead of writing: the artifact is
   /// only written by `save()`, so an edit is durable in the DB (records) and
   /// pending on disk until the user saves.
-  /// The one funnel every mutation goes through: the dirty flag Save reads, and the needs-review
-  /// count the sidebar badge shows.
-  ///
-  /// The count is rebuilt HERE — where records change — and never on a render (2026-09-15: as a
-  /// computed property it walked `project.records` from a view body and cost seconds of CPU per
-  /// frame on a real project, which is what pegged a core while a run worked).
-  ///
-  /// `records: false` is for a mutation that touches ONLY the catalog — a generated comment, a
-  /// source form — where the count cannot have moved. It matters because the rebuild is a FETCH over
-  /// the whole project (0.50 s for 26 156 rows, measured), so a pass that writes one comment PER KEY
-  /// paid that fetch per key: reader, 2026-09-15, "Generating comments taking very long time caused
-  /// by `markDirty()` inside `setGeneratedComment`".
-  private func markDirty(records changed: Bool = true) {
+  private func markDirty() {
     isDirty = true
+    dirtyGeneration += 1
   }
+
+  /// Bumped by every `markDirty`, so a Save that was in flight while an edit
+  /// landed can tell that its snapshot is not the latest catalog.
+  private var dirtyGeneration = 0
 
   // MARK: - rows
 
