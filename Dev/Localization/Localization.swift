@@ -2252,18 +2252,14 @@ final class LocalizationStore {
   }
 
   /// Missing count for one language over the base key set (respects the
-  /// non-translatable toggle, ignores search/filter).
+  /// non-translatable toggle, ignores search/filter). Reads the same
+  /// `LangCell.isMissing` the Missing filter does, so a plural slot counts by
+  /// its forms and the footer and the filter cannot disagree.
   func missingCount(for language: String) -> Int {
-    guard let catalog else { return 0 }
-    var count = 0
-    for (key, entry) in catalog.strings {
-      if !includeNonTranslatable && entry.shouldTranslate == false { continue }
-      let hasOverride = valueOverrides[key]?[language] != nil
-      if !catalog.hasValue(for: key, language: language) && !hasOverride {
-        count += 1
-      }
+    rows.reduce(0) { count, row in
+      guard includeNonTranslatable || row.isTranslatable else { return count }
+      return row.cells[language]?.isMissing ?? true ? count + 1 : count
     }
-    return count
   }
 }
 
