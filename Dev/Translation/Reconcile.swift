@@ -1766,6 +1766,18 @@ nonisolated enum Reconcile {
 
   // MARK: - merge (DB -> in-memory catalog)
 
+  /// True when a file-origin (unowned) record's STATE is no longer the one the
+  /// file's own state seeds — i.e. something in the app moved it, which today
+  /// is a row review (`applyReviewState`): confirming or un-confirming a value
+  /// that came from the file changes the state and nothing else. That is an
+  /// edit the artifact has to learn on Save; without this test the passive rule
+  /// below kept the file's state, and the next reload re-mirrored it over the
+  /// review. A record that still carries the file's seed (Xcode's raw `new`
+  /// reads as `needs_review`) is left alone, so the raw state is not rewritten.
+  private static func appMovedState(_ record: TranslationRecord, fileState: String?) -> Bool {
+    seedState(fileState: fileState) != record.state
+  }
+
   /// Merges the working store into a copy of the parsed catalog — the pure,
   /// in-memory half of the former `commit`. The artifact write itself is
   /// scheduled by the caller through CatalogFileIO (background, coalesced),
@@ -1819,9 +1831,11 @@ nonisolated enum Reconcile {
         if current == value && currentState == fileState {
           continue  // file already carries this form
         }
-        let owned = record.provider != nil || record.edits?.isEmpty == false
-        if !owned && (current == value || current == nil) {
-          continue  // file-origin seed: passive, the artifact wins
+        // A file-origin seed is passive — the artifact wins — unless the app moved
+        // its STATE (a row review): see `appMovedState`.
+        if !isOwned(record), current == nil
+          || (current == value && !appMovedState(record, fileState: currentState)) {
+          continue
         }
         updated.setPluralValue(value, state: fileState, key: record.key, language: record.language, category: category)
         changed = true
@@ -1842,8 +1856,8 @@ nonisolated enum Reconcile {
       if valueMatches && stateMatches {
         continue  // file already carries this row
       }
-      let owned = record.provider != nil || record.edits?.isEmpty == false
-      if !owned && (valueMatches || current == nil) {
+      if !isOwned(record), current == nil
+        || (valueMatches && !appMovedState(record, fileState: current?.state)) {
         // File-origin seed: the value already matches (leave the file's raw
         // state alone), or the unit vanished from the file (the artifact
         // wins — the next reload refreshes this unowned record to empty).
