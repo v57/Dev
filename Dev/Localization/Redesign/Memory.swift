@@ -104,11 +104,16 @@ extension Translation {
     /// entry per lesson of its batch — and it is passed STRAIGHT to `Store.upsert`: every
     /// `context.save()` is its own transaction, so the batch writes through and the caller saves
     /// once (`Store.save`), the shape `Project.saveData` uses (7.6).
+    ///
+    /// ONE read per write: the pair's existing row decides the source language, and it IS
+    /// the row the triple names, so it is handed to the store instead of looked up again —
+    /// this runs once per row a run writes, on the main actor.
     func upsert(_ entry: Entry, saving: Bool = true) throws {
       let gold = entry.grade == .gold
+      let existing = try self.entry(source: entry.source, language: entry.language)
       let row = TranslationMemoryEntry(
         sourceText: entry.source,
-        sourceLanguage: try sourceLanguage(for: entry),
+        sourceLanguage: Self.sourceLanguage(of: existing),
         targetLanguage: entry.language,
         value: entry.value,
         // `deepseek` is the raw value of the app's hosted-model case — the one Muse
@@ -118,7 +123,17 @@ extension Translation {
         projectTag: project.id,
         contextVersions: Store.persistable(entry.versions),
         confirmedAt: gold ? .now : nil)
-      try store.upsert(row, saving: saving)
+      switch existing {
+      case nil:
+        // Nothing for the pair at all, so nothing for the triple either.
+        try store.upsert(row, over: nil, saving: saving)
+      case let existing? where !existing.sourceLanguage.isEmpty:
+        try store.upsert(row, over: existing, saving: saving)
+      default:
+        // A legacy row with no source language: the triple was named by the default, which is
+        // not this row's, so the store looks the triple up itself.
+        try store.upsert(row, saving: saving)
+      }
     }
 
     /// Drops the hints of one language — used when a language document changes
@@ -176,11 +191,8 @@ extension Translation {
     ///      own fallback for a catalog that names none (`PipelineRunContext` and the
     ///      loader both default to it), which is what keeps ONE pair ONE row across
     ///      both writers (10.16: one store, two writers, the same records).
-    private func sourceLanguage(for entry: Entry) throws -> String {
-      guard
-        let existing = try self.entry(source: entry.source, language: entry.language),
-        !existing.sourceLanguage.isEmpty
-      else { return Self.defaultSourceLanguage }
+    private static func sourceLanguage(of existing: TranslationMemoryEntry?) -> String {
+      guard let existing, !existing.sourceLanguage.isEmpty else { return defaultSourceLanguage }
       return existing.sourceLanguage
     }
 

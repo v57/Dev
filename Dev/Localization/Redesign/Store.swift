@@ -463,8 +463,16 @@ extension Translation {
     /// its own transaction, so the batch writes through and the caller saves once
     /// (`Store.save`). A single entry still saves by default.
     func upsert(_ entry: TranslationMemoryEntry, saving: Bool = true) throws {
+      try upsert(entry, over: try entryRow(for: entry), saving: saving)
+    }
+
+    /// The same, for a caller that already holds the row the entry's triple names (nil: it
+    /// knows there is none) — so a write that just read the pair does not read it twice.
+    func upsert(
+      _ entry: TranslationMemoryEntry, over existing: TranslationMemoryEntry?, saving: Bool = true
+    ) throws {
       entry.contextVersions = Self.lifted(entry.contextVersions)
-      guard let existing = try entryRow(for: entry), existing !== entry else {
+      guard let existing, existing !== entry else {
         if entry.modelContext == nil { context.insert(entry) }
         if saving { try context.save() }
         return
