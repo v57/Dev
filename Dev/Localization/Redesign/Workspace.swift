@@ -770,9 +770,14 @@ extension Translation {
     /// one row, and an editor must not pay for a walk of the whole session to raise a flag.
     /// `publish()` is the run's shape, because a run's output is the project.
     private func publish(_ row: LocalizationKey) {
+      sessionEdits &+= 1
       guard let app, let url = catalogURL else { return markPending() }
       if app.publish(from: url, { catalog in apply(row, to: &catalog) }) { sessionDirty = true }
     }
+    /// Bumped by every human edit of a row (`publish(_ row:)`). The run's pages cache what
+    /// they derive from the session by the run's `frame`, which a human edit does not move —
+    /// this is the other half of their key.
+    private(set) var sessionEdits = 0
     /// The session owes the artifact and there is no catalog to publish it into yet.
     private func markPending() { sessionDirty = true }
 

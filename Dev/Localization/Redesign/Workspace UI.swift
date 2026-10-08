@@ -111,12 +111,18 @@ extension Translation {
       .background(.background)
     }
 
-    /// The pages' binding for a run, built once per paint: it indexes the open rows, so
-    /// a page's item lookup is a dictionary hit and not a scan of the catalog.
+    /// The pages' binding for a run — CACHED by the run's `frame` and the session's human
+    /// edits, not rebuilt per paint. Every row a run writes repaints this view (the tally
+    /// moves), and a binding is every page of a step mapped from the batches: rebuilding it
+    /// per row is what made a long run's overlay crawl. A cache hit reads neither the batches
+    /// nor the rows, so a row write alone no longer even invalidates the pages.
     private func binding(of run: Run?) -> RunBinding? {
       guard let run else { return nil }
-      return RunBinding(run: run)
+      return pages.binding(for: run, sessionEdits: workspace.sessionEdits)
     }
+
+    /// The overlay's one cached `RunBinding` (see `binding(of:)`).
+    @State private var pages = PageCache()
 
     // MARK: - the run
 
@@ -173,8 +179,8 @@ extension Translation {
     /// already reads 0 of 0 for it, and an empty pager would say the same thing worse.
     ///
     /// The row page is the one page the binding cannot fill from the run's batches —
-    /// they carry what the pass SENT, never what it wrote — so it is handed its
-    /// project's journal on the way past, through the page's own reader (4.6, 7.1).
+    /// they carry what the pass SENT, never what it wrote — so it is handed the
+    /// project's journal, as the binding copied it (4.6, 7.1).
     @ViewBuilder
     private func page(_ run: Run?, _ binding: RunBinding?) -> some View {
       if let run, let binding, let step = displayed(run) {
@@ -212,7 +218,7 @@ extension Translation {
             HorizontalTranslate.Content(
               index: binding.pageIndex(step), operations: binding.rows,
               exchanges: binding.exchanges(.horizontal),
-              journal: run.project.journal)
+              journal: binding.journal)
           }
         }
       } else {
@@ -443,8 +449,11 @@ extension Translation {
   ///
   /// One pass builds the index, so a page's item lookup is a dictionary hit rather than
   /// a scan of the catalog.
-  struct RunBinding {
+  @MainActor final class RunBinding {
     let run: Run
+    /// The project's journal as of this binding — a copy, so the row page's outcomes read the
+    /// same moment as the rows it shows.
+    let journal: HorizontalTranslate.Journal
     /// The open rows by key — where a slot's live value comes from — with the position
     /// each one sits at, which is what a page's `index` means (its fixtures index
     /// `project.data`).
@@ -456,6 +465,7 @@ extension Translation {
 
     init(run: Run) {
       self.run = run
+      journal = run.project.journal
       index = Dictionary(
         run.project.data.enumerated().map { ($0.element.key, Row(key: $0.element, position: $0.offset)) },
         uniquingKeysWith: { first, _ in first })
@@ -484,12 +494,22 @@ extension Translation {
     /// input cannot be shown beside batch M's reply. Never parsed here: the pane prints both
     /// texts as they came.
     func exchanges(_ step: Stage) -> [Run.Exchange] {
-      batches(step).map(\.exchange)
+      if let cached = exchangesByStep[step] { return cached }
+      let made = batches(step).map(\.exchange)
+      exchangesByStep[step] = made
+      return made
     }
+    private var exchangesByStep: [Stage: [Run.Exchange]] = [:]
+
+    // Each step's pages are built on first read and kept for the life of the binding.
+    private(set) lazy var prelearn = makePrelearn()
+    private(set) lazy var learn = makeLearn()
+    private(set) lazy var vertical = makeVertical()
+    private(set) lazy var rows = makeRows()
 
     /// Prelearn's pages: a source and the machine version being produced for a slot a
     /// human already settled. It is never a translation anybody reads (4.1).
-    var prelearn: [VerticalPrelearn.Operations] {
+    private func makePrelearn() -> [VerticalPrelearn.Operations] {
       batches(.prelearn).map { batch in
         VerticalPrelearn.Operations(
           language: batch.language ?? "",
@@ -510,7 +530,7 @@ extension Translation {
 
     /// Learn's pages: the difference between what the model produced and what the human
     /// settled on, and the document line each one becomes (4.1).
-    var learn: [VerticalLearn.Operations] {
+    private func makeLearn() -> [VerticalLearn.Operations] {
       batches(.learn).map { batch in
         VerticalLearn.Operations(
           language: batch.language ?? "",
@@ -531,7 +551,7 @@ extension Translation {
     }
 
     /// The column pages: one page per language batch, its items in the run's order.
-    var vertical: [VerticalTranslate.Operations] {
+    private func makeVertical() -> [VerticalTranslate.Operations] {
       batches(.vertical).map { batch in
         var group = VerticalTranslate.Operations(
           language: batch.language ?? "",
@@ -557,7 +577,7 @@ extension Translation {
     /// The row pages: one page per row batch, and a page per ROW rather than per item —
     /// a request carries every language of the row, so the batch is flat and the page is
     /// not (4.6).
-    var rows: [HorizontalTranslate.Operations] {
+    private func makeRows() -> [HorizontalTranslate.Operations] {
       batches(.horizontal).map { batch in
         HorizontalTranslate.Operations(
           items: Self.rows(of: batch).map { items in
@@ -636,6 +656,29 @@ extension Translation {
     private func target(_ item: Run.Item) -> StringBody {
       let live = slot(item)?.target ?? .empty
       return live.isEmpty ? item.target : live
+    }
+  }
+
+  /// The overlay's cached `RunBinding`: rebuilt only when the run, its `frame` or the
+  /// session's human edits move. What the binding reads beyond those — the session's rows,
+  /// the journal — is read at build time, so a page lags a row write by at most one frame
+  /// (`Runner.publishWindow`), which is the pace the pages were already published at.
+  @MainActor final class PageCache {
+    private struct Key: Equatable {
+      let run: ObjectIdentifier
+      let frame: Int
+      let sessionEdits: Int
+    }
+    private var key: Key?
+    private var cached: RunBinding?
+
+    func binding(for run: Run, sessionEdits: Int) -> RunBinding {
+      let key = Key(run: ObjectIdentifier(run), frame: run.frame, sessionEdits: sessionEdits)
+      if key == self.key, let cached { return cached }
+      let made = RunBinding(run: run)
+      self.key = key
+      cached = made
+      return made
     }
   }
 

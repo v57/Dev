@@ -64,7 +64,15 @@ extension Translation {
     /// interrupted run resumes at the next unstarted batch instead of re-billing
     /// the finished ones.
     var batchIndex: Int = 0
-    var batches: [Batch] = []
+    /// Every change bumps `frame`. Batches change at a bounded rate — when a batch goes out
+    /// or ends, and mid-flight at most once per `Runner.publishWindow` — while the session's
+    /// rows change on every row written, so the pages cache what they derive by `frame`
+    /// (`RunBinding`) rather than repaint per row.
+    var batches: [Batch] = [] {
+      didSet { frame &+= 1 }
+    }
+    /// See `batches`.
+    private(set) var frame = 0
     var tally = Tally()
     /// Everything the run has to report. `failure` is the one the status bar and
     /// an alert show; the list is what the run's own report keeps, because a run
