@@ -1768,12 +1768,16 @@ extension Translation {
           }
         }
         if let machine = form.machine { record.machine = machine }
-        // Provenance. A gold entry is the human's value, so the record says who
-        // vouched for it (`manual`, as the old pipeline's memory resolve left it),
-        // and a value memory answered names translation memory as its editor instead
-        // of a model that was never asked.
-        record.provider = write.memory == .gold ? .manual : .deepseek
-        record.lastEditor = write.memory == nil ? write.model : Self.memoryEditor
+        // Provenance — of the VALUE, so only a write of the value moves it. A
+        // machine-only write (prelearn: the human owns the value) leaves the
+        // record's producer exactly as it was (4.1). A gold entry is the human's
+        // value, so the record says who vouched for it (`manual`), and a value
+        // memory answered names translation memory as its editor instead of a
+        // model that was never asked.
+        if write.target != nil {
+          record.provider = write.memory == .gold ? .manual : .deepseek
+          record.lastEditor = write.memory == nil ? write.model : Self.memoryEditor
+        }
         if let versions = write.versions { record.contextVersions = Store.persistable(versions) }
         try store.upsert(record, saving: false)
         // The journal is the value's before -> after, so a write that only records
