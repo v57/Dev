@@ -1684,6 +1684,7 @@ extension Translation {
       guard !writes.isEmpty else { return true }
       var before: [SlotPosition: LocalizationString] = [:]
       var current: SlotWrite?
+      var journal: [HorizontalTranslate.Write] = []
       do {
         for write in writes {
           current = write
@@ -1692,7 +1693,7 @@ extension Translation {
             run.project.data[write.row].targets.indices.contains(write.slot) {
             before[position] = run.project.data[write.row].targets[write.slot]
           }
-          try persist(write, of: batch, in: run)
+          journal += try persist(write, of: batch, in: run)
         }
         if saving {
           try store.save()
@@ -1700,6 +1701,9 @@ extension Translation {
           // The rows are written but not flushed: the batch's own end commits them (`commit`).
           pendingWrites = true
         }
+        // The journal rows this batch appended, onto the session's in-memory copy — only once
+        // the batch has landed, so a rolled-back write never claims a change.
+        run.project.recordJournal(journal)
         return true
       } catch {
         // A write that threw mid-batch leaves the rows ALREADY landed where they are: they are
@@ -1743,7 +1747,13 @@ extension Translation {
     /// transaction and pays the one `Store.save()` (`writeBack`). A failure is THROWN rather
     /// than reported here, so the batch's owner can roll the whole batch back before it reports
     /// it — a write that cannot be finished must leave nothing pending behind it.
-    private func persist(_ write: SlotWrite, of batch: Run.Batch, in run: Run) throws {
+    /// Answers the journal rows it appended (`HorizontalTranslate.Write`), for the caller to
+    /// hand to the session once the whole batch has landed.
+    @discardableResult
+    private func persist(
+      _ write: SlotWrite, of batch: Run.Batch, in run: Run
+    ) throws -> [HorizontalTranslate.Write] {
+      var journal: [HorizontalTranslate.Write] = []
       var slot = run.project.data[write.row].targets[write.slot]
       if let target = write.target { slot.target = target }
       if let machine = write.machine { slot.machine = machine }
@@ -1793,6 +1803,8 @@ extension Translation {
               contextVersions: Store.persistable(write.versions ?? .none),
               isUserConfirmed: false),
             saving: false)
+          journal.append(HorizontalTranslate.Write(
+            key: write.key, language: write.language, from: before ?? "", to: record.value ?? ""))
         }
       }
       // What a translate stage produced is kept as a HINT in translation memory
@@ -1833,6 +1845,7 @@ extension Translation {
       } else {
         run.tally.resolved[batch.stage, default: 0] += 1
       }
+      return journal
     }
 
     /// The records one write touches: one per category for a plural slot (how the

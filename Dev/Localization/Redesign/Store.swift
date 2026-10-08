@@ -424,7 +424,11 @@ extension Translation {
     /// has to read the relationship anyway, so nothing is saved by narrowing the query.
     func edits(project: String, confirmedOnly: Bool = true) throws -> [TranslationEdit] {
       guard let owner = try projectRow(id: project)?.persistentModelID else { return [] }
-      return try context.fetch(FetchDescriptor<TranslationEdit>())
+      // The filter reads `edit.record` for every row, so the records come with the fetch
+      // instead of faulting in one at a time.
+      var descriptor = FetchDescriptor<TranslationEdit>()
+      descriptor.relationshipKeyPathsForPrefetching = [\.record]
+      return try context.fetch(descriptor)
         .filter { $0.record?.project?.persistentModelID == owner }
         .filter { !confirmedOnly || $0.isUserConfirmed }
         .sorted { $0.createdAt < $1.createdAt }

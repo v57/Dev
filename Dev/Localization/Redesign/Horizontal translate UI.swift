@@ -31,13 +31,44 @@ extension Translation.HorizontalTranslate {
     let to: String
   }
 
+  /// The journal as the page READS it: one column's writes at a time.
+  ///
+  /// The page asks one question per column — "what did the latest write that left this
+  /// value say before it?" — so the rows are kept by (key, language), oldest first within
+  /// a column. A lookup is then the column's own handful of writes instead of a scan of
+  /// the project's whole history, which is what it was: per column, per redraw.
+  struct Journal: Equatable {
+    private var columns: [Column: [Write]] = [:]
+
+    private struct Column: Hashable {
+      let key: String
+      let language: String
+    }
+
+    init(_ writes: [Write] = []) {
+      append(contentsOf: writes)
+    }
+
+    /// Adds writes in the order they happened.
+    mutating func append(contentsOf writes: [Write]) {
+      for write in writes {
+        columns[Column(key: write.key, language: write.language), default: []].append(write)
+      }
+    }
+
+    /// One column's writes, oldest first.
+    func writes(key: String, language: String) -> [Write] {
+      columns[Column(key: key, language: language)] ?? []
+    }
+  }
+
   /// One project's journal, oldest first, as this page reads it.
   ///
-  /// A synchronous main-actor fetch (7.1), and the ONE thing the page reads that the
-  /// run's batches do not carry — which is why the live page is handed it rather
-  /// than fetching per column: a page per batch is one read. Machine writes only
-  /// (`editor == .provider`): what the page reports is what this PASS did, and a
-  /// human's edit is not its work.
+  /// A synchronous main-actor fetch (7.1) of the whole edit table, so it is read ONCE per
+  /// project session (`Project.journal`) and kept current from then on by the runner's own
+  /// write-back — never per page, and never per redraw. Machine writes only
+  /// (`editor == .provider`): what the page reports is what this PASS did, and a human's
+  /// edit is not its work.
   static func journal(of project: Translation.Project) -> [Write] {
     let edits = (try? project.global.store.edits(project: project.id, confirmedOnly: false)) ?? []
     return edits.compactMap { edit in
@@ -57,10 +88,10 @@ extension Translation.HorizontalTranslate {
     /// batch, so its exchange is the entry at the page's own offset; a caller that supplies none
     /// gets the "nothing sent yet" reading on both halves rather than a crash.
     var exchanges: [Translation.Run.Exchange] = []
-    /// The journal this page reads (`Write`): the live page is handed its project's
-    /// (`journal(of:)`), the design preview its sample's. Empty is legal and shows
+    /// The journal this page reads (`Journal`): the live page is handed its project's
+    /// (`Project.journal`), the design preview its sample's. Empty is legal and shows
     /// the pre-pass reading only — no write is claimed without evidence.
-    var journal: [Write] = []
+    var journal = Journal()
     @State var scrollPosition: Int?
     /// When this page last followed the run to a batch. Seeded `.distantPast`, so the FIRST
     /// appearance never waits: a page opened mid-run goes straight to the batch the run is on,
@@ -115,7 +146,7 @@ extension Translation.HorizontalTranslate {
     @State var rowPosition: Int?
     /// The journal, so the page can tell a column this pass FILLED from one it
     /// REWROTE (`outcome(_:)`). Empty claims nothing.
-    var journal: [Write] = []
+    var journal = Journal()
     /// The mark THIS row carries (8.1, "stage pages"): the row's own state, never the
     /// batch's. The page's item is a ROW, so this is the reading the page draws — and the
     /// batch's own mark, which the heading carries, never reaches a row.
@@ -200,8 +231,7 @@ extension Translation.HorizontalTranslate {
     /// about this one. (A plural slot journals one row per form, so the form the write
     /// named is the one compared.)
     func previousValue(of slot: Translation.LocalizationString, in row: Operation) -> String? {
-      journal
-        .filter { $0.key == row.key && $0.language == slot.language }
+      journal.writes(key: row.key, language: slot.language)
         .last { holds(slot, $0.to) }?
         .from
     }
@@ -655,7 +685,7 @@ extension Translation.HorizontalTranslate {
     }
 
     var body: some View {
-      Content(index: index, operations: operations, exchanges: exchanges, journal: journal)
+      Content(index: index, operations: operations, exchanges: exchanges, journal: Journal(journal))
         .task {
           do {
             for i in 0..<operations.count {

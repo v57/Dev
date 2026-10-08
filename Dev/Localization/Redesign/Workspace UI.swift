@@ -212,7 +212,7 @@ extension Translation {
             HorizontalTranslate.Content(
               index: binding.pageIndex(step), operations: binding.rows,
               exchanges: binding.exchanges(.horizontal),
-              journal: HorizontalTranslate.journal(of: run.project))
+              journal: run.project.journal)
           }
         }
       } else {

@@ -489,6 +489,26 @@ enum Translation {
     /// factory, the run's own prepare). Nil until a catalog is handed to
     /// `loadData(catalog:)`; a project with no artifact has no rows at all.
     private var catalog: StringCatalog?
+    /// The machine-write journal the row pass's page reads (`HorizontalTranslate.Journal`).
+    ///
+    /// Read from the store ONCE, on first use — the read is a fetch of the whole edit table
+    /// (`HorizontalTranslate.journal(of:)`) — and kept current from then on by the runner's
+    /// write-back (`recordJournal`), which is the only writer of machine edits. Not observed:
+    /// the page takes a copy with the rest of its page models, so a write does not repaint it
+    /// on its own (see `Run.frame`).
+    @ObservationIgnored private var journalCache: HorizontalTranslate.Journal?
+    var journal: HorizontalTranslate.Journal {
+      if let journalCache { return journalCache }
+      let loaded = HorizontalTranslate.Journal(HorizontalTranslate.journal(of: self))
+      journalCache = loaded
+      return loaded
+    }
+    /// Machine writes that just landed, in order. A journal nobody has read yet is left
+    /// unloaded: its first read fetches the store, which already holds these.
+    func recordJournal(_ writes: [HorizontalTranslate.Write]) {
+      guard !writes.isEmpty else { return }
+      journalCache?.append(contentsOf: writes)
+    }
     init(id: String, global: Global) throws {
       self.id = id
       self.global = global
