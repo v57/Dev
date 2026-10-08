@@ -1033,10 +1033,11 @@ private struct LanguageEditCell: View {
   }
 
   /// Override-aware, record-aware display value. Reads the live SwiftData
-  /// record so mid-run machine fills appear the moment the pipeline writes
-  /// them — before the end-of-run commit reaches the .xcstrings file.
+  /// record so mid-run machine fills appear the moment a run writes them —
+  /// before they reach the .xcstrings file. Off the CELL, never the store: a
+  /// body that reads the store's dictionaries repaints on every edit anywhere.
   private var liveText: String {
-    store.value(for: rowKey, language: language)
+    cell.liveText(language: language)
   }
 
   /// Cell tooltip: full provenance when the record carries a value
@@ -1049,7 +1050,7 @@ private struct LanguageEditCell: View {
   }
 
   private var hasOverride: Bool {
-    store.valueOverrides[rowKey]?[language] != nil
+    cell.hasOverride
   }
 
   private func commit() {
@@ -1287,15 +1288,16 @@ private struct PluralEditCell: View {
     }
   }
 
-  /// Live summary: per-form record values win mid-run, else the parsed file.
+  /// Live summary: per-form record values win mid-run, else the parsed file —
+  /// read off the cell, not the store (see `LanguageEditCell.liveText`).
   private var liveSummary: String {
-    store.pluralSummary(for: rowKey, language: language)
+    cell.liveText(language: language)
   }
 
   private var helpText: String {
     let lines = PluralRules.categories(for: language).map { category in
-      let value = store.pluralValue(for: rowKey, language: language, category: category)
-      let record = store.pluralRecords(for: rowKey, language: language)[category]
+      let value = cell.formValue(category)
+      let record = cell.pluralRecords[category]
       let marker: String
       if let record, record.state != .empty {
         marker = record.state == .reviewed ? "✓" : "!"

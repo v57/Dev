@@ -108,6 +108,32 @@ struct LangCell {
   /// flat cells. Each form is a full translation slot with its own value,
   /// state and provenance.
   let pluralRecords: [String: TranslationRecord]
+  /// The parsed file's value per plural form (category -> value), for plural cells. The
+  /// live text falls back to it where a form's record carries nothing.
+  var fileForms: [String: String] = [:]
+
+  /// What the cell shows right now — the same answer `LocalizationStore.value(for:)` /
+  /// `pluralSummary(for:)` give, read off the cell's OWN records, so a cell repaints when
+  /// its record moves and not whenever anything in the store does.
+  ///
+  /// Flat: the override, else the record's value (a run's fill lands there before the
+  /// catalog hears of it), else the file's. Plural: one "category: value" per form.
+  func liveText(language: String) -> String {
+    if hasPlurals {
+      return PluralRules.categories(for: language).map { category in
+        "\(category): \(formValue(category))"
+      }.joined(separator: " / ")
+    }
+    if hasOverride { return text }
+    if let value = record?.value, !value.isBlankOrEmpty { return value }
+    return text
+  }
+
+  /// One plural form's live value: its record's when it has one, else the file's.
+  func formValue(_ category: String) -> String {
+    if let value = pluralRecords[category]?.value, !value.isBlankOrEmpty { return value }
+    return fileForms[category] ?? ""
+  }
 
   /// No value at all: no parsed unit, no override, and no variations to show.
   /// Plural slots are missing only when no form carries anything.
@@ -1093,9 +1119,12 @@ final class LocalizationStore {
     valueOverrides[key, default: [:]][language] = text
     // Only a real value is durable. Clearing a cell to empty is a display
     // affordance in this phase (shows "missing" until Reload) — it never
-    // deletes the file's translation, so it has nothing to write through.
+    // deletes the file's translation, so it has nothing to write through, and
+    // only the row is rebuilt for the cell to show it.
     if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
       writeThrough(text: text, key: key, language: language)
+    } else {
+      rebuildRows([key])
     }
   }
 
@@ -2185,7 +2214,8 @@ final class LocalizationStore {
           hasPlurals: true,
           isEditable: translatable,
           record: nil,
-          pluralRecords: forms)
+          pluralRecords: forms,
+          fileForms: (units ?? [:]).compactMapValues(\.value))
         continue
       }
       // Flat slot: tally + one cell in the same pass.
