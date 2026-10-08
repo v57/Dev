@@ -39,7 +39,7 @@ struct ControlsBar: ToolbarContent {
       .keyboardShortcut("s")
       .disabled(!store.canSave)
       .help(store.canSave
-        ? "Write the edited catalog to \\(store.unsavedCatalogName) — nothing saves on its own"
+        ? "Write the edited catalog to \(store.unsavedCatalogName) — nothing saves on its own"
         : "No unsaved changes")
       Button {
         Task { await store.reload() }
