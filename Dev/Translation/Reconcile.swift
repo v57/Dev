@@ -486,9 +486,8 @@ nonisolated enum Reconcile {
   final class FileWriteLog {
     private(set) var writes: [FileWrite] = []
 
-    /// The records this pass INSERTED — the membership write at the pass's tail needs them,
-    /// because nothing else links them to the project (`upsertFromCatalog` skips its own bulk
-    /// append while the app is live).
+    /// The records this pass INSERTED — the repair after the commit matches orphans against
+    /// them (see `mirrorOffMainActor`).
     var created: [TranslationRecord] {
       writes.compactMap {
         if case .created(let record) = $0 { return record }
@@ -1144,7 +1143,14 @@ nonisolated enum Reconcile {
       // member and nullifies its inverse (probe: the app's mid-pass row came out `project = nil`
       // with both shapes, and the to-one form costs 3x here). So this stays the cheap shape and
       // `mirrorOffMainActor` re-links what the commit dropped.
-      project.records = (project.records ?? []) + created
+      //
+      // With live writers the membership is READ BACK from the store first, the way the
+      // plural and language passes do it: the relationship on this (cold, background)
+      // context is a snapshot that predates whatever the app linked meanwhile — and
+      // faulting it costs seconds on a big catalog. The pass's own inserts are not in
+      // the fetch (they are not linked yet), so nothing is listed twice.
+      let members = liveWriters ? records(of: project, in: context) : (project.records ?? [])
+      project.records = members + created
     }
     // The CALLER saves: the background mirror reports a failed write to the
     // user, so the save cannot be a swallowed `try?` in here.
