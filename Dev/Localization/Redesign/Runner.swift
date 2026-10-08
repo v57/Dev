@@ -2220,6 +2220,16 @@ extension Translation {
     /// A form whose source text is EMPTY is not required to say anything, and a form the reply
     /// left empty where its source says nothing is not a defect either.
     ///
+    /// ONLY `other` IS HELD TO THE EXACT SET. A form that names one particular count may
+    /// spell the number out instead of printing it — Arabic `zero` ("لا ملفات") and `two`
+    /// ("ملفان"), an English `one` written "One file" — so any other form may OMIT a token,
+    /// but every token it does use must be one the source uses somewhere. The converse
+    /// case is the one that used to fail: an English `one` without `%lld` against a Russian
+    /// `one`, which must print the number (it also covers 21, 31, …).
+    ///
+    /// Positions are compared without their `N$` index: `%@ %@` answered as `%2$@ %1$@` is a
+    /// reordering, which is what the index is for.
+    ///
     /// An answer IDENTICAL to its source is NOT a defect (reader, 2026-09-14: "Start is
     /// start in danish, symbol is symbol"). A language reuses a source word far more
     /// often than a check can tell, and the reviewer sees the slot — so sameness is
@@ -2234,15 +2244,22 @@ extension Translation {
     static func defects(_ answer: StringBody, of source: StringBody) -> [Defect] {
       guard !answer.isEmpty else { return [.empty] }
       var defects: [Defect] = []
+      let anywhere = Set(comparable(placeholders(in: everything(source))))
       for (category, text) in forms(of: answer) {
         let reference = category.map { self.reference($0, of: source) } ?? whole(source)
         let expected = placeholders(in: reference).sorted()
         let got = placeholders(in: text).sorted()
+        let matches: Bool
+        if let category, category != Plural.Rule.other.rawValue {
+          matches = comparable(got).allSatisfy(anywhere.contains)
+        } else {
+          matches = comparable(expected) == comparable(got)
+        }
         if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !expected.isEmpty {
           // Nothing was answered for a form whose source says something: a placeholder check
           // would call this "changed" (no tokens against some), which is not what happened.
           defects.append(.emptyForm(category: category ?? "other"))
-        } else if expected != got {
+        } else if !matches {
           defects.append(.placeholders(category: category, expected: expected, got: got))
         }
       }
@@ -2266,6 +2283,29 @@ extension Translation {
       if let own = plural.values.first(where: { $0.rule.rawValue == category }) { return own.value }
       if let other = plural.values.first(where: { $0.rule == .other }) { return other.value }
       return whole(source)
+    }
+
+    /// Every text a source body carries, flat or form by form — the tokens a non-`other` form
+    /// may draw from.
+    private static func everything(_ source: StringBody) -> String {
+      guard case .plural(let plural) = source else { return whole(source) }
+      return plural.values.map(\.value).joined(separator: " ")
+    }
+
+    /// `text` with `source`'s leading and trailing whitespace (none for a source that is all
+    /// whitespace).
+    private static func keepingEdges(of source: String, _ text: String) -> String {
+      let leading = source.prefix { $0.isWhitespace }
+      guard leading.count < source.count else { return text }
+      let trailing = source.reversed().prefix { $0.isWhitespace }.reversed()
+      return String(leading) + text + String(trailing)
+    }
+
+    /// Tokens in the form they are compared in: sorted, a printf specifier's positional
+    /// index (`%2$@` → `%@`) removed.
+    private static func comparable(_ tokens: [String]) -> [String] {
+      tokens.map { $0.replacingOccurrences(of: #"^%\d+\$"#, with: "%", options: .regularExpression) }
+        .sorted()
     }
 
     /// Everything a source body says: its text for a flat value, its `other` form for a plural
@@ -2299,7 +2339,12 @@ extension Translation {
     /// language has it), because turning the slot flat would break that parallel.
     static func decode(_ answer: String, for item: Run.Item, language: String) -> StringBody {
       let text = answer.trimmingCharacters(in: .whitespacesAndNewlines)
-      guard expectsPlural(item) else { return .value(text) }
+      guard expectsPlural(item) else {
+        // The reply is trimmed on the way in (a model pads freely), so the source's own
+        // leading and trailing whitespace — `"Name: "` — is put back rather than lost.
+        guard case .value(let source) = item.payloadSource, !text.isEmpty else { return .value(text) }
+        return .value(keepingEdges(of: source, text))
+      }
       var plural = Plurals(language: language)
       if let object = object(from: text) {
         for index in plural.values.indices {
