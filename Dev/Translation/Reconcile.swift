@@ -1621,6 +1621,13 @@ nonisolated enum Reconcile {
     let records = (project.records ?? []).filter { $0.key == key }
     // The line folded by a previous save — retracted or replaced, if any.
     let previous = records.compactMap(\.noteFoldedText).first { !$0.isEmpty }
+    // The line this note owns in the project doc: empty for a memo and for a
+    // cleared note, so one path folds, replaces AND retracts — a note that turns
+    // into a memo takes its rule out of the translator's context, the same rule
+    // the redesign's `Workspace.setNote` follows. The doc is one rule per line, so
+    // a multi-line note folds as ONE line; otherwise it could never be found
+    // again to replace or retract.
+    let rule = scope == .project ? ruleLine(trimmed) : ""
 
     for record in records {
       record.note = trimmed.isEmpty ? nil : trimmed
@@ -1628,19 +1635,39 @@ nonisolated enum Reconcile {
       record.updatedAt = .now
     }
 
-    guard scope == .project else {
-      try? context.save()  // a memo never leaves the DB
-      return records.count
+    if rule != (previous ?? "") {
+      // A rule another key still owns stays in the doc: two notes can say the same
+      // thing, and retracting one must not silently drop the other.
+      let shared = previous.map {
+        isFolded($0, byAnotherKeyThan: key, in: Reconcile.records(of: project, in: context))
+      } ?? false
+      foldProjectRule(
+        line: rule, previous: shared ? nil : previous, key: key, project: project,
+        context: context)
     }
-
-    foldProjectRule(
-      line: trimmed, previous: previous, key: key, project: project, context: context)
     for record in records {
-      record.noteFoldedText = trimmed.isEmpty ? nil : trimmed
-      record.noteFoldedAt = trimmed.isEmpty ? nil : .now
+      record.noteFoldedText = rule.isEmpty ? nil : rule
+      record.noteFoldedAt = rule.isEmpty ? nil : .now
     }
     try? context.save()
     return records.count
+  }
+
+  /// A note as the single line it folds into the project doc: every run of
+  /// whitespace that contains a line break becomes one space.
+  private static func ruleLine(_ note: String) -> String {
+    note.split(whereSeparator: \.isNewline)
+      .map { $0.trimmingCharacters(in: .whitespaces) }
+      .filter { !$0.isEmpty }
+      .joined(separator: " ")
+  }
+
+  /// True when some record of a key OTHER than `key` still carries `line` as its
+  /// folded rule.
+  private static func isFolded(
+    _ line: String, byAnotherKeyThan key: String, in records: [TranslationRecord]
+  ) -> Bool {
+    records.contains { $0.key != key && $0.noteFoldedText == line }
   }
 
   /// Applies ONE rule line to the project doc: replaces the previously folded
