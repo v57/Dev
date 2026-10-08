@@ -661,17 +661,25 @@ final class LocalizationStore {
   ///
   /// The RECORDS are the redesign's own to write (a run's write-back, `saveData`),
   /// so nothing here re-mirrors the file. What this owes the browser is the derived
-  /// half of a catalog change — the record index and the rows — rebuilt exactly as
-  /// a row-scoped edit rebuilds them (`saveRow`).
+  /// half of a catalog change — the record index and the rows. `keys` names the rows
+  /// the edit touched when the caller knows them (one row a human edited): only those
+  /// are re-read and rebuilt, the way a row-scoped edit is (`saveRow`). Nil — a whole
+  /// run's results — rebuilds everything.
   @discardableResult
-  func publish(from url: URL, _ edit: (inout StringCatalog) -> Bool) -> Bool {
+  func publish(
+    from url: URL, keys: Set<String>? = nil, _ edit: (inout StringCatalog) -> Bool
+  ) -> Bool {
     guard let open = catalog, catalogURL == url else { return false }
     var updated = open
     guard edit(&updated) else { return false }
     catalog = updated
     saveError = nil
-    rebuildRecordIndex()
-    buildRows()
+    if let keys {
+      refreshKeys(keys)
+    } else {
+      rebuildRecordIndex()
+      buildRows()
+    }
     markDirty()
     return true
   }
@@ -694,7 +702,7 @@ final class LocalizationStore {
     self.catalog = catalog
     saveError = nil
     markDirty()
-    mirrorOpenCatalog(catalog, url: project.catalogURL)
+    mirrorOpenCatalog(catalog, url: project.catalogURL, keys: [key])
   }
 
   /// Row-menu "Remove plural variations": collapses every plural slot of the
@@ -704,14 +712,14 @@ final class LocalizationStore {
     guard var catalog, let project else { return }
     catalog.removePlurals(key: key)
     let context = TranslationStore.shared.context
-    for record in project.records ?? [] where record.key == key && record.category != nil {
+    for record in Reconcile.records(ofKey: key, in: project) where record.category != nil {
       context.delete(record)
     }
     try? context.save()
     self.catalog = catalog
     saveError = nil
     markDirty()
-    mirrorOpenCatalog(catalog, url: project.catalogURL)
+    mirrorOpenCatalog(catalog, url: project.catalogURL, keys: [key])
   }
 
   /// Row-menu "Don't translate" / "Needs translate": flips the catalog's
@@ -729,7 +737,7 @@ final class LocalizationStore {
     catalog.strings[key] = entry
     if !translatable {
       let context = TranslationStore.shared.context
-      for record in project.records ?? [] where record.key == key {
+      for record in Reconcile.records(ofKey: key, in: project) {
         context.delete(record)
       }
       try? context.save()
@@ -737,8 +745,7 @@ final class LocalizationStore {
     self.catalog = catalog
     saveError = nil
     markDirty()
-    rebuildRecordIndex()
-    mirrorOpenCatalog(catalog, url: project.catalogURL)
+    mirrorOpenCatalog(catalog, url: project.catalogURL, keys: [key])
   }
 
   /// Marks a whole row (key) `reviewed` / `needs_review` across every filled
@@ -782,7 +789,7 @@ final class LocalizationStore {
     let context = TranslationStore.shared.context
     Reconcile.applyNote(
       key: key, note: note, scope: scope, project: project, context: context)
-    buildRows()
+    refreshKeys([key])
   }
 
   /// The project context body — the human-authored rule set the translator
@@ -811,7 +818,7 @@ final class LocalizationStore {
     Reconcile.applyMaxWidth(
       key: key, width: width, project: project,
       context: TranslationStore.shared.context)
-    buildRows()
+    refreshKeys([key])
   }
 
   // MARK: - imported-DB human confirm
@@ -871,7 +878,7 @@ final class LocalizationStore {
   /// one key becomes human-reviewed in one click.
   func confirmAutoReviewedRow(_ key: String) {
     guard let project else { return }
-    for record in project.records ?? [] where record.key == key && record.autoReviewed {
+    for record in Reconcile.records(ofKey: key, in: project) where record.autoReviewed {
       confirmAutoReviewed(record)
     }
     saveRow(key)
@@ -890,7 +897,9 @@ final class LocalizationStore {
     let merged = Reconcile.merge(catalog, project: project, keys: [key])
     self.catalog = merged.catalog
     saveError = nil
-    buildRows()
+    // The edit may have created the slot's record (a first value), so the key is re-read,
+    // and only its row is rebuilt.
+    refreshKeys([key])
     if merged.changed {
       markDirty()
     }
@@ -1022,7 +1031,7 @@ final class LocalizationStore {
     catalog.strings[key]?.comment = trimmed
     self.catalog = catalog
     saveError = nil
-    buildRows()
+    rebuildRows([key])
     // A COMMENT is not record state: the count cannot have moved, and the comment pass calls this
     // once per key (ScanController's on-device pass), so it must not pay a whole-project fetch.
     markDirty()
@@ -1040,7 +1049,7 @@ final class LocalizationStore {
       catalog.setSourcePluralValue(text, key: key, category: category)
       self.catalog = catalog
       saveError = nil
-      buildRows()
+      rebuildRows([key])
       markDirty()
       return
     }
@@ -1061,7 +1070,7 @@ final class LocalizationStore {
       }
       self.catalog = catalog
       saveError = nil
-      buildRows()
+      rebuildRows([key])
       markDirty()
       return
     }
@@ -1078,7 +1087,7 @@ final class LocalizationStore {
     let parsed = catalog?.rawValue(for: key, language: language) ?? ""
     if text == parsed {
       removeOverride(key: key, language: language)
-      buildRows()
+      rebuildRows([key])
       return
     }
     valueOverrides[key, default: [:]][language] = text
@@ -1886,23 +1895,36 @@ final class LocalizationStore {
   var isSyncing: Bool { StoreWork.shared.isBusy }
 
   /// Re-mirrors the OPEN catalog into the DB on the main actor and refreshes
-  /// the derived rows — the per-key mutations' path (scan merge, plural
-  /// vary/remove, don't-translate): one key's slots, cheap enough to run
-  /// inline, unlike the whole-catalog mirror.
-  private func mirrorOpenCatalog(_ catalog: StringCatalog, url: URL) {
+  /// the derived rows — the per-key mutations' path (plural vary/remove,
+  /// don't-translate: `keys` names the one key, so only its slots are upserted
+  /// and only its row is rebuilt) and the scan merge's (new keys anywhere, so
+  /// the whole catalog).
+  private func mirrorOpenCatalog(_ catalog: StringCatalog, url: URL, keys: Set<String>? = nil) {
     let context = TranslationStore.shared.context
     // The open project owns this catalog; a URL that does not match it (a
     // stale caller) falls back to the find-or-create the mirror path uses.
     let project = (self.project?.catalogURL == url ? self.project : nil)
       ?? Reconcile.ensureProject(catalogURL: url, in: context)
-    // The relationship is already materialized here (the open path faulted it
-    // in), so passing it beats a fresh 0.6 s fetch — see upsertFromCatalog.
-    _ = Reconcile.upsertFromCatalog(
-      catalog, project: project, existing: project.records ?? [], context: context)
-    try? context.save()
-    self.project = project
-    rebuildRecordIndex()
-    buildRows()
+    if let keys {
+      _ = Reconcile.upsertFromCatalog(
+        catalog, project: project,
+        existing: keys.flatMap { Reconcile.records(ofKey: $0, in: project) },
+        context: context, keys: keys)
+      try? context.save()
+      self.project = project
+      refreshKeys(keys)
+    } else {
+      // One scoped fetch for the existing rows and for the membership write
+      // (`liveWriters`): the relationship is not kept warm by anything, and a cold
+      // walk of it is seconds — see `rebuildRecordIndex`.
+      _ = Reconcile.upsertFromCatalog(
+        catalog, project: project, existing: Reconcile.records(of: project, in: context),
+        context: context, liveWriters: true)
+      try? context.save()
+      self.project = project
+      rebuildRecordIndex()
+      buildRows()
+    }
     // The scan's merge preview is a diff against the catalog — keep it
     // current while its sheet is open.
     if scan.isPresented {
@@ -1911,22 +1933,23 @@ final class LocalizationStore {
   }
 
   /// Re-indexes the project's live records by (key, language, form) for O(1)
-  /// per-cell lookups. Runs after every upsert, so newly seeded slots
-  /// (open/reload) are visible to the table immediately.
+  /// per-cell lookups — the WHOLE-project rebuild, for the events that touch the
+  /// whole project (a run's results, a language seeding, a scan merge). Row edits
+  /// re-read only their own key (`refreshKeys`).
+  ///
+  /// ONE scoped fetch (`Reconcile.records(of:in:)`), never `project.records`: no
+  /// per-edit path walks the relationship any more, so nothing keeps it warm, and
+  /// a cold walk faults every row one at a time — 4.2 s ON THE MAIN ACTOR for a
+  /// 48,420-record catalog, against ~0.6 s for the fetch.
   private func rebuildRecordIndex() {
     guard let project else {
       recordIndex = [:]
       return
     }
-    rebuildRecordIndex(from: project.records ?? [])
+    rebuildRecordIndex(from: Reconcile.records(of: project, in: TranslationStore.shared.context))
   }
 
-  /// Same, from records the caller already holds. The OPEN path passes ONE
-  /// scoped fetch (`Reconcile.records(of:in:)`) because its context is cold —
-  /// iterating `project.records` there faults every row one at a time, which
-  /// cost 4.2 s ON THE MAIN ACTOR for a 48,420-record catalog. Everything else
-  /// (row-level mutations, a mirror that just wrote) passes the relationship,
-  /// which is materialized by then and ~200x cheaper than a fresh fetch.
+  /// Same, from records the caller already holds.
   private func rebuildRecordIndex(from records: [TranslationRecord]) {
     var index: [String: [String: [String: TranslationRecord]]] = [:]
     index.reserveCapacity(records.count)
@@ -2014,12 +2037,51 @@ final class LocalizationStore {
       return
     }
     var built: [CatalogRow] = []
+    var positions: [String: Int] = [:]
     built.reserveCapacity(catalog.strings.count)
+    positions.reserveCapacity(catalog.strings.count)
     for (key, entry) in catalog.strings {
+      positions[key] = built.count
       built.append(makeRow(catalog: catalog, key: key, entry: entry))
     }
     rows = built
+    rowPositions = positions
     recomputeVisibleRows()
+  }
+
+  /// key -> its position in `rows`, kept by `buildRows` for the row-scoped rebuild.
+  private var rowPositions: [String: Int] = [:]
+
+  /// Rebuilds ONLY the rows of `keys` — an edit touches one row, and rebuilding every row
+  /// of the catalog for it (every language cell, every search haystack folded again) was
+  /// most of what an edit cost on a big catalog. Falls back to `buildRows` whenever the
+  /// shape around the rows moved: the browser's language set (a cell per language), or a
+  /// key the rows do not have yet or that the catalog no longer has.
+  private func rebuildRows(_ keys: Set<String>) {
+    guard let catalog, !rows.isEmpty else { return buildRows() }
+    let languages = computeBrowserLanguages()
+    guard languages == browserLanguages else { return buildRows() }
+    for key in keys {
+      guard let entry = catalog.strings[key], let position = rowPositions[key],
+        rows.indices.contains(position), rows[position].key == key
+      else { return buildRows() }
+      rows[position] = makeRow(catalog: catalog, key: key, entry: entry)
+    }
+    recomputeVisibleRows()
+  }
+
+  /// Re-reads `keys`' records into the index (one scoped fetch per key — an edit may have
+  /// created a record, and a run may have written one meanwhile), then rebuilds their rows.
+  private func refreshKeys(_ keys: Set<String>) {
+    guard let project else { return rebuildRows(keys) }
+    for key in keys {
+      var byLanguage: [String: [String: TranslationRecord]] = [:]
+      for record in Reconcile.records(ofKey: key, in: project) {
+        byLanguage[record.language, default: [:]][record.category ?? ""] = record
+      }
+      recordIndex[key] = byLanguage.isEmpty ? nil : byLanguage
+    }
+    rebuildRows(keys)
   }
 
   /// Recomputes `browserLanguages`: the open catalog's codes, the languages

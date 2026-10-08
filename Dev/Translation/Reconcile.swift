@@ -186,6 +186,25 @@ nonisolated enum Reconcile {
     return project.records ?? []
   }
 
+  /// ONE KEY's records of a project, by a scoped fetch.
+  ///
+  /// What every per-key path reads — a cell edit, a row review, a note, a width, a row
+  /// save — instead of walking `project.records` for the handful of rows it touches: the
+  /// relationship is the whole project (48,420 rows on a real catalog), and walking it per
+  /// edit was most of what an edit cost. A fetch also sees what other writers linked
+  /// meanwhile (a run's write-back), which an index kept on the side would not. Falls back
+  /// to the relationship for a project with no context or a predicate the store refuses.
+  static func records(ofKey key: String, in project: Project) -> [TranslationRecord] {
+    guard let context = project.modelContext else {
+      return (project.records ?? []).filter { $0.key == key }
+    }
+    let id = project.persistentModelID
+    let descriptor = FetchDescriptor<TranslationRecord>(
+      predicate: #Predicate { $0.key == key && $0.project?.persistentModelID == id })
+    if let fetched = try? context.fetch(descriptor) { return fetched }
+    return (project.records ?? []).filter { $0.key == key }
+  }
+
   /// The project whose catalog lives at `catalogURL`, or nil.
   static func existingProject(
     catalogURL: URL,
@@ -1074,7 +1093,8 @@ nonisolated enum Reconcile {
     context: ModelContext,
     policy: DifferencePolicy = .appWins,
     fileWrites: FileWriteLog? = nil,
-    liveWriters: Bool = false
+    liveWriters: Bool = false,
+    keys: Set<String>? = nil
   ) -> UpsertStats {
     var stats = UpsertStats()
 
@@ -1100,7 +1120,12 @@ nonisolated enum Reconcile {
     // catalog). Hoisted once, like `sourceLanguage`.
     let sourceLanguages = catalog.languages
     var created: [TranslationRecord] = []
-    for (key, entry) in catalog.strings {
+    // `keys` scopes the walk to the keys a per-key mutation touched; the language set stays
+    // the WHOLE catalog's, so a scoped pass seeds exactly what a whole one would for them.
+    let scope: [(key: String, entry: StringCatalog.Entry)] = keys.map { wanted in
+      wanted.compactMap { key in catalog.strings[key].map { (key, $0) } }
+    } ?? catalog.strings.map { ($0.key, $0.value) }
+    for (key, entry) in scope {
       // Non-translatable keys are hidden from the workflow entirely.
       if entry.shouldTranslate == false { continue }
       for language in sourceLanguages where language != sourceLanguage {
@@ -1149,8 +1174,15 @@ nonisolated enum Reconcile {
       // context is a snapshot that predates whatever the app linked meanwhile — and
       // faulting it costs seconds on a big catalog. The pass's own inserts are not in
       // the fetch (they are not linked yet), so nothing is listed twice.
-      let members = liveWriters ? records(of: project, in: context) : (project.records ?? [])
-      project.records = members + created
+      if keys != nil {
+        // A per-key pass links its handful of rows one by one: the bulk append below writes
+        // the WHOLE membership, which means reading all of it — the cost a per-key mutation
+        // exists to avoid — while a to-one assignment per row is only slow in bulk.
+        for record in created { record.project = project }
+      } else {
+        let members = liveWriters ? records(of: project, in: context) : (project.records ?? [])
+        project.records = members + created
+      }
     }
     // The CALLER saves: the background mirror reports a failed write to the
     // user, so the save cannot be a swallowed `try?` in here.
@@ -1422,7 +1454,7 @@ nonisolated enum Reconcile {
     category: String?,
     in project: Project
   ) -> TranslationRecord? {
-    (project.records ?? []).first { $0.key == key && $0.language == language && $0.category == category }
+    records(ofKey: key, in: project).first { $0.language == language && $0.category == category }
   }
 
   // MARK: - human edit (DB side)
@@ -1563,7 +1595,7 @@ nonisolated enum Reconcile {
   ) -> Int {
     let userName = ProcessInfo.processInfo.fullUserName
     var touched = 0
-    for record in project.records ?? [] where record.key == key {
+    for record in records(ofKey: key, in: project) {
       guard let value = record.value,
             !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
         continue
@@ -1624,7 +1656,7 @@ nonisolated enum Reconcile {
     context: ModelContext
   ) -> Int {
     let trimmed = note.trimmingCharacters(in: .whitespacesAndNewlines)
-    let records = (project.records ?? []).filter { $0.key == key }
+    let records = Reconcile.records(ofKey: key, in: project)
     // The line folded by a previous save — retracted or replaced, if any.
     let previous = records.compactMap(\.noteFoldedText).first { !$0.isEmpty }
     // The line this note owns in the project doc: empty for a memo and for a
@@ -1644,9 +1676,8 @@ nonisolated enum Reconcile {
     if rule != (previous ?? "") {
       // A rule another key still owns stays in the doc: two notes can say the same
       // thing, and retracting one must not silently drop the other.
-      let shared = previous.map {
-        isFolded($0, byAnotherKeyThan: key, in: Reconcile.records(of: project, in: context))
-      } ?? false
+      let shared = previous.map { isFolded($0, byAnotherKeyThan: key, in: project, context: context) }
+        ?? false
       foldProjectRule(
         line: rule, previous: shared ? nil : previous, key: key, project: project,
         context: context)
@@ -1669,11 +1700,21 @@ nonisolated enum Reconcile {
   }
 
   /// True when some record of a key OTHER than `key` still carries `line` as its
-  /// folded rule.
+  /// folded rule. One scoped fetch of at most one row, not a walk of the project.
   private static func isFolded(
-    _ line: String, byAnotherKeyThan key: String, in records: [TranslationRecord]
+    _ line: String, byAnotherKeyThan key: String, in project: Project, context: ModelContext
   ) -> Bool {
-    records.contains { $0.key != key && $0.noteFoldedText == line }
+    let id = project.persistentModelID
+    let folded: String? = line
+    var descriptor = FetchDescriptor<TranslationRecord>(
+      predicate: #Predicate {
+        $0.noteFoldedText == folded && $0.key != key && $0.project?.persistentModelID == id
+      })
+    descriptor.fetchLimit = 1
+    guard let count = try? context.fetchCount(descriptor) else {
+      return (project.records ?? []).contains { $0.key != key && $0.noteFoldedText == line }
+    }
+    return count > 0
   }
 
   /// Applies ONE rule line to the project doc: replaces the previously folded
@@ -1788,7 +1829,7 @@ nonisolated enum Reconcile {
     context: ModelContext
   ) -> Int {
     var touched = 0
-    for record in project.records ?? [] where record.key == key {
+    for record in records(ofKey: key, in: project) {
       record.maxWidth = width
       record.updatedAt = .now
       touched += 1
@@ -1844,8 +1885,10 @@ nonisolated enum Reconcile {
     var changed = false
     let sourceLanguage = catalog.sourceLanguage
 
+    // A scoped fetch per key for a row save; the whole relationship only for a walk of the
+    // whole project.
     let records = keys.map { wanted in
-      (project.records ?? []).filter { wanted.contains($0.key) }
+      wanted.flatMap { Reconcile.records(ofKey: $0, in: project) }
     } ?? (project.records ?? [])
     for record in records {
       guard let value = record.value,

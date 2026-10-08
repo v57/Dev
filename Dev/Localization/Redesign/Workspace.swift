@@ -772,7 +772,9 @@ extension Translation {
     private func publish(_ row: LocalizationKey) {
       sessionEdits &+= 1
       guard let app, let url = catalogURL else { return markPending() }
-      if app.publish(from: url, { catalog in apply(row, to: &catalog) }) { sessionDirty = true }
+      if app.publish(from: url, keys: [row.key], { catalog in apply(row, to: &catalog) }) {
+        sessionDirty = true
+      }
     }
     /// Bumped by every human edit of a row (`publish(_ row:)`). The run's pages cache what
     /// they derive from the session by the run's `frame`, which a human edit does not move —
