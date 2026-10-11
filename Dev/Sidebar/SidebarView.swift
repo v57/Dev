@@ -238,7 +238,7 @@ private struct ProjectlessBar: View {
 
   var body: some View {
     VStack(spacing: 2) {
-      ForEach(DevTool.allCases) { tool in
+      ForEach(DevTool.projectless) { tool in
         ProjectlessRow(tool: tool, isSelected: model.currentTool == tool) {
           model.selection = .tool(tool)
         }
@@ -490,6 +490,8 @@ private struct ProjectlessRow: View {
       CreateIconStatus()
     case .localization:
       LocalizationStatus()
+    case .release:
+      EmptyView()
     }
   }
 }
@@ -535,8 +537,8 @@ private struct ProjectlessThumbnail: View {
     switch tool {
     case .icon:
       iconThumbnail
-    case .localization:
-      Image(systemName: DevTool.localization.systemImage)
+    case .localization, .release:
+      Image(systemName: tool.systemImage)
         .font(.system(size: 15))
         .foregroundStyle(.tertiary)
     }

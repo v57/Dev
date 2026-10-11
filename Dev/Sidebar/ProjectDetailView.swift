@@ -63,6 +63,14 @@ struct ProjectDetailView: View {
             projectCatalogURL: row.catalogURL,
             projectRootURL: row.rootURL,
             onCatalogCreated: { model.refresh() })
+        case .release:
+          if let root = row.rootURL {
+            ReleaseView(root: root)
+          } else {
+            ContentUnavailableView(
+              "No project folder", systemImage: "folder.badge.questionmark",
+              description: Text("Drop the project's folder on the sidebar to release it."))
+          }
         }
       } else {
         toolPrompt
@@ -86,7 +94,7 @@ struct ProjectDetailView: View {
     ContentUnavailableView(
       "Choose a tool",
       systemImage: "wrench.and.screwdriver",
-      description: Text("Pick App Icon or Localization in the toolbar to open it for this project."))
+      description: Text("Pick App Icon, Localization or Release in the toolbar to open it for this project."))
   }
 
   /// Opens the bound catalog — only for the Localization tool, and only when

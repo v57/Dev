@@ -18,6 +18,11 @@ import SwiftData
 enum DevTool: String, Hashable, CaseIterable, Identifiable {
   case icon
   case localization
+  /// Project-bound only: a release needs a project to build.
+  case release
+
+  /// The tools the sidebar's bottom bar offers without a project.
+  static let projectless: [DevTool] = [.icon, .localization]
 
   var id: String { rawValue }
 
@@ -25,6 +30,7 @@ enum DevTool: String, Hashable, CaseIterable, Identifiable {
     switch self {
     case .icon: return "App Icon"
     case .localization: return "Localization"
+    case .release: return "Release"
     }
   }
 
@@ -32,6 +38,7 @@ enum DevTool: String, Hashable, CaseIterable, Identifiable {
     switch self {
     case .icon: return "hammer.fill"
     case .localization: return "globe"
+    case .release: return "shippingbox"
     }
   }
 }

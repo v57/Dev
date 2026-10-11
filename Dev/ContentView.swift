@@ -22,6 +22,8 @@ struct ContentView: View {
   @State private var servers = ServerStore()
   /// The Storage tool's last scan: the sidebar row and the pane read the same one.
   @State private var storage = StorageStore()
+  /// Release runs per project, kept across tool and project switches.
+  @State private var releases = ReleaseStore()
   /// The redesign's shell (Design notes 8.1): the bridge that builds a project's
   /// `Translation.Workspace` over the same SwiftData container the browser reads
   /// (10.16), so the toolbar's Start, the panes' overlays and the panes' status bars
@@ -40,6 +42,7 @@ struct ContentView: View {
     .environment(localizationStore)
     .environment(servers)
     .environment(storage)
+    .environment(releases)
     .environment(translation)
     // Unsaved-changes prompt: Reload…, Open…, a sidebar project switch and
     // quitting all hold their request here until it is answered, because
@@ -151,6 +154,8 @@ struct ContentView: View {
       CreateIconView()
     case .tool(.localization):
       LocalizationView()
+    case .tool(.release):
+      ContentUnavailableView("Select a project", systemImage: "shippingbox")
     case .project(let id):
       if let row = model.projectRow(id: id) {
         ProjectDetailView(model: model, row: row)
