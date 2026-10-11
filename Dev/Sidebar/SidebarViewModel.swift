@@ -21,8 +21,9 @@ enum DevTool: String, Hashable, CaseIterable, Identifiable {
   /// Project-bound only: a release needs a project to build.
   case release
 
-  /// The tools the sidebar's bottom bar offers without a project.
-  static let projectless: [DevTool] = [.icon, .localization]
+  /// The tools the sidebar's bottom bar offers without a project. Localization is
+  /// not one: a catalog is always a project's (a dropped .xcstrings becomes one).
+  static let projectless: [DevTool] = [.icon]
 
   var id: String { rawValue }
 

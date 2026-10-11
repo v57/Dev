@@ -152,10 +152,8 @@ struct ContentView: View {
     switch model.selection {
     case .tool(.icon):
       CreateIconView()
-    case .tool(.localization):
-      LocalizationView()
-    case .tool(.release):
-      ContentUnavailableView("Select a project", systemImage: "shippingbox")
+    case .tool(.localization), .tool(.release):
+      ContentUnavailableView("Select a project", systemImage: "sidebar.left")
     case .project(let id):
       if let row = model.projectRow(id: id) {
         ProjectDetailView(model: model, row: row)

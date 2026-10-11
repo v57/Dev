@@ -11,13 +11,12 @@ import SwiftUI
 /// per imported project, with drag-and-drop directory/catalog import — plus
 /// the PROJECTLESS tools pinned to the bottom safe area.
 ///
-/// The bottom bar carries the two tools that are NOT bound to a project,
-/// with LIVE mini-status: an app-icon thumbnail mirroring the shared
-/// CreateIcon settings/result and the open-catalog key/needs-review summary
-/// from the shared LocalizationStore. Both observables are injected by
-/// ContentView at the split level, so the rows update as the tools edit
-/// their state. Each row writes the same `.tool` selection the detail pane
-/// routes — one source of truth for what is open.
+/// The bottom bar, under a "Tools" header, carries the tools that are NOT bound
+/// to a project, with LIVE mini-status: an app-icon thumbnail mirroring the
+/// shared CreateIcon settings/result, Storage's last scan and the running VMs.
+/// The observables are injected by ContentView at the split level, so the rows
+/// update as the tools edit their state. Each row writes the selection the
+/// detail pane routes — one source of truth for what is open.
 struct SidebarView: View {
   let model: SidebarViewModel
 
@@ -212,7 +211,7 @@ private struct ProjectRow: View {
 
 // MARK: - Projectless tools (bottom bar)
 
-/// The sidebar's bottom bar: the two PROJECTLESS tools, always reachable
+/// The sidebar's bottom bar: the PROJECTLESS tools, always reachable
 /// while no project is open, plus the app-level action that empties the
 /// translation store (Design notes 7.5).
 ///
@@ -237,42 +236,35 @@ private struct ProjectlessBar: View {
   @State private var prompt: ClearPrompt?
 
   var body: some View {
-    VStack(spacing: 2) {
+    VStack(alignment: .leading, spacing: 2) {
+      Text("Tools")
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 6)
+        .padding(.bottom, 2)
       ForEach(DevTool.projectless) { tool in
         ProjectlessRow(tool: tool, isSelected: model.currentTool == tool) {
           model.selection = .tool(tool)
         }
       }
-      // Pinned here rather than in the list: at the list's end it scrolled
+      // Pinned here rather than in the list: at the list's end they scrolled
       // under this bar and out of sight.
-      Button {
+      ToolRowButton(
+        isSelected: model.selection == .storage,
+        help: "What fills this Mac, by developer category"
+      ) {
         model.selection = .storage
       } label: {
         StorageSidebarRow()
-          .padding(.horizontal, 6)
-          .padding(.vertical, 2)
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .contentShape(Rectangle())
       }
-      .buttonStyle(.plain)
-      .background(
-        RoundedRectangle(cornerRadius: 6)
-          .fill(model.selection == .storage ? Color.accentColor.opacity(0.18) : Color.clear))
-      .help("What fills this Mac, by developer category")
-      Button {
+      ToolRowButton(
+        isSelected: model.selection == .vms,
+        help: "UTM virtual machines: start them and run a project's build inside"
+      ) {
         model.selection = .vms
       } label: {
         VMsSidebarRow()
-          .padding(.horizontal, 6)
-          .padding(.vertical, 2)
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .contentShape(Rectangle())
       }
-      .buttonStyle(.plain)
-      .background(
-        RoundedRectangle(cornerRadius: 6)
-          .fill(model.selection == .vms ? Color.accentColor.opacity(0.18) : Color.clear))
-      .help("UTM virtual machines: start them and run a project's build inside")
       Divider()
         .padding(.vertical, 3)
       clearRow
@@ -468,6 +460,29 @@ func clearTranslationStore(
 }
 
 /// One projectless tool row: live mini-status + selection highlight.
+/// A bottom-bar row for a tool with its own sidebar row view (Storage, VMs).
+private struct ToolRowButton<Label: View>: View {
+  let isSelected: Bool
+  let help: String
+  let action: () -> Void
+  @ViewBuilder let label: () -> Label
+
+  var body: some View {
+    Button(action: action) {
+      label()
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .background(
+      RoundedRectangle(cornerRadius: 6)
+        .fill(isSelected ? Color.accentColor.opacity(0.18) : Color.clear))
+    .help(help)
+  }
+}
+
 private struct ProjectlessRow: View {
   let tool: DevTool
   let isSelected: Bool
@@ -502,9 +517,7 @@ private struct ProjectlessRow: View {
     switch tool {
     case .icon:
       CreateIconStatus()
-    case .localization:
-      LocalizationStatus()
-    case .release:
+    case .localization, .release:
       EmptyView()
     }
   }
@@ -519,25 +532,6 @@ private struct CreateIconStatus: View {
       .font(.caption)
       .foregroundStyle(.secondary)
       .lineLimit(1)
-  }
-}
-
-/// Live summary of the shared LocalizationStore's open catalog.
-private struct LocalizationStatus: View {
-  @Environment(LocalizationStore.self) private var store
-
-  var body: some View {
-    Group {
-      if store.isLoaded {
-        Text("\(store.totalKeyCount) keys")
-          .foregroundStyle(.secondary)
-      } else {
-        Text("No catalog open")
-          .foregroundStyle(.tertiary)
-      }
-    }
-    .font(.caption)
-    .lineLimit(1)
   }
 }
 
