@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Thin host for the project-centric split view: owns the ONE sidebar view
@@ -90,8 +91,13 @@ struct ContentView: View {
       guard !LaunchOptions.isScreenshotMode else { return }
       ImportedTranslationDB.shared.restoreIfNeeded()
     }
-    // The screenshot tests hand in a demo project instead of dropping one.
+    // The screenshot tests hand in a demo project instead of dropping one, and
+    // every picture has the same frame whatever size the window was last left at.
     .task {
+      if LaunchOptions.isScreenshotMode, let window = NSApp.windows.first(where: \.isVisible) {
+        window.setFrame(NSRect(x: 0, y: 0, width: 1280, height: 800), display: true)
+        window.center()
+      }
       let demo = LaunchOptions.demoProjects
       guard !demo.isEmpty, let first = await model.importDroppedURLs(demo) else { return }
       model.selection = .project(first)

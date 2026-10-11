@@ -23,7 +23,7 @@ nonisolated struct ReleaseConfig: Equatable, Sendable {
     ("SCHEME", nil), ("PROJECT", nil), ("WORKSPACE", nil), ("PLATFORM", nil), ("TEAM_ID", nil),
     ("TEST_SCHEME", ""), ("TEST_DESTINATION", nil), ("SCREENSHOT_TEST", nil),
     ("SCREENSHOT_LOCALES", nil), ("SCREENSHOT_DESTINATION", nil),
-    ("DIRECT_DOWNLOAD", ""), ("NOTARY_PROFILE", nil),
+    ("DIRECT_DOWNLOAD", ""), ("DIRECT_ARCHS", nil), ("NOTARY_PROFILE", nil),
     ("GITHUB_REPO", ""), ("GITHUB_DRAFT", nil),
     ("APP_STORE", ""), ("ASC_KEY_ID", nil), ("ASC_ISSUER_ID", nil), ("ASC_KEY_PATH", nil),
   ]
@@ -130,6 +130,7 @@ nonisolated struct ReleaseConfig: Equatable, Sendable {
       if !value("PRODUCT_NAME").isEmpty { config["APP_NAME"] = value("PRODUCT_NAME") }
     }
     config["DIRECT_DOWNLOAD"] = config["PLATFORM"] == "macos" ? "zip dmg" : ""
+    config["DIRECT_ARCHS"] = config["PLATFORM"] == "macos" ? "universal" : ""
     config["SCREENSHOT_LOCALES"] = "en-US"
     config["GITHUB_DRAFT"] = "yes"
     config["APP_STORE"] = config["PLATFORM"] == "ios" ? "yes" : "no"

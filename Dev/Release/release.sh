@@ -13,7 +13,8 @@
 #   test         xcodebuild test (skipped when TEST_SCHEME is empty)
 #   screenshots  UI test SCREENSHOT_TEST per locale, attachments exported as PNGs
 #   archive      xcodebuild archive with the release version and build number
-#   direct       Developer ID export, notarize + staple, <App>.zip and <App>.dmg (macOS)
+#   direct       Developer ID export, notarize + staple, <App>.zip and <App>.dmg (macOS);
+#                with DIRECT_ARCHS="universal arm64" also <App>-AppleSilicon.zip/.dmg
 #   github       GitHub Release v<version> with the direct-download files
 #   appstore     App Store Connect upload of the archive
 #   all          every step the config enables
@@ -52,7 +53,7 @@ PROJECT_DIR="$PWD"
 # Defaults, then the project's own values.
 APP_NAME=""; SCHEME=""; PROJECT=""; WORKSPACE=""; PLATFORM="macos"; TEAM_ID=""
 CONFIGURATION="Release"; TEST_SCHEME=""; TEST_DESTINATION=""; SCREENSHOT_TEST=""
-SCREENSHOT_LOCALES="en"; SCREENSHOT_DESTINATION=""; DIRECT_DOWNLOAD="zip dmg"
+SCREENSHOT_LOCALES="en"; SCREENSHOT_DESTINATION=""; DIRECT_DOWNLOAD="zip dmg"; DIRECT_ARCHS="universal"
 NOTARY_PROFILE=""; GITHUB_REPO=""; GITHUB_DRAFT="yes"; APP_STORE="no"
 ASC_KEY_ID=""; ASC_ISSUER_ID=""; ASC_KEY_PATH=""
 # shellcheck disable=SC1091
@@ -60,6 +61,7 @@ ASC_KEY_ID=""; ASC_ISSUER_ID=""; ASC_KEY_PATH=""
 [ -n "$SCHEME" ] || { echo "::fail config SCHEME is not set in release.env"; exit 1; }
 APP_NAME="${APP_NAME:-$SCHEME}"
 DIRECT_DOWNLOAD="${DIRECT_DOWNLOAD//,/ }"
+DIRECT_ARCHS="${DIRECT_ARCHS//,/ }"
 SCREENSHOT_LOCALES="${SCREENSHOT_LOCALES//,/ }"
 
 if [ -n "$WORKSPACE" ]; then CONTAINER=(-workspace "$WORKSPACE")
@@ -147,7 +149,7 @@ do_test() {
   step test
   [ -n "$TEST_SCHEME" ] || { skip "TEST_SCHEME is empty"; return; }
   [ -n "$TEST_DESTINATION" ] || { skip "TEST_DESTINATION is empty"; return; }
-  rm -rf "$OUT/tests.xcresult"
+  run rm -rf "$OUT/tests.xcresult"
   xcb ${CONTAINER[@]+"${CONTAINER[@]}"} -scheme "$TEST_SCHEME" -destination "$TEST_DESTINATION" \
     -resultBundlePath "$OUT/tests.xcresult" test || fail "tests failed"
   artifact "$OUT/tests.xcresult"
@@ -162,7 +164,7 @@ do_screenshots() {
   for locale in $SCREENSHOT_LOCALES; do
     local result="$OUT/screenshots-$locale.xcresult"
     local folder="$OUT/screenshots/$locale"
-    rm -rf "$result" "$folder"
+    run rm -rf "$result" "$folder"
     mkdir -p "$folder"
     xcb ${CONTAINER[@]+"${CONTAINER[@]}"} -scheme "$scheme" -destination "$destination" \
       -only-testing "$SCREENSHOT_TEST" -testLanguage "${locale%%-*}" -testRegion "${locale##*-}" \
@@ -175,7 +177,7 @@ do_screenshots() {
 
 do_archive() {
   step archive
-  rm -rf "$ARCHIVE"
+  run rm -rf "$ARCHIVE"
   xcb ${CONTAINER[@]+"${CONTAINER[@]}"} -scheme "$SCHEME" -configuration "$CONFIGURATION" -destination "$DESTINATION" \
     -archivePath "$ARCHIVE" MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" archive \
     || fail "the archive failed"
@@ -188,10 +190,46 @@ notarize() {
     || fail "notarization of $(basename "$1") failed (xcrun notarytool log <id> --keychain-profile $NOTARY_PROFILE)"
 }
 
+# Signs, notarizes and staples a .app in place.
+notarize_app() {
+  local app="$1" upload="$OUT/notarize-$(basename "$1" .app).zip"
+  run codesign --verify --deep --strict "$app"
+  run ditto -c -k --keepParent "$app" "$upload"
+  notarize "$upload"
+  run xcrun stapler staple "$app"
+  run rm -f "$upload"
+}
+
+# <name>.zip and <name>.dmg from a notarized app; the dmg is signed, notarized and stapled too.
+package() {
+  local app="$1" name="$2"
+  case " $DIRECT_DOWNLOAD " in *" zip "*)
+    run rm -f "$OUT/$name.zip"
+    run ditto -c -k --keepParent "$app" "$OUT/$name.zip"
+    artifact "$OUT/$name.zip" ;;
+  esac
+  case " $DIRECT_DOWNLOAD " in *" dmg "*)
+    local stage="$OUT/dmg-$name"
+    run rm -rf "$stage" "$OUT/$name.dmg"
+    run mkdir -p "$stage"
+    run cp -R "$app" "$stage/"
+    run ln -s /Applications "$stage/Applications"
+    run hdiutil create -volname "$APP_NAME" -srcfolder "$stage" -ov -format ULFO "$OUT/$name.dmg"
+    run rm -rf "$stage"
+    run codesign --sign "$IDENTITY" --timestamp "$OUT/$name.dmg"
+    notarize "$OUT/$name.dmg"
+    run xcrun stapler staple "$OUT/$name.dmg"
+    artifact "$OUT/$name.dmg" ;;
+  esac
+}
+
 do_direct() {
   step direct
   [ "$PLATFORM" = macos ] || { skip "direct downloads are for macOS apps"; return; }
   [ -d "$ARCHIVE" ] || [ "$DRY_RUN" = 1 ] || fail "no archive at $ARCHIVE (run the archive step)"
+  IDENTITY=$(security find-identity -v -p codesigning | awk -v team="($TEAM_ID)" \
+    'index($0, "Developer ID Application:") && index($0, team) {print $2; exit}')
+  IDENTITY="${IDENTITY:-Developer ID Application}"
   local export="$OUT/developer-id"
   local options="$OUT/ExportOptions-developer-id.plist"
   cat >"$options" <<PLIST
@@ -204,42 +242,45 @@ do_direct() {
   <key>signingCertificate</key><string>Developer ID Application</string>
 </dict></plist>
 PLIST
-  rm -rf "$export"
+  run rm -rf "$export"
   xcb -exportArchive -archivePath "$ARCHIVE" -exportPath "$export" -exportOptionsPlist "$options" \
     || fail "the Developer ID export failed"
   local app="$export/$APP_NAME.app"
   [ -d "$app" ] || [ "$DRY_RUN" = 1 ] || fail "the export has no $APP_NAME.app"
-  run codesign --verify --deep --strict "$app"
 
-  # The app is notarized as a zip, then the ticket is stapled to the app itself, so
-  # both the zip and the dmg made from it open offline.
-  local upload="$OUT/$APP_NAME-notarize.zip"
-  run ditto -c -k --keepParent "$app" "$upload"
-  notarize "$upload"
-  run xcrun stapler staple "$app"
-  run rm -f "$upload"
-
-  # Versionless names: https://github.com/<repo>/releases/latest/download/<App>.zip stays stable.
-  case " $DIRECT_DOWNLOAD " in *" zip "*)
-    run rm -f "$OUT/$APP_NAME.zip"
-    run ditto -c -k --keepParent "$app" "$OUT/$APP_NAME.zip"
-    artifact "$OUT/$APP_NAME.zip" ;;
+  # Versionless names keep https://github.com/<repo>/releases/latest/download/<file> stable.
+  # With both variants the universal app is <App>, the Apple silicon one <App>-AppleSilicon.
+  local thin_name="$APP_NAME"
+  case " $DIRECT_ARCHS " in *" universal "*)
+    notarize_app "$app"
+    package "$app" "$APP_NAME"
+    thin_name="$APP_NAME-AppleSilicon" ;;
   esac
-  case " $DIRECT_DOWNLOAD " in *" dmg "*)
-    local stage="$OUT/dmg"
-    run rm -rf "$stage" "$OUT/$APP_NAME.dmg"
-    run mkdir -p "$stage"
-    run cp -R "$app" "$stage/"
-    run ln -s /Applications "$stage/Applications"
-    run hdiutil create -volname "$APP_NAME" -srcfolder "$stage" -ov -format ULFO "$OUT/$APP_NAME.dmg"
-    run rm -rf "$stage"
-    local identity
-    identity=$(security find-identity -v -p codesigning | awk -v team="($TEAM_ID)" \
-      'index($0, "Developer ID Application:") && index($0, team) {print $2; exit}')
-    run codesign --sign "${identity:-Developer ID Application}" --timestamp "$OUT/$APP_NAME.dmg"
-    notarize "$OUT/$APP_NAME.dmg"
-    run xcrun stapler staple "$OUT/$APP_NAME.dmg"
-    artifact "$OUT/$APP_NAME.dmg" ;;
+  case " $DIRECT_ARCHS " in *" arm64 "*)
+    # A thinned copy is a new binary: it is signed again with the same entitlements
+    # and the hardened runtime, then notarized on its own.
+    local thin="$OUT/arm64/$APP_NAME.app" entitlements="$OUT/entitlements.plist"
+    run rm -rf "$OUT/arm64"
+    run mkdir -p "$OUT/arm64"
+    run ditto "$app" "$thin"
+    # lipo, not `ditto --arch`: ditto copies a signed universal binary whole.
+    if [ "$DRY_RUN" = 1 ]; then echo "\$ lipo -thin arm64 (every universal Mach-O in $thin)"
+    else
+      while IFS= read -r -d '' file; do
+        if lipo -archs "$file" 2>/dev/null | grep -q " "; then
+          lipo "$file" -thin arm64 -output "$file.thin" && mv "$file.thin" "$file"
+        fi
+      done < <(find "$thin" -type f -perm -u+x -print0)
+    fi
+    if [ "$DRY_RUN" = 1 ]; then echo "\$ codesign -d --entitlements :- $app > $entitlements"
+    else codesign -d --entitlements :- "$app" >"$entitlements" 2>/dev/null || true; fi
+    if [ -s "$entitlements" ] || [ "$DRY_RUN" = 1 ]; then
+      run codesign --force --options runtime --timestamp --entitlements "$entitlements" --sign "$IDENTITY" "$thin"
+    else
+      run codesign --force --options runtime --timestamp --sign "$IDENTITY" "$thin"
+    fi
+    notarize_app "$thin"
+    package "$thin" "$thin_name" ;;
   esac
   [ "$DRY_RUN" = 1 ] || spctl --assess --type execute --verbose "$app" 2>&1 | sed -n 1,2p
   done_step
@@ -250,7 +291,9 @@ do_github() {
   [ -n "$GITHUB_REPO" ] || { skip "GITHUB_REPO is empty"; return; }
   local files=()
   for kind in $DIRECT_DOWNLOAD; do
-    [ -f "$OUT/$APP_NAME.$kind" ] && files+=("$OUT/$APP_NAME.$kind")
+    for name in "$APP_NAME" "$APP_NAME-AppleSilicon"; do
+      [ -f "$OUT/$name.$kind" ] && files+=("$OUT/$name.$kind")
+    done
   done
   [ ${#files[@]} -gt 0 ] || [ "$DRY_RUN" = 1 ] || fail "no direct-download files in $OUT (run the direct step)"
   local tag="v$VERSION" draft=()

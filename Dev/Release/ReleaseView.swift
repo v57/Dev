@@ -310,6 +310,12 @@ private struct ReleaseSettingsSheet: View {
         }
         Section {
           field("Formats", "DIRECT_DOWNLOAD", "zip dmg")
+          Picker("Builds", selection: binding("DIRECT_ARCHS")) {
+            Text("Universal").tag("universal")
+            Text("Apple silicon").tag("arm64")
+            Text("Both").tag("universal arm64")
+          }
+          .help("Both ships <App> (universal) and <App>-AppleSilicon, half the size")
           field("Notary profile", "NOTARY_PROFILE", "v57-notary")
         } header: {
           Text("Direct download")
