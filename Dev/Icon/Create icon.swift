@@ -231,7 +231,14 @@ struct CreateIconView: View {
         gradient: create.settings.gradient,
         palette: create.settings.palette,
         to: dir)
-      alertMessage = "Exported to \(dir.path)/Assets.xcassets/AppIcon.appiconset"
+      try IconGenerator.exportIconComposer(
+        symbol: create.settings.symbol,
+        scale: create.settings.scale,
+        primary: create.settings.primary,
+        glyphColor: create.settings.glyph,
+        gradient: create.settings.gradient,
+        to: dir)
+      alertMessage = "Exported \(dir.path)/Assets.xcassets/AppIcon.appiconset and \(dir.path)/AppIcon.icon"
     } catch {
       alertMessage = error.localizedDescription
     }

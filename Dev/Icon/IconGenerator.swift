@@ -166,21 +166,6 @@ enum IconGenerator {
   ) throws -> NSBitmapImageRep {
     let canvas = 1024
     let rep = makeBitmap(canvas: canvas)
-
-    // Size the glyph to the SAME point size the live view uses
-    // (font(size: canvas*0.5*scale)), so preview matches live exactly.
-    // Clamp only when the glyph would overflow the canvas (extreme high scale).
-    var pointSize = Double(canvas) * 0.5 * Double(scale)
-    var (symRep, glyph) = try SymbolRenderer.renderSized(
-      symbol: symbol, canvas: canvas, pointSize: CGFloat(pointSize))
-    let longest = max(glyph.w, glyph.h)
-    if longest > canvas {
-      let fit = Double(canvas) / Double(longest)
-      pointSize *= fit
-      (symRep, glyph) = try SymbolRenderer.renderSized(
-        symbol: symbol, canvas: canvas, pointSize: CGFloat(pointSize))
-    }
-
     let p = rgba(primary), s = rgba(secondary)
     let top = NSColor(deviceRed: p.r, green: p.g, blue: p.b, alpha: p.a)
     let bottom = NSColor(deviceRed: s.r, green: s.g, blue: s.b, alpha: s.a)
@@ -198,11 +183,67 @@ enum IconGenerator {
     NSGraphicsContext.restoreGraphicsState()
 
     // Glyph.
+    composite(try renderGlyph(symbol: symbol, scale: scale, glyphColor: glyphColor), onto: rep)
+    return rep
+  }
+
+  /// The tinted glyph alone on a transparent 1024 canvas: the master's top layer,
+  /// and the foreground layer of an Icon Composer icon.
+  static func renderGlyph(symbol: String, scale: CGFloat, glyphColor: Color) throws -> NSBitmapImageRep {
+    let canvas = 1024
+    // Size the glyph to the SAME point size the live view uses
+    // (font(size: canvas*0.5*scale)), so preview matches live exactly.
+    // Clamp only when the glyph would overflow the canvas (extreme high scale).
+    var pointSize = Double(canvas) * 0.5 * Double(scale)
+    var (symRep, glyph) = try SymbolRenderer.renderSized(
+      symbol: symbol, canvas: canvas, pointSize: CGFloat(pointSize))
+    let longest = max(glyph.w, glyph.h)
+    if longest > canvas {
+      let fit = Double(canvas) / Double(longest)
+      pointSize *= fit
+      (symRep, glyph) = try SymbolRenderer.renderSized(
+        symbol: symbol, canvas: canvas, pointSize: CGFloat(pointSize))
+    }
     let g = rgba(glyphColor)
     tint(symRep, r: g.r, g: g.g, b: g.b, alpha: glyphOpacity)
-    composite(symRep, onto: rep)
+    return symRep
+  }
 
-    return rep
+  // MARK: - Icon Composer
+
+  /// An Icon Composer icon (`AppIcon.icon`) for macOS 26 and iOS 26: the glyph as a
+  /// glass layer over the background fill, so the system renders it in Liquid Glass
+  /// (light, dark, tinted and clear) while older systems use the AppIcon set.
+  /// A gradient becomes Icon Composer's automatic gradient from the primary color.
+  static func exportIconComposer(
+    symbol: String, scale: CGFloat, primary: Color, glyphColor: Color,
+    gradient: Bool, to outDir: URL
+  ) throws {
+    let bundle = outDir.appendingPathComponent("AppIcon.icon", isDirectory: true)
+    let assets = bundle.appendingPathComponent("Assets", isDirectory: true)
+    let fm = FileManager.default
+    try? fm.removeItem(at: bundle)
+    try fm.createDirectory(at: assets, withIntermediateDirectories: true)
+    let glyph = try renderGlyph(symbol: symbol, scale: scale, glyphColor: glyphColor)
+    guard let png = glyph.representation(using: .png, properties: [:]) else {
+      throw IconError.outputFailed("glyph png")
+    }
+    try png.write(to: assets.appendingPathComponent("glyph.png"))
+    let json = iconComposerJSON(background: rgba(primary), gradient: gradient, glyph: symbol)
+    try Data(json.utf8).write(to: bundle.appendingPathComponent("icon.json"))
+  }
+
+  /// `icon.json`: one group holding the glyph layer at full canvas size.
+  static func iconComposerJSON(
+    background: (r: CGFloat, g: CGFloat, b: CGFloat, a: CGFloat), gradient: Bool, glyph: String
+  ) -> String {
+    let color = String(
+      format: "srgb:%.5f,%.5f,%.5f,%.5f", background.r, background.g, background.b, background.a)
+    let fill = gradient ? #"{"automatic-gradient":"\#(color)"}"# : #"{"solid":"\#(color)"}"#
+    let name = glyph.replacingOccurrences(of: "\"", with: "")
+    return #"""
+    {"fill":\#(fill),"groups":[{"layers":[{"glass":true,"hidden":false,"image-name":"glyph.png","name":"\#(name)","position":{"scale":1,"translation-in-points":[0,0]}}],"shadow":{"kind":"neutral","opacity":0.5},"translucency":{"enabled":true,"value":0.5}}],"supported-platforms":{"circles":["watchOS"],"squares":"shared"}}
+    """#
   }
 
   private static func rgba(_ color: Color) -> (r: CGFloat, g: CGFloat, b: CGFloat, a: CGFloat) {
