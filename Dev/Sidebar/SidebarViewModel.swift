@@ -132,6 +132,10 @@ final class SidebarViewModel {
   /// True while a Finder drag hovers the sidebar (drop feedback).
   var isDropTargeted = false
 
+  /// Directories the last drop passed over (no repo inside, but a repo beside
+  /// them), offered to the reader as projects to add. Empty = no offer showing.
+  var importSuggestions: [RepoDiscovery.Skipped] = []
+
   /// The selected project's live SwiftData object, or nil when the
   /// selection is a projectless tool. Looked up on demand.
   var selectedProject: Project? {
@@ -313,9 +317,12 @@ final class SidebarViewModel {
 
   // MARK: - drag-and-drop import
 
-  /// Adds dropped Finder items as projects: a DIRECTORY becomes a
-  /// directory-root project via the P10 resolver; an .xcstrings FILE
-  /// becomes a project rooted at its parent directory. Dedupe is the
+  /// Adds dropped Finder items as projects: a DIRECTORY is searched for git
+  /// repos (`RepoDiscovery`) and each repo becomes a directory-root project via
+  /// the P10 resolver — the directory itself when it holds none; an .xcstrings
+  /// FILE becomes a project rooted at its parent directory. Directories the
+  /// search passed over land in `importSuggestions` for the sidebar to offer.
+  /// Dedupe is the
   /// resolver's contract:
   ///  - re-dropping a directory returns the SAME row (rootURL match);
   ///  - a file whose parent is already a project joins that row;
@@ -357,29 +364,35 @@ final class SidebarViewModel {
     }
     guard !dropped.isEmpty else { return nil }
 
-    // The tree walk — off the main actor, because a drop can point at an
-    // arbitrarily large tree.
-    let roots = dropped.compactMap { item -> URL? in
+    // The tree walks — off the main actor, because a drop can point at an
+    // arbitrarily large tree: first the repos in each dropped directory, then
+    // the catalog in each repo.
+    let dropRoots = dropped.compactMap { item -> URL? in
       if case .directory(let root) = item { return root }
       return nil
     }
-    let discovered = await Task.detached(priority: .userInitiated) {
-      roots.map { ($0, CatalogDiscovery.catalog(inRoot: $0)) }
+    let scans = await Task.detached(priority: .userInitiated) {
+      dropRoots.map { RepoDiscovery.scan($0) }
     }.value
-    let catalogByRoot = Dictionary(discovered, uniquingKeysWith: { first, _ in first })
+    let reposByDrop = Dictionary(
+      zip(dropRoots, scans.map(\.repos)), uniquingKeysWith: { first, _ in first })
+    let skipped = scans.flatMap(\.skipped)
+    let catalogByRoot = await Self.discoverCatalogs(in: scans.flatMap(\.repos))
 
     let context = TranslationStore.shared.context
     var firstID: PersistentIdentifier?
     for item in dropped {
-      let project: Project
+      let projects: [Project]
       switch item {
-      case .directory(let root):
-        project = Reconcile.resolveDirectoryProject(
-          rootDir: root, catalogURL: catalogByRoot[root] ?? nil, in: context)
+      case .directory(let dropRoot):
+        projects = (reposByDrop[dropRoot] ?? [dropRoot]).map { root in
+          Reconcile.resolveDirectoryProject(
+            rootDir: root, catalogURL: catalogByRoot[root] ?? nil, in: context)
+        }
       case .catalog(let fileURL):
-        project = resolveCatalogFileDrop(fileURL, in: context)
+        projects = [resolveCatalogFileDrop(fileURL, in: context)]
       }
-      if firstID == nil { firstID = project.persistentModelID }
+      if firstID == nil { firstID = projects.first?.persistentModelID }
     }
     do {
       try context.save()
@@ -390,7 +403,44 @@ final class SidebarViewModel {
       return nil
     }
     refresh()
+    // Offer only what is not a project already: re-dropping a folder must not
+    // keep suggesting the directories the reader added from its last drop.
+    let known = Set(projects.compactMap(\.rootURL))
+    let fresh = skipped.filter { !known.contains($0.url) }
+    if !fresh.isEmpty { importSuggestions = fresh }
     return firstID
+  }
+
+  /// Adds the suggested directories the reader picked, each as one project
+  /// exactly as dropped — no repo search, because they hold none.
+  @discardableResult
+  func addSuggestedDirectories(_ urls: [URL]) async -> PersistentIdentifier? {
+    importSuggestions = []
+    guard !urls.isEmpty else { return nil }
+    let catalogByRoot = await Self.discoverCatalogs(in: urls)
+    let context = TranslationStore.shared.context
+    let added = urls.map { root in
+      Reconcile.resolveDirectoryProject(
+        rootDir: root, catalogURL: catalogByRoot[root] ?? nil, in: context)
+    }
+    do {
+      try context.save()
+    } catch {
+      alert = SidebarAlert(
+        title: "Import failed",
+        message: "Couldn't save the imported projects: \(error.localizedDescription)")
+      return nil
+    }
+    refresh()
+    return added.first?.persistentModelID
+  }
+
+  /// Each root's catalog, searched off the main actor.
+  private static func discoverCatalogs(in roots: [URL]) async -> [URL: URL?] {
+    let found = await Task.detached(priority: .userInitiated) {
+      roots.map { ($0, CatalogDiscovery.catalog(inRoot: $0)) }
+    }.value
+    return Dictionary(found, uniquingKeysWith: { first, _ in first })
   }
 
   /// A dropped .xcstrings file becomes a directory-root project at its

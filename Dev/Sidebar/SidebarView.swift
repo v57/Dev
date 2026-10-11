@@ -117,6 +117,18 @@ struct SidebarView: View {
           .allowsHitTesting(false)
       }
     }
+    .sheet(isPresented: Binding(
+      get: { !model.importSuggestions.isEmpty },
+      set: { if !$0 { model.importSuggestions = [] } }
+    )) {
+      ImportSuggestionsSheet(suggestions: model.importSuggestions) { urls in
+        Task {
+          if let firstID = await model.addSuggestedDirectories(urls) {
+            model.selection = .project(firstID)
+          }
+        }
+      }
+    }
     .alert(model.alert?.title ?? "", isPresented: Binding(
       get: { model.alert != nil },
       set: { if !$0 { model.alert = nil } }
@@ -139,7 +151,7 @@ struct SidebarView: View {
     HStack(spacing: 8) {
       Image(systemName: "folder.badge.plus")
         .foregroundStyle(.tertiary)
-      Text("Drag a project folder here")
+      Text("Drag a project, or a folder of repos, here")
         .foregroundStyle(.secondary)
     }
     .padding(.vertical, 4)
