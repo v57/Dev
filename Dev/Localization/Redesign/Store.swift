@@ -6,7 +6,7 @@
 //
 //  The SwiftData store the redesign reads and writes through: the app's real
 //  container and the app's real models, and nothing else. Semantics are in
-//  "Design notes.md", section 7.
+//  "docs/Translation design notes.md", section 7.
 //
 //  Translation state STAYS IN SWIFTDATA (reader, 2026-09-13), and that is what
 //  makes every load below synchronous: a context document, a slot record, a

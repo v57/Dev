@@ -51,7 +51,7 @@ struct Plural: Hashable, Identifiable {
   /// (Xcode's own table, plus CLDR fills for `ars` / `sa` / `sat`) — measured
   /// equal, so it is complete relative to what the app uses today. It is still a
   /// SECOND copy of that table, which is the actual defect: one table, read from one
-  /// place. "Design notes.md" 9.4 has the delta against CURRENT CLDR (27 locales it
+  /// place. "docs/Translation design notes.md" 9.4 has the delta against CURRENT CLDR (27 locales it
   /// lacks, 3 sets it gets differently) and 10.13 has which source wins.
   ///
   /// The default is right for everything NOT listed: every language absent from the

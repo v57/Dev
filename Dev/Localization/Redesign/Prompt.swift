@@ -7,7 +7,7 @@
 //  Every prompt in the redesign is assembled here, because the block ORDER is a
 //  cache contract: reordering L0/L1/L2 silently destroys the provider cache hit
 //  rate, and the run reports a cached-token share that would then read zero.
-//  Semantics are in "Design notes.md", section 4.3; the WORDING follows
+//  Semantics are in "docs/Translation design notes.md", section 4.3; the WORDING follows
 //  Dev/Translation/Backends/ContextPromptBuilder.swift, which is read as the
 //  reference and never called.
 //

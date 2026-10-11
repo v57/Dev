@@ -18,7 +18,7 @@
 //  not a convenience, it was a second, quietly wrong answer key.
 //
 //  Real implementation, unlike the rest of this folder's stubs. Semantics are in
-//  "Design notes.md" 5.2 and the rules at the top of that file. The model, its wire and
+//  "docs/Translation design notes.md" 5.2 and the rules at the top of that file. The model, its wire and
 //  its key come from the user's Settings (Translation/Providers/ModelSettings.swift,
 //  resolved by RoutedModel.swift); nothing here calls
 //  TranslationRouter or reaches into its chain, because the redesign has no chain to

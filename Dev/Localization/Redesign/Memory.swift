@@ -5,7 +5,7 @@
 //  Created by Dmitry on 13.09.26.
 //
 //  Translation memory (gold / hint) and the imported-database resolve. Semantics
-//  are in "Design notes.md", section 6.
+//  are in "docs/Translation design notes.md", section 6.
 //
 //  This is what makes the 1 000-character language document sufficient: the
 //  document holds cross-key conventions, and per-key knowledge lives here, where an

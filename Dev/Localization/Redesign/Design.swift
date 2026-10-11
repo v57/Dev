@@ -5,7 +5,7 @@
 //  Created by Dmitry on 12.09.26.
 //
 //  Design only: signatures with placeholder bodies that compile and change no
-//  behaviour. Semantics are in "Design notes.md" beside this file.
+//  behaviour. Semantics are in docs/Translation design notes.md.
 //
 
 import SwiftData

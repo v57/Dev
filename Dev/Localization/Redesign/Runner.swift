@@ -7,7 +7,7 @@
 //  The run executor: the state of one run, the batches it is made of, and the one
 //  thing that knows HOW a batch happens — admission, prompt assembly, the model,
 //  deterministic validation, write-back, checkpoint,
-//  telemetry. Semantics are in "Design notes.md", section 5; section 4 says what
+//  telemetry. Semantics are in "docs/Translation design notes.md", section 5; section 4 says what
 //  each operation IS, and that half belongs to the stage files.
 //
 //  The stage classes know WHAT to send — the predicate, the per-language grouping
