@@ -48,6 +48,8 @@ enum SidebarSelection: Hashable {
   /// string id rather than its PersistentIdentifier, because the id is what its
   /// keychain item and its status are keyed by too.
   case server(String)
+  /// The Storage tool: what fills this Mac, by developer category.
+  case storage
 }
 
 /// What the sidebar's one alert is about. A single value rather than one

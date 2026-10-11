@@ -231,6 +231,22 @@ private struct ProjectlessBar: View {
           model.selection = .tool(tool)
         }
       }
+      // Pinned here rather than in the list: at the list's end it scrolled
+      // under this bar and out of sight.
+      Button {
+        model.selection = .storage
+      } label: {
+        StorageSidebarRow()
+          .padding(.horizontal, 6)
+          .padding(.vertical, 2)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .background(
+        RoundedRectangle(cornerRadius: 6)
+          .fill(model.selection == .storage ? Color.accentColor.opacity(0.18) : Color.clear))
+      .help("What fills this Mac, by developer category")
       Divider()
         .padding(.vertical, 3)
       clearRow

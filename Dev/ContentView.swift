@@ -20,6 +20,8 @@ struct ContentView: View {
   /// instance for both, so a check that flips a dot is the same fact the pane
   /// shows.
   @State private var servers = ServerStore()
+  /// The Storage tool's last scan: the sidebar row and the pane read the same one.
+  @State private var storage = StorageStore()
   /// The redesign's shell (Design notes 8.1): the bridge that builds a project's
   /// `Translation.Workspace` over the same SwiftData container the browser reads
   /// (10.16), so the toolbar's Start, the panes' overlays and the panes' status bars
@@ -37,6 +39,7 @@ struct ContentView: View {
     .environment(createIcon)
     .environment(localizationStore)
     .environment(servers)
+    .environment(storage)
     .environment(translation)
     // Unsaved-changes prompt: Reload…, Open…, a sidebar project switch and
     // quitting all hold their request here until it is answered, because
@@ -156,6 +159,8 @@ struct ContentView: View {
       }
     case .server(let id):
       ServerDetailView(serverID: id, store: servers)
+    case .storage:
+      StorageView()
     case nil:
       ContentUnavailableView("Select a project", systemImage: "sidebar.left")
     }
