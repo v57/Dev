@@ -26,3 +26,5 @@ graphify-out/
 *.profraw
 plans/
 /Localizable.xcstrings
+CLAUDE.md
+/.claude
