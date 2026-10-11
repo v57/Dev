@@ -202,17 +202,9 @@ struct CreateIconView: View {
         secondary: create.settings.secondary,
         glyphColor: create.settings.glyph,
         gradient: create.settings.gradient)
-      let raw = URL(fileURLWithPath: NSTemporaryDirectory())
-        .appendingPathComponent("dev-raw-\(UUID().uuidString).png")
-      try IconGenerator.writePng(icon, size: 1024, to: raw)
-      defer { try? FileManager.default.removeItem(at: raw) }
-
-      let quant = URL(fileURLWithPath: NSTemporaryDirectory())
-        .appendingPathComponent("dev-quant-\(UUID().uuidString).png")
-      try await IconGenerator.quantize(source: raw, to: quant, colors: create.settings.palette)
-      defer { try? FileManager.default.removeItem(at: quant) }
-
-      if let data = try? Data(contentsOf: quant) {
+      let files = try await IconGenerator.palettePNGs(
+        of: icon, sizes: [1024], colors: create.settings.palette)
+      if let data = files.first?.data {
         create.result = NSImage(data: data)
         create.resultSize = Int64(data.count)
       }

@@ -149,11 +149,9 @@ enum SymbolRenderer {
 
 /// Composes the final icon: a gradient/solid colored background with the glyph
 /// drawn centered at scale * 50% of the canvas, then quantized to a small flat
-/// palette via ImageMagick and written into an AppIcon.appiconset folder.
+/// palette (`PalettePNG`) and written into an AppIcon.appiconset folder.
 enum IconGenerator {
 
-  /// Homebrew ImageMagick on Apple Silicon.
-  nonisolated static let magickPath = "/opt/homebrew/bin/magick"
   static let glyphOpacity: Double = 0.8
 
   // MARK: - render (MainActor, AppKit drawing)
@@ -257,83 +255,75 @@ enum IconGenerator {
     }
   }
 
-  static func writePng(_ icon: NSBitmapImageRep, size: Int, to url: URL) throws {
-    let small = makeBitmap(canvas: size)
-    NSGraphicsContext.saveGraphicsState()
-    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: small)
-    icon.draw(in: NSRect(x: 0, y: 0, width: size, height: size),
-              from: NSRect(x: 0, y: 0, width: icon.pixelsWide, height: icon.pixelsHigh),
-              operation: .copy, fraction: 1.0, respectFlipped: true, hints: nil)
-    NSGraphicsContext.restoreGraphicsState()
-    guard let png = small.representation(using: .png, properties: [:]) else {
-      throw IconError.outputFailed("png encode")
-    }
-    try png.write(to: url)
-  }
-
-  // MARK: - ImageMagick (off-main, plain subprocess)
-
-  nonisolated static func quantize(source: URL, to dest: URL, colors: Int) async throws {
-    try await Task.detached(priority: .userInitiated) {
-      let cmd = "\(magickPath) \"\(source.path)\" +dither -colors \(colors) -depth 8 -type Palette \"\(dest.path)\""
-      try runProcess(cmd)
-    }.value
-  }
-
-  nonisolated static func resize(source: URL, to dest: URL, size: Int) async throws {
-    try await Task.detached(priority: .userInitiated) {
-      let cmd = "\(magickPath) \"\(source.path)\" -resize \(size)x\(size) \"\(dest.path)\""
-      try runProcess(cmd)
-    }.value
-  }
-
-  nonisolated private static func runProcess(_ cmd: String) throws {
-    let p = Process()
-    p.executableURL = URL(fileURLWithPath: "/bin/bash")
-    p.arguments = ["-c", cmd]
-    p.standardOutput = FileHandle.standardOutput
-    p.standardError = FileHandle.standardError
-    try p.run()
-    p.waitUntilExit()
-    guard p.terminationStatus == 0 else {
-      throw IconError.outputFailed(cmd)
-    }
-  }
-
   // MARK: - icon set export
 
+  /// Renders the icon once at 1024, scales it to every size the set needs, and
+  /// writes each as a flat-palette PNG (`PalettePNG`) sharing the master's palette,
+  /// so the small sizes keep exactly the master's colors. No external tools.
   static func exportIconSet(
     symbol: String, scale: CGFloat, primary: Color, secondary: Color,
     glyphColor: Color, gradient: Bool, palette: Int, to outDir: URL
   ) async throws {
     let fm = FileManager.default
-    let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
-      .appendingPathComponent("appicon-\(UUID().uuidString)")
-    try fm.createDirectory(at: tmp, withIntermediateDirectories: true)
-    defer { try? fm.removeItem(at: tmp) }
-
-    let master = tmp.appendingPathComponent("master-1024.png")
     let icon = try renderMaster(
       symbol: symbol, scale: scale, primary: primary, secondary: secondary,
       glyphColor: glyphColor, gradient: gradient)
-    try writePng(icon, size: 1024, to: master)
-
-    let quant = tmp.appendingPathComponent("icon-quant.png")
-    try await quantize(source: master, to: quant, colors: palette)
+    let files = try await palettePNGs(of: icon, sizes: [1024, 16, 32, 64, 128, 256, 512], colors: palette)
 
     let assets = outDir.appendingPathComponent("Assets.xcassets", isDirectory: true)
     let set = assets.appendingPathComponent("AppIcon.appiconset", isDirectory: true)
     try? fm.removeItem(at: set)
     try fm.createDirectory(at: set, withIntermediateDirectories: true)
-
-    try fm.copyItem(at: quant, to: set.appendingPathComponent("1024.png"))
-
-    for size in [16, 32, 64, 128, 256, 512] {
-      let d = tmp.appendingPathComponent("m\(size).png")
-      try await resize(source: quant, to: d, size: size)
-      try fm.copyItem(at: d, to: set.appendingPathComponent("\(size).png"))
+    for (size, data) in files {
+      try data.write(to: set.appendingPathComponent("\(size).png"))
     }
     try writeContents(to: set)
+  }
+
+  /// The icon as flat-palette PNGs, one per size, all with the palette taken from
+  /// the first size. The quantizing runs off the main actor.
+  static func palettePNGs(of icon: NSBitmapImageRep, sizes: [Int], colors: Int) async throws
+    -> [(size: Int, data: Data)]
+  {
+    let scaled = sizes.map { (size: $0, pixels: rgbaPixels(of: icon, size: $0)) }
+    return try await Task.detached(priority: .userInitiated) {
+      let palette = PalettePNG.palette(rgba: scaled[0].pixels, count: colors)
+      return try scaled.map { entry in
+        let indices = PalettePNG.indices(rgba: entry.pixels, palette: palette)
+        return (entry.size, try PalettePNG.encode(
+          width: entry.size, height: entry.size, indices: indices, palette: palette))
+      }
+    }.value
+  }
+
+  /// The icon drawn at `size` x `size`, as straight (not premultiplied) RGBA8 rows.
+  static func rgbaPixels(of icon: NSBitmapImageRep, size: Int) -> [UInt8] {
+    let rep = makeBitmap(canvas: size)
+    NSGraphicsContext.saveGraphicsState()
+    let context = NSGraphicsContext(bitmapImageRep: rep)
+    context?.imageInterpolation = .high
+    NSGraphicsContext.current = context
+    icon.draw(in: NSRect(x: 0, y: 0, width: size, height: size),
+              from: NSRect(x: 0, y: 0, width: icon.pixelsWide, height: icon.pixelsHigh),
+              operation: .copy, fraction: 1.0, respectFlipped: true, hints: nil)
+    NSGraphicsContext.restoreGraphicsState()
+    guard let data = rep.bitmapData else { return [] }
+    let stride = rep.bytesPerRow
+    let premultiplied = !rep.bitmapFormat.contains(.alphaNonpremultiplied)
+    var out = [UInt8](repeating: 0, count: size * size * 4)
+    for y in 0..<size {
+      for x in 0..<size {
+        let s = y * stride + x * 4, d = (y * size + x) * 4
+        let a = data[s + 3]
+        for c in 0..<3 {
+          let v = Int(data[s + c])
+          out[d + c] = premultiplied && a > 0 && a < 255
+            ? UInt8(min(255, (v * 255 + Int(a) / 2) / Int(a))) : data[s + c]
+        }
+        out[d + 3] = a
+      }
+    }
+    return out
   }
 
   static func writeContents(to dir: URL) throws {
