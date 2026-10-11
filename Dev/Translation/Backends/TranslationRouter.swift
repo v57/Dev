@@ -29,7 +29,7 @@ nonisolated struct BatchOutcome: Sendable {
 
 /// The translation entry point the server pane's corpus run calls.
 ///
-/// Walks `RoutedModel.chain` — one candidate today, Muse on OpenCode Go —
+/// Walks `RoutedModel.chain` — the model the user configured in Settings —
 /// with candidate cooldowns, per-provider pacing and the deterministic
 /// validation shared by both operations:
 ///
@@ -51,7 +51,7 @@ final class TranslationRouter {
   // MARK: pacing
 
   /// Provider → instants of recent requests, for the per-minute budget.
-  private var recentCalls: [RoutedModel.Provider: [Date]] = [:]
+  private var recentCalls: [String: [Date]] = [:]
 
   /// Cooldown when a provider refuses for quota reasons without `Retry-After`.
   static let defaultCooldown: TimeInterval = 15 * 60
@@ -69,7 +69,7 @@ final class TranslationRouter {
 
   /// Eligible whenever at least one candidate has a usable key.
   nonisolated func isEligible(from: String, to: String) async -> Bool {
-    RoutedModel.chain.contains { $0.apiKey != nil }
+    !RoutedModel.chain.isEmpty
   }
 
   /// Single-item routing entry point (the repair path).
@@ -99,9 +99,8 @@ final class TranslationRouter {
     var lastFailure: BackendError?
 
     for candidate in RoutedModel.chain {
-      guard let key = candidate.apiKey else { continue }
-      if let until = cooldowns[candidate.id], until > .now { continue }
-      await admit(candidate.provider)
+            if let until = cooldowns[candidate.id], until > .now { continue }
+      await admit(candidate)
       do {
         let prompt = ContextPromptBuilder.assembleBatch(
           items: items,
@@ -109,7 +108,7 @@ final class TranslationRouter {
           targetLanguage: to,
           sharedContext: items.first?.context)
         let reply = try await Self.call(
-          candidate, apiKey: key, system: prompt.system, user: prompt.user)
+          candidate, system: prompt.system, user: prompt.user)
         return validate(reply.content, items: items, candidate: candidate)
       } catch {
         // Any escape from the error taxonomy still must not abort the run.
@@ -120,8 +119,8 @@ final class TranslationRouter {
     }
     return BatchOutcome(
       failedIDs: items.map(\.id),
-      model: RoutedModel.muse.name,
-      provider: RoutedModel.muse.provider.displayName,
+      model: RoutedModel.current?.name ?? "",
+      provider: RoutedModel.current?.providerName ?? "",
       isPaid: true,
       notes: [lastFailure?.localizedDescription ?? "no candidate available"])
   }
@@ -135,8 +134,8 @@ final class TranslationRouter {
     let parsed = TranslationValidator.parseBatch(raw, expectedIDs: items.map(\.id))
     var outcome = BatchOutcome(
       model: candidate.name,
-      provider: candidate.provider.displayName,
-      isPaid: !candidate.isFree)
+      provider: candidate.providerName,
+      isPaid: true)
     for issue in parsed.issues {
       outcome.notes.append(issue.description)
       if case .truncated = issue { outcome.truncated = true }
@@ -170,9 +169,8 @@ final class TranslationRouter {
     }
     var lastFailure: BackendError?
     for candidate in RoutedModel.chain {
-      guard let key = candidate.apiKey else { continue }
-      if let until = cooldowns[candidate.id], until > .now { continue }
-      await admit(candidate.provider)
+            if let until = cooldowns[candidate.id], until > .now { continue }
+      await admit(candidate)
       do {
         let prompt = ContextPromptBuilder.assemble(
           sourceText: text,
@@ -180,7 +178,7 @@ final class TranslationRouter {
           targetLanguage: to,
           context: context)
         let reply = try await Self.call(
-          candidate, apiKey: key, system: prompt.system, user: prompt.user)
+          candidate, system: prompt.system, user: prompt.user)
         return TranslationValidator.keepingEdges(of: text, reply.content)
       } catch let error as BackendError {
         lastFailure = error
@@ -189,23 +187,22 @@ final class TranslationRouter {
       }
     }
     throw lastFailure ?? BackendError.notConfigured(
-      "No translation model is available: no provider key is configured and every candidate is cooling down.")
+      ModelSettings.problem ?? "The translation model is cooling down after a failure; try again in a few minutes.")
   }
 
   // MARK: - shared plumbing
 
   private static func call(
     _ candidate: RoutedModel,
-    apiKey: String,
     system: String,
     user: String
   ) async throws -> ChatReply {
     let client = OpenAIChatClient(
       endpoint: candidate.endpoint,
       wire: candidate.wire,
-      apiKey: apiKey,
+      apiKey: candidate.bearer,
       model: candidate.model,
-      headers: candidate.headers)
+      headers: candidate.allHeaders)
     return try await client.complete(system: system, user: user)
   }
 
@@ -218,17 +215,17 @@ final class TranslationRouter {
   /// Waits until this provider is inside its per-minute request budget.
   /// `Task.sleep` suspends without blocking the actor, so concurrent pool
   /// workers still interleave.
-  private func admit(_ provider: RoutedModel.Provider) async {
+  private func admit(_ candidate: RoutedModel) async {
     while true {
       let now = Date.now
-      var times = (recentCalls[provider] ?? []).filter { now.timeIntervalSince($0) < 60 }
-      guard times.count >= provider.requestsPerMinute else {
+      var times = (recentCalls[candidate.providerID] ?? []).filter { now.timeIntervalSince($0) < 60 }
+      guard times.count >= candidate.requestsPerMinute else {
         times.append(now)
-        recentCalls[provider] = times
+        recentCalls[candidate.providerID] = times
         return
       }
       let oldest = times.min() ?? now
-      recentCalls[provider] = times
+      recentCalls[candidate.providerID] = times
       let wait = 60 - now.timeIntervalSince(oldest) + 0.05
       guard wait > 0 else { continue }
       try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))

@@ -57,7 +57,7 @@ nonisolated struct OpenAIChatClient: Sendable {
   func complete(
     system: String,
     user: String,
-    temperature: Double = 0.2,
+    temperature: Double? = 0.2,
     maxTokens: Int? = nil,
     jsonObject: Bool = false
   ) async throws -> ChatReply {
@@ -65,7 +65,10 @@ nonisolated struct OpenAIChatClient: Sendable {
     request.httpMethod = "POST"
     request.timeoutInterval = timeout
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-    request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+    // A local server takes no key: an empty one sends no header at all.
+    if !apiKey.isEmpty {
+      request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+    }
     for (name, value) in headers {
       request.setValue(value, forHTTPHeaderField: name)
     }
@@ -116,6 +119,13 @@ nonisolated struct OpenAIChatClient: Sendable {
       // 429 / 402 are quota refusals: the router cools the candidate down.
       if http.statusCode == 429 || http.statusCode == 402 {
         throw BackendError.rateLimited(http.statusCode, excerpt, Self.retryAfter(http))
+      }
+      // Reasoning models refuse a `temperature` outright: ask once more without it.
+      if http.statusCode == 400, temperature != nil,
+         excerpt?.localizedCaseInsensitiveContains("temperature") == true {
+        return try await complete(
+          system: system, user: user, temperature: nil, maxTokens: maxTokens,
+          jsonObject: jsonObject)
       }
       throw BackendError.badStatus(http.statusCode, excerpt)
     }
@@ -188,7 +198,7 @@ nonisolated struct OpenAIChatClient: Sendable {
   private struct Request: Encodable {
     var model: String
     var messages: [Message]
-    var temperature: Double
+    var temperature: Double?
     var max_tokens: Int?
     var response_format: ResponseFormat?
 
@@ -233,7 +243,7 @@ nonisolated struct OpenAIChatClient: Sendable {
     var model: String
     var instructions: String
     var input: [Item]
-    var temperature: Double
+    var temperature: Double?
     var max_output_tokens: Int?
 
     struct Item: Encodable {

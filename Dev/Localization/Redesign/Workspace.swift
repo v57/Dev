@@ -139,20 +139,20 @@ extension Translation {
       isOverlayPresented = true
     }
 
-    /// What to say about Muse right now — nil when the one model is ready. The two
-    /// halves are different problems with different remedies (5.2), and only the first
-    /// one stops the button: an unconfigured app cannot run at all, while a parked Muse
-    /// is a WAIT the run does itself.
+    /// What to say about the model right now — nil when it is ready. The two halves are
+    /// different problems with different remedies (5.2), and only the first one stops the
+    /// button: an unconfigured app cannot run at all, while a parked model is a WAIT the run
+    /// does itself.
     var museNote: String? {
       guard runner.router.isConfigured else { return Self.notConfigured }
       guard let until = runner.router.cooldownUntil else { return nil }
-      return "Muse is parked until \(until.formatted(date: .omitted, time: .shortened)); a run waits for it."
+      return "\(runner.router.modelName) is parked until \(until.formatted(date: .omitted, time: .shortened)); a run waits for it."
     }
 
-    /// True when the one button can do anything at all: Muse has a credential.
+    /// True when the one button can do anything at all: a model is configured.
     var canStart: Bool { runner.router.isConfigured }
 
-    /// What BOTH start buttons are disabled by (8.1): Muse has a credential, and no run of this
+    /// What BOTH start buttons are disabled by (8.1): a model is configured, and no run of this
     /// workspace is in flight. A run already going is paused or cancelled from its own pages
     /// rather than started again, so the two buttons offer a WAIT — not two more runs.
     ///
@@ -160,9 +160,9 @@ extension Translation {
     /// hosts offer the same pair of buttons: a rule restated per host is a rule that can drift.
     var canStartRun: Bool { canStart && !status.isRunning }
 
-    private static let notConfigured =
-      "Muse is not configured: set \(OpenCodeKeychain.envName) in the login keychain, "
-      + "the environment, or ~/.hermes/.env."
+    private static var notConfigured: String {
+      ModelSettings.problem ?? "No translation model is configured."
+    }
 
     // MARK: - runs
 

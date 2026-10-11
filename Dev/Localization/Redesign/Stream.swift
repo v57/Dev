@@ -7,8 +7,8 @@
 //  One completion, read as it is written.
 //
 //  Two protocols arrive through this file, picked by `Wire` (OpenAIChatClient.swift):
-//  Muse answers in the Responses protocol on OpenCode Go, whose frames name their own
-//  event type; the chat wire's `choices`/`delta` frames are read as before. Everything
+//  the Responses protocol, whose frames name their own event type, and the chat wire's
+//  `choices`/`delta` frames. Which one a provider speaks is its preset's business. Everything
 //  downstream is identical for both — this file only turns frames into text.
 //
 //  The redesign's requirement is that a row reaches the run the moment the model finishes
@@ -48,7 +48,7 @@ extension Translation {
     let model: String
     /// Which wire protocol `endpoint` speaks (see `Wire` in OpenAIChatClient).
     var wire: Wire = .chatCompletions
-    /// Extra headers a provider requires (OpenCode Go's session id, ...).
+    /// Extra headers a provider requires (OpenCode's session id, the user agent).
     var headers: [String: String] = [:]
     var timeout: TimeInterval = 180
 
@@ -88,14 +88,17 @@ extension Translation {
     // MARK: - one attempt
 
     private func attempt(
-      system: String, user: String, temperature: Double, includeUsage: Bool,
+      system: String, user: String, temperature: Double?, includeUsage: Bool,
       onChunk: (String) -> Void
     ) async throws -> Usage? {
       var request = URLRequest(url: endpoint)
       request.httpMethod = "POST"
       request.timeoutInterval = timeout
       request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-      request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+      // A local server takes no key: an empty one sends no header at all.
+      if !apiKey.isEmpty {
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+      }
       for (name, value) in headers {
         request.setValue(value, forHTTPHeaderField: name)
       }
@@ -147,6 +150,14 @@ extension Translation {
         // it only loses the token numbers the run would have counted (5.7).
         // Only the chat wire sends `stream_options`: on the Responses wire the retry would
         // resend the very same body, so a 400 there is an answer, not a field to drop.
+        // Reasoning models refuse a `temperature` outright, again before any text,
+        // so it is dropped and the request asked once more.
+        if http.statusCode == 400, temperature != nil,
+           excerpt?.localizedCaseInsensitiveContains("temperature") == true {
+          return try await attempt(
+            system: system, user: user, temperature: nil,
+            includeUsage: includeUsage, onChunk: onChunk)
+        }
         if http.statusCode == 400, includeUsage, wire == .chatCompletions {
           return try await attempt(
             system: system, user: user, temperature: temperature,
@@ -365,7 +376,7 @@ extension Translation {
     private struct Request: Encodable {
       var model: String
       var messages: [Message]
-      var temperature: Double
+      var temperature: Double?
       var stream: Bool
       var stream_options: StreamOptions?
 
@@ -379,13 +390,13 @@ extension Translation {
       }
     }
 
-    /// The Responses-API request body (Muse on OpenCode Go). It streams usage
+    /// The Responses-API request body. It streams usage
     /// in its closing frame; there is no `stream_options` in this protocol.
     private struct ResponsesRequest: Encodable {
       var model: String
       var instructions: String
       var input: [Item]
-      var temperature: Double
+      var temperature: Double?
       var stream: Bool
 
       struct Item: Encodable {

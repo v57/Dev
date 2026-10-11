@@ -27,7 +27,7 @@ enum ProvenanceMarkers {
 
 extension Provider {
   /// Human-readable producer name. Machine rows normally carry the real
-  /// backend name in `lastEditor` (e.g. Muse Spark 1.3 Contributor); this is
+  /// model id in `lastEditor` (the model chosen in Settings); this is
   /// the fallback for records without an editor stamp. Apple/Ollama are
   /// retired producers kept only so historical records still render.
   var displayName: String {
@@ -35,7 +35,7 @@ extension Provider {
     case .manual: return "Human"
     case .apple: return "Apple Translation"
     case .ollama: return "Ollama"
-    case .deepseek: return "OpenCode Go"
+    case .deepseek: return "AI model"
     case .importedDB: return "Imported DB"
     }
   }

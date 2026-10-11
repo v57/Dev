@@ -8,6 +8,9 @@ import SwiftUI
         WindowGroup {
             ContentView()
         }
+        Settings {
+            SettingsView()
+        }
     }
 }
 

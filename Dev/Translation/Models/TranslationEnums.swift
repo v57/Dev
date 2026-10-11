@@ -19,9 +19,9 @@ enum Provider: String, Codable, CaseIterable {
   /// Retired: local Ollama (translategemma). Kept so historical records
   /// still decode.
   case ollama
-  /// The hosted machine backend (today Muse via OpenCode Go; historically
-  /// deepseek-v4-flash via Command Code). Raw value stays `deepseek` for
-  /// record compatibility.
+  /// The machine backend: whichever model the user configured in Settings
+  /// (historically deepseek-v4-flash, then Muse). Raw value stays `deepseek`
+  /// for record compatibility.
   case deepseek
   /// A value copied from the app's imported translation database (shipped
   /// human translations). Records carrying it are `.reviewed` with

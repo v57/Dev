@@ -18,9 +18,9 @@
 //  not a convenience, it was a second, quietly wrong answer key.
 //
 //  Real implementation, unlike the rest of this folder's stubs. Semantics are in
-//  "Design notes.md" 5.2 and the rules at the top of that file. The wire details and
-//  the keychain lookup follow Translation/Backends/RoutedModel.swift,
-//  OpenCodeKeychain.swift and OpenAIChatClient.swift; nothing here calls
+//  "Design notes.md" 5.2 and the rules at the top of that file. The model, its wire and
+//  its key come from the user's Settings (Translation/Providers/ModelSettings.swift,
+//  resolved by RoutedModel.swift); nothing here calls
 //  TranslationRouter or reaches into its chain, because the redesign has no chain to
 //  walk.
 //
@@ -29,8 +29,8 @@ import Foundation
 import Observation
 
 extension Translation {
-  /// The one model client. Every call in the redesign goes to Muse: no free tier, no
-  /// fallback ladder, no second opinion. What survives from the current
+  /// The one model client. Every call in the redesign goes to the model the user chose in
+  /// Settings (`ModelSettings`): no free tier, no fallback ladder, no second opinion. What survives from the current
   /// implementation's routing work is admission and cooldown — neither was ever
   /// about model choice, both are about not burning a batch on a provider that is
   /// known to be down.
@@ -40,7 +40,7 @@ extension Translation {
   /// (5.7). The HTTP call itself is off the actor; only the routing state lives on the
   /// main actor, which is also why waiting for a budget suspends instead of blocking.
   @Observable @MainActor class Router {
-    /// Muse, the only candidate there is.
+    /// The configured model, the only candidate there is.
     ///
     /// `cooldownUntil` is part of the declared shape and says when a PARKED candidate
     /// may be retried. `next()` answers nil rather than handing out a parked candidate,
@@ -52,34 +52,29 @@ extension Translation {
       var cooldownUntil: Date?
     }
 
-    /// The single candidate the redesign ever calls. The model id comes from
-    /// `RoutedModel.muse` — the same constant the transport reads its endpoint and
-    /// headers from — so the two cannot end up speaking to different models.
-    static let defaultMuse = Candidate(
-      id: "opencode:\(RoutedModel.muse.model)",
-      model: RoutedModel.muse.model)
+    /// The single candidate the redesign calls: the configured model, read at the moment
+    /// of asking, so a change in Settings takes effect on the next request. The transport
+    /// resolves the same `RoutedModel.current`, so the two cannot speak to different
+    /// models. Nil while Settings is incomplete.
+    var muse: Candidate? {
+      guard let current = RoutedModel.current else { return nil }
+      return Candidate(id: current.id, model: current.model)
+    }
 
-    let muse: Candidate
+    /// The configured model's display name, for the status bar and the notes.
+    var modelName: String { RoutedModel.current?.name ?? "The model" }
 
     /// Per-request budget; a long batch reply can take minutes to write.
     static let requestTimeout: TimeInterval = 180
 
-    /// The one candidate, which is the whole point: there is nothing to choose between.
-    init(muse: Candidate) {
-      self.muse = muse
-    }
-
-    /// Muse on OpenCode Go — what the app builds unless something hands in a candidate
-    /// of its own.
-    init() {
-      muse = Self.defaultMuse
-    }
+    init() {}
 
     // MARK: - cooldown
 
     /// Candidate id → the instant it may be tried again. Keyed rather than carried on
-    /// the candidate because `muse` is a `let`: a candidate says WHICH model to call,
-    /// a park says WHEN, and only the second one moves.
+    /// the candidate: a candidate says WHICH model to call, a park says WHEN, and only
+    /// the second one moves. Keyed by provider and model, so switching models in
+    /// Settings leaves the parked one behind.
     private(set) var cooldowns: [String: Date] = [:]
 
     /// How long a quota answer parks Muse when the provider named no `Retry-After`. A
@@ -96,7 +91,7 @@ extension Translation {
     /// A run that gets nil here reads `cooldownUntil`, sleeps for it and asks again:
     /// nothing else is going to answer.
     func next() -> Candidate? {
-      guard !isCoolingDown else { return nil }
+      guard !isCoolingDown, let muse else { return nil }
       return Candidate(id: muse.id, model: muse.model, cooldownUntil: nil)
     }
 
@@ -106,7 +101,7 @@ extension Translation {
     /// The instant Muse may be tried again, or nil when it is not parked. The runner
     /// waits for this instant — `next()` has no second candidate to hand back.
     var cooldownUntil: Date? {
-      guard let until = cooldowns[muse.id], until > .now else { return nil }
+      guard let muse, let until = cooldowns[muse.id], until > .now else { return nil }
       return until
     }
 
@@ -135,14 +130,12 @@ extension Translation {
 
     // MARK: - admission
 
-    /// OpenCode Go's conservative per-minute request budget — the same number as
-    /// `RoutedModel.Provider.openCode.requestsPerMinute`, kept here so the redesign's
-    /// router never reaches into the chain table for a provider figure.
+    /// The configured provider's per-minute request budget (`ProviderPreset`): 30 for a
+    /// hosted provider, unpaced for a local server.
     ///
-    /// Low deliberately, as it was there: a burst that exhausts the budget costs error
-    /// retries for every later record, which is far more than waiting a few seconds up
-    /// front.
-    static let requestsPerMinute = 30
+    /// Low deliberately: a burst that exhausts the budget costs error retries for every
+    /// later record, which is far more than waiting a few seconds up front.
+    static var requestsPerMinute: Int { RoutedModel.current?.requestsPerMinute ?? 30 }
 
     /// Candidate id → instants of recent requests, for the per-minute budget.
     private var recentCalls: [String: [Date]] = [:]
@@ -235,20 +228,19 @@ extension Translation {
         // waits inside it are awaits, so nothing here blocks the main actor while a reply
         // is being read.
         let task = Task { @MainActor in
-          guard let apiKey = OpenCodeKeychain.apiKey() else {
+          guard let model = RoutedModel.current, model.isUsable else {
             continuation.finish(
               throwing: BackendError.notConfigured(
-                "Muse is not configured: set \(OpenCodeKeychain.envName) in the login keychain, "
-                  + "the environment, or ~/.hermes/.env."))
+                ModelSettings.problem ?? "No translation model is configured."))
             return
           }
           var arrived = false
           let client = ChatStream(
-            endpoint: RoutedModel.muse.endpoint,
-            apiKey: apiKey,
+            endpoint: model.endpoint,
+            apiKey: model.bearer,
             model: candidate.model,
-            wire: RoutedModel.muse.wire,
-            headers: RoutedModel.muse.headers,
+            wire: model.wire,
+            headers: model.allHeaders,
             timeout: Self.requestTimeout)
           do {
             let usage = try await client.send(
@@ -299,10 +291,9 @@ extension Translation {
     /// credential, the other is a wait, and only the caller can word that.
     var isEligible: Bool { isConfigured && !isCoolingDown }
 
-    /// True when the OpenCode Go key is present in the login keychain, the environment
-    /// or ~/.hermes/.env. Muse has no second credential and no second provider, so this
-    /// is the app's only "can it translate at all" question — checked here rather than
-    /// per batch.
-    var isConfigured: Bool { OpenCodeKeychain.apiKey() != nil }
+    /// True when Settings names a provider, a model and (where one is needed) a key.
+    /// There is no second candidate, so this is the app's only "can it translate at all"
+    /// question — checked here rather than per batch.
+    var isConfigured: Bool { RoutedModel.current?.isUsable == true }
   }
 }

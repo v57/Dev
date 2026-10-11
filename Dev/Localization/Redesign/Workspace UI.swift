@@ -224,7 +224,7 @@ extension Translation {
       } else {
         Notice(
           icon: "play.circle",
-          title: workspace.canStart ? "Ready" : "Muse is not configured",
+          title: workspace.canStart ? "Ready" : "No model configured",
           detail: workspace.museNote
             ?? "One button runs the whole plan: prepare, prelearn, learn, translate, then the row pass.")
       }
@@ -271,7 +271,13 @@ extension Translation {
               .lineLimit(2)
           }
           if let note = workspace.museNote {
-            Text(note).font(.caption).foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+              Text(note).font(.caption).foregroundStyle(.secondary)
+              if !workspace.canStart {
+                SettingsLink { Text("Open Settings…") }
+                  .controlSize(.small)
+              }
+            }
           }
         }
       }

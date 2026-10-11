@@ -727,8 +727,7 @@ extension Translation {
           // The button checks this before a run starts (5.2), so meeting it here
           // means the credential went away: one failure, not one per batch.
           throw BackendError.notConfigured(
-            "Muse is not configured: set \(OpenCodeKeychain.envName) in the login "
-              + "keychain, the environment, or ~/.hermes/.env.")
+            ModelSettings.problem ?? "No translation model is configured.")
         }
         try await runOperations(run)
         run.state = .finished
