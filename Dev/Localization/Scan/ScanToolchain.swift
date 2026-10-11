@@ -13,7 +13,7 @@ import Foundation
 ///
 /// A Swift package/Xcode project that builds for iOS cannot be type-checked
 /// against the HOST's products, and the host build usually fails outright for
-/// such a tree (measured on vijo/playgra: `swift build` for macOS dies on
+/// such a tree (measured on a large real project: `swift build` for macOS dies on
 /// `glassEffect(_:in:) is only available in macOS 26.0 or newer`, and every
 /// module that imports UIKit errors out), so the scan has to mirror the
 /// platform the tree actually builds for. SwiftPM/Xcode name that platform's
@@ -71,9 +71,9 @@ nonisolated struct ScanToolchain: Sendable {
   /// that follows a mismatch names nothing a reader can act on: "module 'Nuke' was compiled with a
   /// different version of Swift: '…0.33.1'; rebuild 'Nuke' and try again". The dependency cache in
   /// `ScanProjectPackages` was keyed by revision and triple alone, so a TOOLCHAIN update left those
-  /// builds stale and every project target importing them failed — playgra's `Vijo`, the app the
+  /// builds stale and every project target importing them failed — a large app's main target, the app the
   /// scan exists for, went to zero keys while its own sources were untouched (reader, 2026-09-15:
-  /// "Make Vijo target compile. It's the most important one").
+  /// "make the app target compile, it's the most important one").
   ///
   /// Measured on that machine: the cached modules were written Sep 11 by `swiftlang-6.4.0.33.1`,
   /// the toolchain in use is `swiftlang-6.4.0.34.1` — one build apart, and unreadable across.
@@ -96,7 +96,7 @@ nonisolated struct ScanToolchain: Sendable {
   var targetTriple: String?
   /// `-D` conditions. The extraction type-checks against DEBUG builds (both
   /// SwiftPM's `debug` configuration and Xcode's Debug), and a package manifest
-  /// can declare `#if debug`-only APIs the sources rely on (playgra does:
+  /// can declare `#if debug`-only APIs the sources rely on (a large app does:
   /// `ServerManager.apply()` assigns through a member only present in debug),
   /// so the conditions are part of "compiles the way Xcode does".
   var defines: [String] = ["debug", "DEBUG"]
@@ -145,7 +145,7 @@ nonisolated struct ScanToolchain: Sendable {
 /// `-target` matches the products it type-checks against. A mismatch is a hard
 /// error with a confusing message ("could not find module 'X' for target
 /// 'arm64-apple-ios-simulator'; found: x86_64-…"), and the slices present
-/// depend on how the user's Xcode last built (playgra's checked-in products
+/// depend on how the user's Xcode last built (a large app's checked-in products
 /// were x86_64-only before an arm64 build refreshed them).
 nonisolated enum ScanSliceDetector {
   /// Preferred slice triples for a platform, in order: the host's own
@@ -202,7 +202,7 @@ nonisolated enum ScanPlatformResolver {
   /// by name or reached through SwiftUI's macOS re-export.
   ///
   /// The distinction decides the platform for a target inside a tree that
-  /// builds for both (playgra: an iOS app, an iOS broadcast extension and an
+  /// builds for both (a large app: an iOS app, an iOS broadcast extension and an
   /// AppKit preview app in one project). Requiring `import AppKit` was not
   /// enough — IconsPreview uses `NSBezierPath` with only `import SwiftUI` — and
   /// treating every unnamed target as macOS was worse: the extension
@@ -225,7 +225,7 @@ nonisolated enum ScanPlatformResolver {
   /// True when the manifest DECLARES an iOS platform — `platforms: [.iOS(.v17), …]`.
   ///
   /// The decisive mark of a package that can be built for iOS, and the one that settles a package
-  /// declaring BOTH (playgra: `.iOS(.v17), .macOS(.v14)`): reader, 2026-09-15, "Make Dev app to also
+  /// declaring BOTH (a large app: `.iOS(.v17), .macOS(.v14)`): reader, 2026-09-15, "Make Dev app to also
   /// prioritize building on iOS". Read from `dump-package`'s undecoded JSON, which the manifest
   /// model carries for exactly this (`ScanPackageManifest.rawJSON`).
   static func declaresIOSPlatform(_ rawJSON: Data?) -> Bool {

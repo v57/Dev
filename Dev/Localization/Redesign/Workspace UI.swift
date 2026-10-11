@@ -772,8 +772,7 @@ extension Translation {
   /// A workspace is kept for the life of the shell, not the life of a pane: a pane that
   /// appears for another project focuses another workspace, and a run already going is
   /// never stopped by that — it keeps its own state and keeps reporting through its own
-  /// bar. Nothing here writes the `.xcstrings` (Save is the only writer, 5.8) and nothing
-  /// here touches the old pipeline: both runs are reachable (10.9).
+  /// bar. Nothing here writes the `.xcstrings` (Save is the only writer, 5.8).
   @Observable @MainActor final class Shell {
     /// The app's one SwiftData context, seen from the redesign.
     private let store: Store

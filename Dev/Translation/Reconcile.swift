@@ -1112,11 +1112,11 @@ nonisolated enum Reconcile {
     // bookkeeping once per insert, which is quadratic-ish on a big catalog —
     // measured 46.1 s for 48,420 records that way versus 2.0 s for
     // insert-then-`project.records.append(contentsOf:)` (7 MB / 1382-key
-    // playgra catalog, 37 languages; the assignment must not move back into
+    // large catalog, 37 languages; the assignment must not move back into
     // the loop, and setting it BEFORE the insert is worse still: 455 s).
     // `catalog.languages` is COMPUTED: it walks every entry of the catalog and
     // sorts the result. Evaluating it inside the key loop made the reconcile
-    // quadratic in the key count (1382 x 1382 entry walks for the playgra
+    // quadratic in the key count (1382 x 1382 entry walks for a large
     // catalog). Hoisted once, like `sourceLanguage`.
     let sourceLanguages = catalog.languages
     var created: [TranslationRecord] = []
@@ -1195,7 +1195,7 @@ nonisolated enum Reconcile {
   /// Exists so the upsert can COMPARE before writing. The previous version
   /// rewrote every unowned mirror record on every open unconditionally
   /// (measured: 45,306 records rewritten, 12.7 s on the 7 MB / 1382-key
-  /// playgra catalog) even when file and DB already agreed, and bumped
+  /// large catalog) even when file and DB already agreed, and bumped
   /// `updatedAt` on rows nothing had touched.
   private struct FileSlot {
     let value: String?

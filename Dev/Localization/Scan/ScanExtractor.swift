@@ -32,8 +32,8 @@ nonisolated struct ScanCompileUnit {
   /// includes `AVIFDataDecoder.h`, which includes `avif/avif.h` — a header of that package's own
   /// `libavif` target, found only under its `include/` directory. With the map passed and the path
   /// missing the compile fails inside the header ("'avif/avif.h' file not found"), which takes the
-  /// whole module with it (reader, 2026-09-15: "Make Vijo target compile. It's the most important
-  /// one" — playgra's app imports `avifnuke`, which re-exports `avifc`).
+  /// whole module with it (reader, 2026-09-15: "make the app target compile, it's the most important
+  /// one" — a large app imports `avifnuke`, which re-exports `avifc`).
   var clangIncludeDirs: [String] = []
   /// The SDK/triple/conditions this unit is compiled with — the platform the
   /// tree's own build products belong to (see `ScanToolchain`).
@@ -223,7 +223,7 @@ nonisolated enum ScanExtractor {
 
   /// Extra whole-module compiles allowed per pass after dropping blamed files.
   /// Four, not two: a module can have several independently broken files (the
-  /// playgra app target loses App.swift and the other `avifnuke` importers on
+  /// main target of a large app loses App.swift and the other `avifnuke` importers on
   /// top of its missing-dependency file), and each round drops everything the
   /// compiler named at once — so the cost is one compile per round only for
   /// modules that fail.
@@ -324,7 +324,7 @@ nonisolated enum ScanExtractor {
     // SAME declaration from a sibling module that was built with
     // `-enable-testing`, which reports `'module' is inaccessible due to
     // 'internal' protection level` and points at that other target's file
-    // (both messages verified on playgra's VideoEditor). Either way the shim
+    // (both messages verified on a large app's video editor target). Either way the shim
     // declares the accessor for THIS module, which wins the lookup.
     if needsBundleModuleShim(combined) {
       let shim = bundleModuleShim(in: workDirectory)
@@ -391,13 +391,13 @@ nonisolated enum ScanExtractor {
   /// The `.swift` paths the compiler blamed with a source-level error —
   /// `<path>:<line>:<col>: error: …`.
   ///
-  /// The path itself may contain SPACES (playgra: `Chat camera.swift`,
+  /// The path itself may contain SPACES (a large app: `Chat camera.swift`,
   /// `Selected item.swift`, `Server manager.swift`), so the match takes
   /// everything up to the last `.swift:` before the position, and tolerates
   /// the indentation some diagnostics carry. A `\S+\.swift` pattern silently
   /// matches none of those files — verified: 1 of 6 real diagnostics — which
   /// disables the salvage loop for whole modules and loses every key in them
-  /// (playgra's app target: 171 files, 0 keys).
+  /// (a large app's target: 171 files, 0 keys).
   static func blamedSourceFiles(in output: String) -> [String] {
     guard let regex = try? NSRegularExpression(
       pattern: "(?m)^[ \\t]*(.+?\\.swift):\\d+:\\d+: (?:fatal )?error:")
@@ -465,7 +465,7 @@ nonisolated enum ScanExtractor {
     )
     var parents: Set<String> = []
     // Keyed by module name: a build tree can hold the same generated modulemap
-    // more than once (playgra: `.build/out/Intermediates.noindex/GeneratedModuleMaps`
+    // more than once (a large app: `.build/out/Intermediates.noindex/GeneratedModuleMaps`
     // and a nested `.build/out/out/...` copy), and passing both makes clang
     // report "redefinition of module 'CallUI'" before any source is read. The
     // shortest path wins, which is the primary directory.
@@ -481,7 +481,7 @@ nonisolated enum ScanExtractor {
       switch url.pathExtension {
       case "swiftmodule":
         // Slice files live INSIDE the module bundle:
-        // `<products>/VijoUI.swiftmodule/arm64-apple-ios-simulator.swiftmodule`.
+        // `<products>/AppUI.swiftmodule/arm64-apple-ios-simulator.swiftmodule`.
         let bundle = url.deletingLastPathComponent()
         let productsDirectory = bundle.deletingLastPathComponent()
         let slice = url.deletingPathExtension().lastPathComponent
@@ -542,7 +542,7 @@ nonisolated enum ScanExtractor {
   /// occurrence of each. Attaching the same module's map twice makes clang
   /// report "redefinition of module 'X'" before any source is read — and a
   /// dependency built by the scan produces a second copy of every map the
-  /// project's package build already generated (playgra: built
+  /// project's package build already generated (a large app: built
   /// `client-sdk-swift` next to the package's own maps → `LKObjCHelpers` twice,
   /// which failed all four project targets). Pass the list whose maps belong to
   /// the build the units actually type-check against FIRST.
@@ -552,9 +552,9 @@ nonisolated enum ScanExtractor {
   /// holding a module is the one the compiler reads, and a machine that also builds the project in
   /// Xcode has THREE copies of the same modules: the scan's own fresh products, its scratch builds
   /// of the project's package dependencies, and Xcode's DerivedData — which can be a day older than
-  /// the sources. Sorted alphabetically the oldest one came first (`/Users/v57/Library` sorts before
-  /// `/Users/v57/github`), so playgra's `Vijo` type-checked against yesterday's `VijoUI` and failed
-  /// on APIs the current sources already have (reader, 2026-09-15: "Make Vijo target compile. It's
+  /// the sources. Sorted alphabetically the oldest one came first (`~/Library` sorts before
+  /// `~/github`), so a large app's main target type-checked against yesterday's `AppUI` and failed
+  /// on APIs the current sources already have (reader, 2026-09-15: "make the app target compile, it's
   /// the most important one").
   static func uniqueDirs(_ paths: [String]) -> [String] {
     var seen: Set<String> = []

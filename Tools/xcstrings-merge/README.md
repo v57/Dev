@@ -4,7 +4,7 @@
 > (`Dev/Localization/Scan/` — ScanEngine/ScanExtractor/ScanPackageFinder/…),
 > runs it from the Localization toolbar's "Scan Strings" button, previews the
 > merge and writes the catalog through the app's own writer. This standalone
-> executable stays as the command-line verifier (its playgra numbers are the
+> executable stays as the command-line verifier (its numbers for a large app are the
 > baseline the in-app engine is checked against).
 
 Standalone SwiftPM executable that scans a repo tree for Swift packages,
@@ -28,8 +28,8 @@ of the Dev app scheme.
 
 Example:
 
-    swift run xcstrings-merge --root ~/github/vijo/playgra \
-        --output /tmp/playgra-merged.xcstrings
+    swift run xcstrings-merge --root ~/Developer/MyApp \
+        --output /tmp/MyApp-merged.xcstrings
 
 ## What it does per package
 
@@ -100,7 +100,7 @@ files that did compile are still counted.
 Per-target and per-package unique-key counts and a grand total go to stdout,
 then the merge result:
 
-    Merged catalog written: /tmp/playgra-merged.xcstrings
+    Merged catalog written: /tmp/MyApp-merged.xcstrings
       existing entries preserved: 1382
       entries added (empty localization, state "new"): 32
       total entries: 1414

@@ -207,7 +207,7 @@ extension Translation {
   ///
   /// Read synchronously through `ImportedDB` (7.1: the `Imported` lookup is a local
   /// file read, like a store fetch — not a model call), because the app's own
-  /// database facade is async for the old pipeline's stage.
+  /// database facade is async.
   enum Imported {
     /// Resolves slots before any model call and marks them `.imported`: usable,
     /// unreviewed, and shown in their own colour because the reviewer has to know

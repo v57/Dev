@@ -105,7 +105,7 @@ nonisolated enum ScanEngine {
     var allModuleMapFiles: Set<String> = []
     var packageSeeds: [(name: String, root: URL, warning: String)] = []
 
-    // A tree can hold targets for both platforms (playgra: an iOS app next to
+    // A tree can hold targets for both platforms (a large app: an iOS app next to
     // an AppKit preview app; Dev: a project whose SDKROOT is `auto`). The
     // platform is therefore chosen per UNIT from the sources themselves, with
     // the run's resolved platform as the default, and each unit is compiled
@@ -113,7 +113,7 @@ nonisolated enum ScanEngine {
     // compile is unusable and vice versa.
     // MARK: 2a. build the packages — BEFORE a single search path is read
     //
-    // The ORDER here is the fix (reader, 2026-09-15: "playgra failed to scan after i deleted
+    // The ORDER here is the fix (reader, 2026-09-15: "the app failed to scan after i deleted
     // Sources/.build", where every library with a dependency reported
     // `no such module 'SomeCore'`). `moduleSearchPaths` ENUMERATES the package's `.build` for
     // `*.swiftmodule` products, and it used to run before `buildWarning`'s `swift build`: on a tree
@@ -156,7 +156,7 @@ nonisolated enum ScanEngine {
     ///  - an explicit UIKit import means iOS;
     ///  - an explicit AppKit import (and no UIKit) means the host;
     ///  - a PROJECT target that imports neither is not an iOS target — an
-    ///    Xcode project routinely holds a mixed set (playgra: the iOS app next
+    ///    Xcode project routinely holds a mixed set (a large app: the iOS app next
     ///    to an AppKit-less SwiftUI preview app that uses `NSBezierPath` with
     ///    only `import SwiftUI`, which re-exports AppKit on macOS). Compiling
     ///    it for iOS fails on exactly those symbols;
@@ -313,8 +313,8 @@ nonisolated enum ScanEngine {
               // module is the one the compiler reads. `setup.1` is this run's own `swift build`
               // products, `projectPackageIncludes` are the scans' builds of the project's package
               // dependencies, and `derivedData` is Xcode's — which on this reader's machine held
-              // yesterday's `VijoUI`, so `Vijo` failed on `Notifications.text(_:icon:)` and
-              // `VijoAlert.cancel(action:)` after the sources had both (2026-09-15).
+              // yesterday's `AppUI`, so `App` failed on `Notifications.text(_:icon:)` and
+              // `AppAlert.cancel(action:)` after the sources had both (2026-09-15).
               includeDirs: ScanExtractor.uniqueDirs(
                 setup.1
                   + (setup.0.platform == toolchain.platform ? projectPackageIncludes : [])

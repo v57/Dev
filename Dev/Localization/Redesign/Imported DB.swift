@@ -8,9 +8,9 @@
 //  `clearHints`, the `Imported` lookup and the whole `Store` are synchronous —
 //  state that lives in SwiftData or in one local file), and `Workspace.open()`
 //  applies it with a plain `try`. The app's own facade (`ImportedTranslationDB`)
-//  is async because the OLD pipeline's stage awaits it; this file reads the same
-//  file through a small blocking handle instead, so the redesign never has to
-//  make its prepare step async for a local index seek.
+//  is async (the deleted first pipeline awaited it); this file reads the same
+//  file through a small blocking handle instead, so prepare never has to be async
+//  for a local index seek.
 //
 //  Read-only, and nothing else: the database is a source of truth the app ships
 //  from, never something it writes (6.3).
@@ -24,7 +24,7 @@ extension Translation {
   ///
   /// It answers one question — the raw rows of one exact source text — and hands
   /// them to `ImportedDBLanguage.hit`, the same spelling-normalizing picker the
-  /// old pipeline's stage uses, so both readers agree on what a hit is (DB
+  /// facade uses, so both readers agree on what a hit is (DB
   /// language codes are not clean BCP-47; see `ImportedDBLanguage`).
   enum ImportedDB {
     /// The handle for the database the app has imported, or nil when there is

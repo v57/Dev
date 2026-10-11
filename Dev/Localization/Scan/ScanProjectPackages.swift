@@ -178,9 +178,9 @@ nonisolated enum ScanProjectPackages {
       // `avifc`), and a swiftbuild tree does NOT regenerate them: the scratch holds maps for the C
       // targets the Swift build itself compiles (`avif`, `avifnuke`, `Nuke`) and none for `avifc`,
       // whose map is the checkout's own file. A Swift module that REQUIRES such a clang module fails
-      // outright — playgra's `Vijo` imports `avifnuke`, which requires `avifc` — and the salvage path
+      // outright — a large app's main target imports `avifnuke`, which requires `avifc` — and the salvage path
       // drops every importing file, so the app the scan exists for came back with 44 keys from 171
-      // files (reader, 2026-09-15: "Make Vijo target compile. It's the most important one").
+      // files (reader, 2026-09-15: "make the app target compile, it's the most important one").
       let shippedMaps = shippedModuleMaps(checkout: checkout)
       let searchPaths = ScanExtractor.moduleSearchPaths(
         buildRoot: scratch, toolchain: toolchain)
@@ -241,7 +241,7 @@ nonisolated enum ScanProjectPackages {
   ///
   /// The compiler is the one that was missing, and it is not fussiness: a `.swiftmodule` is
   /// readable only by a compiler that can read its format, and an Xcode/Swift update leaves every
-  /// cached module stale — the reader's `Vijo` lost every key to "module 'Nuke' was compiled with a
+  /// cached module stale — a large app's main target lost every key to "module 'Nuke' was compiled with a
   /// different version of Swift", with its own sources untouched (2026-09-15). A marker written
   /// before this field existed decodes as nil, which is not equal to any version, so it rebuilds
   /// once.

@@ -438,8 +438,8 @@ func storeClearBlocker(localization: LocalizationStore, shell: Translation.Shell
 /// cache leave this window reading values that no longer exist. Then the rows go
 /// — one delete per row, in `TranslationStore.clear()` — and then both halves
 /// rebuild what they can: the browser re-reads its open artifact (no mirror, or
-/// the records would come straight back), the redesign's workspaces are rebuilt
-/// from those artifacts, and the old pipeline's run summary is dropped. What
+/// the records would come straight back), and the redesign's workspaces are rebuilt
+/// from those artifacts. What
 /// cannot be rebuilt is what was deleted, and 7.5 says so on screen before the
 /// press.
 @MainActor
