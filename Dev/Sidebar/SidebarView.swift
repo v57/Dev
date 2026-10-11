@@ -25,7 +25,7 @@ struct SidebarView: View {
   /// a project whose catalog it is showing (unsaved edits / a run in flight
   /// refuse the removal, and an idle open catalog is closed with the row).
   @Environment(LocalizationStore.self) private var localization
-  /// The localize servers this app works against, and their last check.
+  /// The Localization Servers this app works against, and their last check.
   @Environment(ServerStore.self) private var servers
   /// Which server the form sheet is adding or editing (nil = no sheet). Owned
   /// here so the toolbar button, the empty-state row and a row's Edit… all open
@@ -67,7 +67,7 @@ struct SidebarView: View {
         } label: {
           Label("Add Connection", systemImage: "plus")
         }
-        .help("Add a localize server to work against")
+        .help("Connect a server that serves its strings through the Localization Server API")
       }
     }
     .sheet(item: $serverSheet) { sheet in

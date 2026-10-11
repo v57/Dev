@@ -16,8 +16,8 @@ import Observation
 /// server's own worklist, read a page at a time, and every accepted value is
 /// pushed the moment its batch closes, so cancelling keeps what landed.
 ///
-/// The node is only ever spoken to over HTTP (`LocalizeClient`); no node code is
-/// involved, and the node's own translate engine is not used.
+/// The server is only ever spoken to over HTTP (`LocalizeClient`); the
+/// translation itself is Dev's, with the model chosen in Settings.
 ///
 /// Learning, in this pane, means what it means in the catalog run: fold what is
 /// already VERIFIED into the run before it translates. On a server the verified
@@ -194,7 +194,7 @@ final class ServerRun {
       notes.append("scope: \(scope)")
     }
     guard await router.isEligible(from: Self.sourceLanguage, to: locale) else {
-      phase = .failed("no model key configured for the router (provider chain is empty)")
+      phase = .failed(ModelSettings.problem ?? "the translation model is cooling down; try again shortly")
       return
     }
 
@@ -439,18 +439,17 @@ final class ServerRun {
   /// How many verified values may ride in the prompt's language block.
   private static let learnSampleCap = 120
 
-  /// The engine's own rule (node `mods/localize/lib/identity.ts`): a source with
-  /// no letter or digit outside its placeholders is never sent to a model. It is
-  /// still "missing" on the server, so a run must skip it rather than spend a
-  /// call on `$description`.
+  /// A source with no letter or digit outside its placeholders is never sent to a
+  /// model (the API's identity rule). It is still "missing" on the server, so a
+  /// run must skip it rather than spend a call on `$description`.
   static func isTranslatable(_ source: String) -> Bool {
     guard !source.isEmpty else { return false }
     var text = source
     for token in TranslationValidator.placeholders(source) {
       text = text.replacingOccurrences(of: token, with: " ")
     }
-    // `$name` / `${name}` are the node's own placeholder spelling and the
-    // validator above does not know them, so they are removed here too.
+    // `$name` / `${name}` are a common server-side placeholder spelling the
+    // validator above does not know, so they are removed here too.
     text = text.replacingOccurrences(
       of: #"\$\{?[A-Za-z_][A-Za-z0-9_.]*\}?"#, with: " ", options: .regularExpression)
     return text.contains { $0.isLetter || $0.isNumber }

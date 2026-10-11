@@ -8,7 +8,7 @@ import Foundation
 /// The server pane's line table: ONE locale of a server's corpus, one page at a
 /// time.
 ///
-/// The localize service caps every list at 1000 rows and hands back a cursor, so
+/// The API caps every list at 1000 rows and hands back a cursor, so
 /// this never holds the corpus: the next page is read when the reader reaches
 /// the bottom of the table. The search pulls pages too — while a query is
 /// unanswered the model keeps reading (a bounded sweep) instead of offering a

@@ -19,7 +19,7 @@ enum ServerSheet: Identifiable {
   }
 }
 
-/// The sidebar's Servers section: one row per configured localize server, plus
+/// The sidebar's Servers section: one row per Localization Server, plus
 /// the "Add Connection" row when there is nowhere to click yet.
 ///
 /// A row is a normal sidebar destination (`.server(id)`), so selecting one fills
@@ -50,7 +50,7 @@ struct ServersSidebarSection: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
-        .help("Add a localize server to work against")
+        .help("Connect a server that serves its strings through the Localization Server API")
       } else {
         ForEach(store.servers) { row in
           NavigationLink(value: SidebarSelection.server(row.id)) {

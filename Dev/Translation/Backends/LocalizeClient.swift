@@ -7,26 +7,23 @@ import Foundation
 
 // MARK: - LocalizeServer
 
-/// Where the node's localize service lives and how this app proves it is there.
+/// The defaults for a Localization Server: a backend that exposes its strings
+/// through the Localization Server API (`docs/localization-server-api.md`), so
+/// Dev can translate them.
 ///
-/// The service is the node (`~/github/vijo/node`) — the store the Localize tool
-/// reads from and writes to. It is NOT a database connection: every rule that
-/// keeps the corpus consistent (revision bumps, the stale stamp, the legacy
-/// dual-write, the render-cache invalidation, the socket broadcast) lives in the
-/// node's own code, so a direct Mongo write from this app would bypass all of
-/// them. The app therefore speaks the node's HTTP surface, POST + JSON, and
-/// carries the shared key as a bearer token.
+/// The server is NOT a database connection: every rule that keeps its strings
+/// consistent (revisions, the stale stamp, never overwriting a human's value)
+/// lives in the server's own code, so the app speaks its HTTP surface, POST +
+/// JSON, and carries the key as a bearer token.
 ///
-/// The key is read through `ProviderSecrets` (login keychain → process
-/// environment → `~/.hermes/.env`), so no secret is ever in source. A missing
-/// key is reported as "not configured", never as a crash and never as a silent
-/// empty result — an unconfigured app must look unconfigured.
+/// A missing key is reported as "not configured", never as a crash and never as
+/// a silent empty result — an unconfigured app must look unconfigured.
 nonisolated enum LocalizeServer {
-  /// The key's variable name, in the node's `.env` and in the keychain.
+  /// The key's variable name, in a server's `.env` and in Dev's environment.
   static let keyName = "LOCALIZE_KEY"
 
-  /// Dev default: the node on its normal port. `LOCALIZE_BASE_URL` overrides it
-  /// (the test-mode node listens on 18080).
+  /// The form's default endpoint: a development server on this Mac.
+  /// `LOCALIZE_BASE_URL` overrides it.
   static var base: URL {
     let configured = ProcessInfo.processInfo.environment["LOCALIZE_BASE_URL"]
     return URL(string: configured ?? "http://127.0.0.1:8080/") ?? URL(string: "http://127.0.0.1:8080/")!
@@ -34,7 +31,7 @@ nonisolated enum LocalizeServer {
 
   /// The client, or nil when no key is configured anywhere we look.
   static var client: LocalizeClient? {
-    guard let key = ProviderSecrets.value(named: keyName) else { return nil }
+    guard let key = ServerKeychain.sharedKey else { return nil }
     return LocalizeClient(base: base, key: key)
   }
 
@@ -44,13 +41,13 @@ nonisolated enum LocalizeServer {
 
 // MARK: - LocalizeClient
 
-/// One POST against the node's localize surface.
+/// One POST against a Localization Server.
 ///
 /// Every route there is POST + JSON behind `Authorization: Bearer <key>`; the
 /// answer is `{ "data": … }` on success and `{ "error": { "code", "message" } }`
 /// on any refusal. The codes worth naming rather than flattening into "network
 /// failed": 401 = the key is missing or wrong (or, on the write routes, that the
-/// caller has no key at all), 503 = the node itself has no `LOCALIZE_KEY`, 600 =
+/// caller has no key at all), 503 = the server itself has no `LOCALIZE_KEY`, 600 =
 /// a localized error string.
 nonisolated struct LocalizeClient: Sendable {
   let base: URL
@@ -68,17 +65,17 @@ nonisolated struct LocalizeClient: Sendable {
       case .notConfigured: return "no \(LocalizeServer.keyName) configured"
       case .http(let code, let message):
         switch code {
-        case 401: return "the node refused the key (401): \(message)"
-        case 503: return "the node has no \(LocalizeServer.keyName) configured (503): \(message)"
+        case 401: return "the server refused the key (401): \(message)"
+        case 503: return "the server has no \(LocalizeServer.keyName) configured (503): \(message)"
         default: return "HTTP \(code): \(message)"
         }
       case .malformed(let what): return "\(what) answered a shape the app cannot read"
-      case .unreachable(let detail): return "cannot reach the localize server: \(detail)"
+      case .unreachable(let detail): return "cannot reach the server: \(detail)"
       }
     }
   }
 
-  /// The node's failure body.
+  /// The server's failure body.
   private struct Failure: Decodable {
     struct Inner: Decodable { let code: Int; let message: String }
     let error: Inner
@@ -193,7 +190,7 @@ nonisolated struct LocalizeValueEntry: Sendable {
   var origin: String = "machine"
   var model: String? = nil
 
-  /// The node's wire shape for this row.
+  /// The wire shape for this row.
   var dictionary: [String: Any] {
     var entry: [String: Any] = ["source": source, "locale": locale, "value": value, "origin": origin]
     if let model { entry["model"] = model }

@@ -109,7 +109,7 @@ final class ServerStore {
 
   /// Creates a server. A non-empty key becomes its own keychain item; an empty
   /// one leaves the server on the shared `LOCALIZE_KEY`, which is how a local
-  /// node works with no setup.
+  /// development server works with no setup.
   @discardableResult
   func add(name: String, endpoint: String, key: String) -> String? {
     let server = ServerConnection(name: name, endpoint: endpoint)
@@ -190,7 +190,7 @@ final class ServerStore {
       statuses[id] = .online(messages: stats.messages, commented: stats.commented)
     } catch {
       // The client's own message already names the code that matters (401 key
-      // refused, 503 node unconfigured), so the dot carries the fix, not just a
+      // refused, 503 server unconfigured), so the dot carries the fix, not just a
       // failure.
       let detail = (error as? LocalizeClient.Error)?.description ?? "\(error)"
       statuses[id] = .offline(detail)

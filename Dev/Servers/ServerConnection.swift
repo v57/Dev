@@ -9,20 +9,20 @@ import SwiftData
 
 // MARK: - ServerConnection
 
-/// One localize server the app talks to.
+/// One Localization Server the app talks to: a backend that keeps its own
+/// user-facing strings (emails, push texts, web copy) and lets Dev translate
+/// them through the Localization Server API (`docs/localization-server-api.md`).
 ///
 /// A server is NOT a database connection, even though it looks like one in the
-/// sidebar. The corpus lives in Mongo behind the node (`~/github/vijo/node`),
-/// and every rule that keeps it consistent — revision bumps, the stale stamp,
-/// the legacy dual-write, the render-cache invalidation, the socket broadcast —
-/// is enforced by the node's own code. So each row here is an HTTP endpoint
-/// plus a key, and the app speaks the node's API rather than Mongo.
+/// sidebar. Every rule that keeps the server's strings consistent — revisions,
+/// the stale stamp, never overwriting a human's value — is the server's own
+/// code. So each row here is an HTTP endpoint plus a key, and the app speaks
+/// the API rather than any database.
 ///
 /// The KEY is never stored in SwiftData: the row keeps only the keychain
-/// ACCOUNT (`keyAccount`) to look it up under, exactly like `OpenCodeKeychain`
-/// keeps the provider secret out of source and out of the store. A server with
-/// no own key falls back to the shared `LOCALIZE_KEY`, which is what makes a
-/// fresh local server work with no setup at all.
+/// ACCOUNT (`keyAccount`) to look it up under. A server with no own key falls
+/// back to a `LOCALIZE_KEY` in the process environment, which is what makes a
+/// local development server work with no setup at all.
 @Model
 final class ServerConnection {
   /// Stable identity: the sidebar selection, the status map and the keychain
@@ -78,14 +78,14 @@ final class ServerConnection {
   /// The key the app will actually send, and where it came from.
   var keySource: KeySource {
     if ownKey != nil { return .server }
-    if ProviderSecrets.value(named: ServerKeychain.sharedKeyName) != nil { return .shared }
+    if ServerKeychain.sharedKey != nil { return .shared }
     return .missing
   }
 
   enum KeySource: Hashable {
     /// The key typed into this server's form (its own keychain item).
     case server
-    /// The shared `LOCALIZE_KEY` (keychain, environment or ~/.hermes/.env).
+    /// The shared `LOCALIZE_KEY` from the process environment.
     case shared
     /// Nothing configured: calls will be refused with 401/503.
     case missing
@@ -101,7 +101,7 @@ final class ServerConnection {
 
   /// The key to send, if any.
   var resolvedKey: String? {
-    ownKey ?? ProviderSecrets.value(named: ServerKeychain.sharedKeyName)
+    ownKey ?? ServerKeychain.sharedKey
   }
 
   /// The signed-in client for this server, or nil when its endpoint or key is
@@ -116,11 +116,10 @@ final class ServerConnection {
 
 /// The per-server key store.
 ///
-/// Same convention as `OpenCodeKeychain`: the login keychain holds the value
-/// under a service/account pair, only variable NAMES live in source, and every
-/// failure path returns nil instead of throwing. The shared fallback key keeps
-/// its own name (`LOCALIZE_KEY`) so the node's `.env` and the app agree on what
-/// to look for.
+/// The login keychain holds the value under a service/account pair, only
+/// variable NAMES live in source, and every failure path returns nil instead of
+/// throwing. The shared fallback key keeps its own name (`LOCALIZE_KEY`) so a
+/// server's `.env` and the app agree on what to look for.
 nonisolated enum ServerKeychain {
   /// kSecAttrService for every server key; the account distinguishes them.
   static let service = "dev.localize.server"
@@ -129,6 +128,25 @@ nonisolated enum ServerKeychain {
 
   static func key(account: String) -> String? {
     ServerKeychain.read(service: service, account: account)
+  }
+
+  /// `LOCALIZE_KEY` from the process environment (a server started from the same
+  /// shell as Dev). Files are read only when the user asks (`importableSharedKey`).
+  static var sharedKey: String? {
+    let value = ProcessInfo.processInfo.environment[sharedKeyName] ?? ""
+    return value.isEmpty ? nil : value
+  }
+
+  /// `LOCALIZE_KEY` from the environment or a tool's `.env` file, with where it
+  /// was found, for the form's Import button.
+  static func importableSharedKey() -> (key: String, source: String)? {
+    if let sharedKey { return (sharedKey, "the environment") }
+    for url in ProviderKeychain.dotEnvFiles {
+      if let value = DotEnv.read(url)[sharedKeyName] {
+        return (value, url.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
+      }
+    }
+    return nil
   }
 
   @discardableResult
@@ -145,8 +163,8 @@ nonisolated enum ServerKeychain {
 
   // MARK: - generic password items
 
-  /// Reads a generic-password item. Shared with `ProviderSecrets`' shape on
-  /// purpose: one item per (service, account), the value in `kSecValueData`.
+  /// Reads a generic-password item: one item per (service, account), the value
+  /// in `kSecValueData`.
   static func read(service: String, account: String) -> String? {
     let query: [String: Any] = [
       kSecClass as String: kSecClassGenericPassword,

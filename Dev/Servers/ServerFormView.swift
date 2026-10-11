@@ -10,7 +10,7 @@ import SwiftUI
 /// as in the Database app's `ConnectionFormView`).
 ///
 /// The key field is the interesting one. It is EMPTY for a server that uses the
-/// shared `LOCALIZE_KEY`, which is what a local node needs; typing one stores it
+/// shared `LOCALIZE_KEY`, which is what a local server needs; typing one stores it
 /// in the login keychain under this server's own account. On edit the field
 /// stays empty and untouched until it is typed into, because the existing key is
 /// never read back into the UI — a sheet is not a place to print a secret.
@@ -30,6 +30,9 @@ struct ServerFormView: View {
   /// stored key.
   @State private var keyEdited = false
   @State private var showsKey = false
+  /// A `LOCALIZE_KEY` found in the environment or a tool's `.env`, offered as
+  /// this server's key. Looked up once, when the sheet opens.
+  @State private var importable = ServerKeychain.importableSharedKey()
 
   init(
     editing: ServerConnection? = nil,
@@ -53,7 +56,7 @@ struct ServerFormView: View {
           .help("What this server is called in the sidebar")
 
         TextField("Endpoint", text: $endpoint, prompt: Text("http://127.0.0.1:8080/"))
-          .help("The node's service root — the address the app POSTs localize/* to")
+          .help("The server's API root: the app POSTs localize/* under it")
 
         HStack(spacing: 6) {
           if showsKey {
@@ -71,6 +74,13 @@ struct ServerFormView: View {
         }
         .onChange(of: key) { _, _ in keyEdited = true }
         .help(keyHelp)
+        if key.isEmpty, let found = importable {
+          Button("Use \(ServerKeychain.sharedKeyName) from \(found.source)") {
+            key = found.key
+          }
+          .buttonStyle(.link)
+          .help("Copies the key into this server's own keychain item when you save")
+        }
       }
       .formStyle(.grouped)
 
