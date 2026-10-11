@@ -28,3 +28,6 @@ plans/
 /Localizable.xcstrings
 CLAUDE.md
 /.claude
+
+# Internal planning boards (kept locally)
+KANBAN*.md
