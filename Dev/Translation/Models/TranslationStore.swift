@@ -75,6 +75,11 @@ final class TranslationStore {
     // file default.store couldn't be opened", dropped tables, lost data).
     // Pinning a per-app URL keeps sandboxed and unsandboxed builds isolated
     // from each other and from other apps.
+    // Screenshot runs never touch the user's store.
+    if LaunchOptions.isScreenshotMode {
+      let memory = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+      return try! ModelContainer(for: schema, configurations: [memory])
+    }
     let appSupport = URL.applicationSupportDirectory.appendingPathComponent(
       "dev.v57.dev", isDirectory: true)
     do {

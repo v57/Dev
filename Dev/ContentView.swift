@@ -87,7 +87,14 @@ struct ContentView: View {
     // Restore the remembered imported translation DB (path only — no open,
     // no scan) so the pipeline knows it is active.
     .task {
+      guard !LaunchOptions.isScreenshotMode else { return }
       ImportedTranslationDB.shared.restoreIfNeeded()
+    }
+    // The screenshot tests hand in a demo project instead of dropping one.
+    .task {
+      let demo = LaunchOptions.demoProjects
+      guard !demo.isEmpty, let first = await model.importDroppedURLs(demo) else { return }
+      model.selection = .project(first)
     }
     .toolbar {
       // The one tool picker: project-bound, so it is absent until a project
