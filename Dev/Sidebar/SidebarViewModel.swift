@@ -57,6 +57,8 @@ enum SidebarSelection: Hashable {
   case server(String)
   /// The Storage tool: what fills this Mac, by developer category.
   case storage
+  /// The VMs tool: UTM virtual machines, and Run on VM.
+  case vms
 }
 
 /// What the sidebar's one alert is about. A single value rather than one

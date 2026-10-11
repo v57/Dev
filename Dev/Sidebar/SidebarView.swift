@@ -259,6 +259,20 @@ private struct ProjectlessBar: View {
         RoundedRectangle(cornerRadius: 6)
           .fill(model.selection == .storage ? Color.accentColor.opacity(0.18) : Color.clear))
       .help("What fills this Mac, by developer category")
+      Button {
+        model.selection = .vms
+      } label: {
+        VMsSidebarRow()
+          .padding(.horizontal, 6)
+          .padding(.vertical, 2)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .background(
+        RoundedRectangle(cornerRadius: 6)
+          .fill(model.selection == .vms ? Color.accentColor.opacity(0.18) : Color.clear))
+      .help("UTM virtual machines: start them and run a project's build inside")
       Divider()
         .padding(.vertical, 3)
       clearRow

@@ -256,6 +256,8 @@
 				DEVELOPMENT_TEAM = AUCR797TMH;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
+				CODE_SIGN_ENTITLEMENTS = Dev.entitlements;
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Dev starts and stops your UTM virtual machines.";
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -285,6 +287,8 @@
 				DEVELOPMENT_TEAM = AUCR797TMH;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
+				CODE_SIGN_ENTITLEMENTS = Dev.entitlements;
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Dev starts and stops your UTM virtual machines.";
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;

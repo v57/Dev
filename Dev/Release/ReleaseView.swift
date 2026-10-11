@@ -10,7 +10,8 @@ import SwiftUI
 /// switch to another tool or project.
 @Observable
 final class ReleaseStore {
-  private var runners: [URL: ReleaseRunner] = [:]
+  /// Filled lazily while a view asks, so it must not be observed.
+  @ObservationIgnored private var runners: [URL: ReleaseRunner] = [:]
 
   func runner(for root: URL) -> ReleaseRunner {
     if let runner = runners[root] { return runner }

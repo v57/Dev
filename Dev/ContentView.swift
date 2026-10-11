@@ -24,6 +24,8 @@ struct ContentView: View {
   @State private var storage = StorageStore()
   /// Release runs per project, kept across tool and project switches.
   @State private var releases = ReleaseStore()
+  /// The UTM VMs and their Run on VM logs.
+  @State private var vms = VMStore()
   /// The redesign's shell (Design notes 8.1): the bridge that builds a project's
   /// `Translation.Workspace` over the same SwiftData container the browser reads
   /// (10.16), so the toolbar's Start, the panes' overlays and the panes' status bars
@@ -43,6 +45,7 @@ struct ContentView: View {
     .environment(servers)
     .environment(storage)
     .environment(releases)
+    .environment(vms)
     .environment(translation)
     // Unsaved-changes prompt: Reload…, Open…, a sidebar project switch and
     // quitting all hold their request here until it is answered, because
@@ -166,6 +169,8 @@ struct ContentView: View {
       ServerDetailView(serverID: id, store: servers)
     case .storage:
       StorageView()
+    case .vms:
+      VMsView(projects: model.projects)
     case nil:
       ContentUnavailableView("Select a project", systemImage: "sidebar.left")
     }
