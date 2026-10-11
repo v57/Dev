@@ -277,10 +277,10 @@ struct LocalizationView: View {
       CatalogTable(store: store)
         .searchable(text: $store.searchText,
                     prompt: "Search keys, comments, translations")
-        .safeAreaBar(edge: .top) {
+        .compatSafeAreaBar(edge: .top) {
           LanguageButtonsRow(store: store)
         }
-        .safeAreaBar(edge: .bottom) {
+        .compatSafeAreaBar(edge: .bottom) {
           FooterBar(store: store)
         }
         // The redesign's pages, over the browser they leave exactly where it is:

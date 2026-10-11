@@ -173,7 +173,7 @@ struct CreateIconView: View {
           .shadow(radius: 16)
       }
       .clipShape(RoundedRectangle(cornerRadius: view.size.width * 0.25))
-      .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: view.size.width * 0.25))
+      .compatInteractiveGlass(in: RoundedRectangle(cornerRadius: view.size.width * 0.25))
     }
     .aspectRatio(1, contentMode: .fit)
   }

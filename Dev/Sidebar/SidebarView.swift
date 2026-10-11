@@ -93,7 +93,7 @@ struct SidebarView: View {
     }
     // Projectless tools live here, not in the toolbar picker: the picker is
     // project-bound and only exists while a project is open.
-    .safeAreaBar(edge: .bottom) {
+    .compatSafeAreaBar(edge: .bottom) {
       ProjectlessBar(model: model)
     }
     .dropDestination(for: URL.self) { urls, _ in

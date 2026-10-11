@@ -25,7 +25,7 @@ extension Translation.VerticalLearn {
       GeometryReader { view in
         ScrollView(.horizontal) {
           LazyHStack(spacing: 0) {
-            ForEach(operations.enumerated(), id: \.offset) { (offset, element) in
+            ForEach(Array(operations.enumerated()), id: \.offset) { (offset, element) in
               OperationContent(operation: element, exchange: exchange(at: offset)).frame(width: view.size.width, height: view.size.height)
             }
           }.scrollTargetLayout()
@@ -87,7 +87,7 @@ extension Translation.VerticalLearn {
               .font(.callout)
               .foregroundStyle(.secondary)
               .padding(.bottom, 8)
-            ForEach(operation.items.enumerated(), id: \.offset) { (index, item) in
+            ForEach(Array(operation.items.enumerated()), id: \.offset) { (index, item) in
               HStack(alignment: .firstTextBaseline) {
                 Image(systemName: mark(item).icon).font(.title.bold()).frame(width: 32, height: 32)
                   .opacity(mark(item).isWaiting ? 0.1 : 1)

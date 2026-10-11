@@ -101,7 +101,7 @@ extension Translation.HorizontalTranslate {
       GeometryReader { view in
         ScrollView(.horizontal) {
           LazyHStack(spacing: 0) {
-            ForEach(operations.enumerated(), id: \.offset) { (offset, element) in
+            ForEach(Array(operations.enumerated()), id: \.offset) { (offset, element) in
               OperationContent(operation: element, exchange: exchange(at: offset), journal: journal).frame(width: view.size.width, height: view.size.height)
             }
           }.scrollTargetLayout()
@@ -291,7 +291,7 @@ extension Translation.HorizontalTranslate {
               .font(.callout)
               .foregroundStyle(.tertiary)
               .padding(.bottom, 8)
-            ForEach(operation.items.enumerated(), id: \.offset) { (rowIndex, item) in
+            ForEach(Array(operation.items.enumerated()), id: \.offset) { (rowIndex, item) in
               VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                   // The ROW's own mark (8.1, "stage pages"): this row's state, never the
@@ -304,7 +304,7 @@ extension Translation.HorizontalTranslate {
                 Translation.VerticalTranslate.StringView(value: item.source)
                   .font(.callout)
                   .foregroundStyle(.secondary)
-                ForEach(item.targets.enumerated(), id: \.offset) { (index, slot) in
+                ForEach(Array(item.targets.enumerated()), id: \.offset) { (index, slot) in
                   let outcome = outcome(slot, of: item)
                   HStack(alignment: .firstTextBaseline, spacing: 12) {
                     Text(slot.language)

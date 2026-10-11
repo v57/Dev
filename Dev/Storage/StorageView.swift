@@ -47,7 +47,7 @@ struct StorageView: View {
         }
       }
     }
-    .safeAreaBar(edge: .bottom) {
+    .compatSafeAreaBar(edge: .bottom) {
       if !store.selection.isEmpty {
         selectionBar
       }

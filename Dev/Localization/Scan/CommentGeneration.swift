@@ -120,6 +120,8 @@ nonisolated protocol CommentModel: Sendable {
 /// no network, no rate budget, measured at well under a second per comment.
 nonisolated struct OnDeviceCommentModel: CommentModel {
   var unavailableReason: String? {
+    // The framework ships with macOS 26; on 15 the pass reports why and skips.
+    guard #available(macOS 26, *) else { return "the on-device model needs macOS 26" }
     if case .unavailable(let reason) = SystemLanguageModel.default.availability {
       return OnDeviceCommentModel.text(for: reason)
     }
@@ -127,13 +129,19 @@ nonisolated struct OnDeviceCommentModel: CommentModel {
   }
 
   func comment(for target: CommentTarget, snippet: String) async throws -> String {
+    guard #available(macOS 26, *) else { throw OnDeviceUnavailable() }
     let session = LanguageModelSession(model: .default, instructions: Self.instructions)
     return try await session.respond(to: Self.prompt(target, snippet: snippet)).content
   }
 
+  /// Thrown by `comment` on a system without the framework. Never reached in
+  /// practice: the pass asks `unavailableReason` first.
+  struct OnDeviceUnavailable: Error {}
+
   /// The reason in the user's terms. Compared rather than switched: the
   /// framework's reason enum is not frozen, and a future case must not turn
   /// into a compile error in an app that only needs a sentence.
+  @available(macOS 26, *)
   private static func text(
     for reason: SystemLanguageModel.Availability.UnavailableReason
   ) -> String {
