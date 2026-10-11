@@ -55,8 +55,9 @@ final class TranslationStore {
 
   /// The ONE shared SwiftData container, created lazily in a static
   /// closure. Local-only store: no CloudKit, no iCloud entitlement in this
-  /// app.
-  static let container: ModelContainer = {
+  /// app. `nonisolated` because a container is Sendable and the background
+  /// passes (the sidebar's recount, the mirror) open their own contexts on it.
+  nonisolated static let container: ModelContainer = {
     let schema = Schema([
       Project.self,
       TranslationRecord.self,
