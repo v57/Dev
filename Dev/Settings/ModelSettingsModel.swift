@@ -16,7 +16,9 @@ final class ModelSettingsModel {
       guard providerID != oldValue else { return }
       defaults.set(providerID, forKey: ModelSettings.Key.provider)
       // A model or URL typed for one provider means nothing to the next.
-      model = preset?.recommendations.first?.model ?? ""
+      // The value pick first: a good translation per dollar is the safe default.
+      let picks = preset?.recommendations ?? []
+      model = (picks.first { $0.role == .value } ?? picks.first)?.model ?? ""
       baseURL = ""
       availableModels = []
       testResult = nil

@@ -1,0 +1,792 @@
+{
+ "checked": "2026-10-11",
+ "providers": [
+  {
+   "id": "commandcode",
+   "name": "CommandCode",
+   "baseURL": "https://api.commandcode.ai/provider/v1",
+   "wire": "chat",
+   "needsKey": true,
+   "keysURL": "https://commandcode.ai/settings/keys",
+   "notes": "Top pick: says it charges what upstreams charge (no markup). Commercial models are hosted by OpenAI/Google/Azure. Open models are routed across several upstreams; price shown is their mean. API needs a plan with API access: Provider ($15/mo pay-as-you-go), GOAT, Pro, Max or Team. The $1 Go plan returns 403 upgrade_required. Claude models are served only on /messages and return 400 on /chat/completions and /responses, so this app can't use them here. Every non-Claude model supports /chat/completions; some (e.g. Qwen3.8-Flash, Gemini 3.7 Flash, Ling) lack /responses, so check supported_endpoints in /models. Usage is sent at the end of the stream without opt-in. DeepSeek prices are off-peak and double at peak (01-04 and 06-10 UTC, Mon-Fri). Gemini 3.8 Flash is listed as 'GOAT and above'. Free Ling models are served from Novita.",
+   "models": [
+    {
+     "id": "google/gemini-3.8-flash",
+     "role": "best",
+     "input": 1.5,
+     "output": 7.5,
+     "context": 1000000,
+     "reason": "Gemini leads 2026 translation evals; Google-hosted, not quantized",
+     "quantized": "no (Google-hosted)",
+     "source": "https://commandcode.ai/docs/resources/pricing-limits",
+     "checked": "2026-10-11"
+    },
+    {
+     "id": "deepseek/deepseek-v4.1-flash",
+     "role": "value",
+     "input": 0.15,
+     "output": 0.6,
+     "context": 1000000,
+     "reason": "Matched GPT-5.4/Gemini Flash in M-GATE translation test; very cheap (off-peak price)",
+     "quantized": "not stated",
+     "source": "https://commandcode.ai/docs/resources/pricing-limits",
+     "checked": "2026-10-11"
+    },
+    {
+     "id": "inclusionai/ling-3.1-flash:free",
+     "role": "free",
+     "input": 0.0,
+     "output": 0.0,
+     "context": 262144,
+     "reason": "Free with no daily cap while it lasts; small flash model, so expect weaker quality",
+     "quantized": "not stated (Novita)",
+     "source": "https://commandcode.ai/docs/resources/pricing-limits",
+     "checked": "2026-10-11"
+    }
+   ]
+  },
+  {
+   "id": "openrouter",
+   "name": "OpenRouter",
+   "baseURL": "https://openrouter.ai/api/v1",
+   "wire": "chat",
+   "needsKey": true,
+   "keysURL": "https://openrouter.ai/keys",
+   "notes": ":free models allow 20 req/min and 50 req/day until you've bought 10+ credits in total, then 1000 req/day. A 30-row batch is one request. Free endpoints may log prompts or train on them; there are separate account privacy toggles for free and paid models, and data_collection:'deny' per request. Default routing favors cheap hosts, and many of them run DeepSeek in fp4/fp8 (Baidu, Decart, OpenInference and others). To avoid them, send provider:{order:['deepseek'],allow_fallbacks:false} or provider:{quantizations:['fp8','bf16']}. OpenAI GPT-6 and Claude 5.x models list no temperature support, so omit temperature. openai/gpt-6-luna ($0.10/$0.50, OpenAI-only so not degraded) is a cheap alternative. thinkingmachines/inkling:free is free but nvfp4.",
+   "models": [
+    {
+     "id": "google/gemini-3.8-flash",
+     "role": "best",
+     "input": 0.75,
+     "output": 3.75,
+     "context": 1048576,
+     "reason": "Strongest translation evidence; served only by Google. Promo price until 2026-12-31",
+     "quantized": "no (Google-hosted)",
+     "source": "https://openrouter.ai/api/v1/models",
+     "checked": "2026-10-11"
+    },
+    {
+     "id": "deepseek/deepseek-v4.1-flash",
+     "role": "value",
+     "input": 0.3,
+     "output": 1.2,
+     "context": 1048576,
+     "reason": "Cheap and solid translator; pin provider DeepSeek to avoid fp4 hosts",
+     "quantized": "varies by host (fp4/fp8/unknown)",
+     "source": "https://openrouter.ai/api/v1/models/deepseek/deepseek-v4.1-flash/endpoints",
+     "checked": "2026-10-11"
+    },
+    {
+     "id": "google/gemma-4-31b-it:free",
+     "role": "free",
+     "input": 0.0,
+     "output": 0.0,
+     "context": 262144,
+     "reason": "Free, served by Google AI Studio; Gemma is broadly multilingual and supports JSON mode",
+     "quantized": "unknown (Google AI Studio)",
+     "source": "https://openrouter.ai/api/v1/models/google/gemma-4-31b-it:free/endpoints",
+     "checked": "2026-10-11"
+    }
+   ]
+  },
+  {
+   "id": "opencode-zen",
+   "name": "OpenCode Zen",
+   "baseURL": "https://opencode.ai/zen/v1",
+   "wire": "chat",
+   "needsKey": true,
+   "keysURL": "https://opencode.ai/auth",
+   "notes": "Free models are 'free, lower quality'. In the author's experience Zen serves open models from the cheapest heavily quantized hosts, which hurts results a lot. OpenCode doesn't publish quantization. Free models may also be pulled at any time. Data: longcat-2.5-preview-free and step-5-preview-free use zero-retention hosts. big-pickle, exo-free, mimo-*-free and ling-*-free may train on your data. nemotron-*-free is trial-only and logged. Endpoint differs per model: GPT models are /responses only, Claude and Qwen 3.7/3.8 Flash are /messages only, and Gemini uses Google's native path. Only /chat/completions models work with the chat wire. Getting a key: sign in and add billing details.",
+   "models": [
+    {
+     "id": "longcat-2.5-preview-free",
+     "role": "free",
+     "input": 0.0,
+     "output": 0.0,
+     "context": 1000000,
+     "reason": "Free, zero-retention host; preview model, likely quantized, so expect weaker translations",
+     "quantized": "unknown (author reports degraded)",
+     "source": "https://opencode.ai/docs/zen",
+     "checked": "2026-10-11"
+    },
+    {
+     "id": "step-5-preview-free",
+     "role": "free",
+     "input": 0.0,
+     "output": 0.0,
+     "context": 1000000,
+     "reason": "Free, zero-retention host; preview, quality may vary and it can disappear",
+     "quantized": "unknown (author reports degraded)",
+     "source": "https://opencode.ai/docs/zen",
+     "checked": "2026-10-11"
+    }
+   ]
+  },
+  {
+   "id": "opencode-go",
+   "name": "OpenCode Go",
+   "baseURL": "https://opencode.ai/zen/go/v1",
+   "wire": "chat",
+   "needsKey": true,
+   "keysURL": "https://opencode.ai/auth",
+   "notes": "Subscription: $10/mo (Go Plus $40). Each model has a dollar cap: 20% per 5 h, 50% per week, 100% per month. The two free models stay usable, without limits, after you hit your cap. Same quantization caveat as Zen: the author finds the open models degraded. Some models are /responses-only (GPT, Grok, Muse) or /messages-only (MiniMax, Qwen). Only one member per workspace can subscribe. Muse Spark contributor models train on your data.",
+   "models": [
+    {
+     "id": "longcat-2.5-preview-free",
+     "role": "free",
+     "input": 0.0,
+     "output": 0.0,
+     "context": 1000000,
+     "reason": "Free and unlimited for a limited time; zero retention, but expect lower quality",
+     "quantized": "unknown (author reports degraded)",
+     "source": "https://opencode.ai/docs/go",
+     "checked": "2026-10-11"
+    },
+    {
+     "id": "step-5-preview-free",
+     "role": "free",
+     "input": 0.0,
+     "output": 0.0,
+     "context": 1000000,
+     "reason": "Free and unlimited for a limited time; zero retention, but expect lower quality",
+     "quantized": "unknown (author reports degraded)",
+     "source": "https://opencode.ai/docs/go",
+     "checked": "2026-10-11"
+    }
+   ]
+  },
+  {
+   "id": "openai",
+   "name": "OpenAI",
+   "baseURL": "https://api.openai.com/v1",
+   "wire": "responses",
+   "needsKey": true,
+   "keysURL": "https://platform.openai.com/api-keys",
+   "notes": "Both /chat/completions and /responses work; Responses is OpenAI's primary API. GPT-6 models are reasoning models: omit temperature (OpenRouter lists no temperature support). Default reasoning effort is medium. gpt-6-luna accepts effort 'none'; gpt-6.1-sol does not support none or minimal, so use low for translation. Inputs over 272K tokens bill at a higher rate. Batch and Flex are 50% off.",
+   "models": [
+    {
+     "id": "gpt-6.1-sol",
+     "role": "best",
+     "input": 2.0,
+     "output": 10.0,
+     "context": 1050000,
+     "reason": "OpenAI's current flagship tier; first-party, full quality",
+     "quantized": "no (first-party)",
+     "source": "https://developers.openai.com/api/docs/pricing",
+     "checked": "2026-10-11"
+    },
+    {
+     "id": "gpt-6-luna",
+     "role": "value",
+     "input": 0.1,
+     "output": 0.5,
+     "context": 1050000,
+     "reason": "Very cheap first-party small model; set reasoning effort none or low",
+     "quantized": "no (first-party)",
+     "source": "https://developers.openai.com/api/docs/pricing",
+     "checked": "2026-10-11"
+    }
+   ]
+  },
+  {
+   "id": "anthropic",
+   "name": "Anthropic",
+   "baseURL": "https://api.anthropic.com/v1",
+   "wire": "chat",
+   "needsKey": true,
+   "keysURL": "https://platform.claude.com/settings/keys",
+   "notes": "OpenAI SDK compatibility layer, chat completions only. Anthropic calls it for testing, not a long-term or production solution. On Claude 4.7+ models (all current ones) any temperature below 1 returns 400, so omit temperature, and setting both temperature and top_p is a 400. response_format is ignored, so ask for JSON in the prompt and validate it. stream_options is supported. reasoning_effort is ignored. Prompt caching isn't available. System messages are hoisted. Thinking is on by default on Claude 5.x models. Haiku 5.5's price applies to prompts up to 100K tokens ($0.50/$2.50 above that).",
+   "models": [
+    {
+     "id": "claude-sonnet-5-5",
+     "role": "best",
+     "input": 2.0,
+     "output": 10.0,
+     "context": 1000000,
+     "reason": "Claude ranks near the top of 2026 translation evals; natural phrasing",
+     "quantized": "no (first-party)",
+     "source": "https://platform.claude.com/docs/en/api/openai-sdk",
+     "checked": "2026-10-11"
+    },
+    {
+     "id": "claude-haiku-5-5",
+     "role": "value",
+     "input": 0.1,
+     "output": 0.5,
+     "context": 1000000,
+     "reason": "Very cheap current Haiku; fine for short UI strings",
+     "quantized": "no (first-party)",
+     "source": "https://platform.claude.com/docs/en/api/openai-sdk",
+     "checked": "2026-10-11"
+    }
+   ]
+  },
+  {
+   "id": "gemini",
+   "name": "Google Gemini",
+   "baseURL": "https://generativelanguage.googleapis.com/v1beta/openai",
+   "wire": "chat",
+   "needsKey": true,
+   "keysURL": "https://aistudio.google.com/apikey",
+   "notes": "Chat Completions only; Google still calls OpenAI compatibility beta. Streaming works with stream_options include_usage. Gemini 3.x thinking can't be turned off: use reasoning_effort 'low' (or 'minimal' on Flash-Lite). The free tier covers gemini-3.8-flash and the Flash-Lite models too, but free-tier prompts are used to improve Google products (paid tier: no). Free limits are per project; see aistudio.google.com/rate-limit. gemini-3.8-flash is $0.75/$3.75 through 2026-12-31, then $1.50/$7.50.",
+   "models": [
+    {
+     "id": "gemini-3.8-flash",
+     "role": "best",
+     "input": 0.75,
+     "output": 3.75,
+     "context": 1048576,
+     "reason": "Best translation evidence in 2026 (Alconost index #1); price doubles in 2027",
+     "quantized": "no (first-party)",
+     "source": "https://ai.google.dev/gemini-api/docs/pricing",
+     "checked": "2026-10-11"
+    },
+    {
+     "id": "gemini-3.1-flash-lite",
+     "role": "value",
+     "input": 0.25,
+     "output": 1.5,
+     "context": 1048576,
+     "reason": "Cheap first-party Flash-Lite; good enough for short UI strings",
+     "quantized": "no (first-party)",
+     "source": "https://ai.google.dev/gemini-api/docs/pricing",
+     "checked": "2026-10-11"
+    },
+    {
+     "id": "gemma-4-31b-it",
+     "role": "free",
+     "input": 0.0,
+     "output": 0.0,
+     "context": 262144,
+     "reason": "Gemma 4 is free of charge on the Gemini API; open model with broad language coverage",
+     "quantized": "no (first-party)",
+     "source": "https://ai.google.dev/gemini-api/docs/pricing",
+     "checked": "2026-10-11"
+    }
+   ]
+  },
+  {
+   "id": "deepseek",
+   "name": "DeepSeek",
+   "baseURL": "https://api.deepseek.com",
+   "wire": "chat",
+   "needsKey": true,
+   "keysURL": "https://platform.deepseek.com/api_keys",
+   "notes": "Prices are off-peak. Peak (01-04 and 06-10 UTC, Mon-Fri) is double. Use 'deepseek-flash' (now V4.1 Flash). 'deepseek-v4-flash' is a legacy alias, still served as V4.1 Flash. Cache hits are almost free. The service is operated in China, so check the data policy before sending private strings. This is the first-party, unquantized source of DeepSeek.",
+   "models": [
+    {
+     "id": "deepseek-v4-pro",
+     "role": "best",
+     "input": 0.66,
+     "output": 1.98,
+     "context": 1000000,
+     "reason": "DeepSeek's larger model; strong multilingual quality at a low price (off-peak)",
+     "quantized": "no (first-party)",
+     "source": "https://api-docs.deepseek.com/quick_start/pricing",
+     "checked": "2026-10-11"
+    },
+    {
+     "id": "deepseek-flash",
+     "role": "value",
+     "input": 0.15,
+     "output": 0.6,
+     "context": 1000000,
+     "reason": "Tied with GPT-5.4 and Gemini Flash in a 2026 translation study; very cheap (off-peak)",
+     "quantized": "no (first-party)",
+     "source": "https://api-docs.deepseek.com/quick_start/pricing",
+     "checked": "2026-10-11"
+    }
+   ]
+  },
+  {
+   "id": "meta-ai",
+   "name": "Meta Model API",
+   "baseURL": "https://api.meta.ai/v1",
+   "wire": "chat",
+   "needsKey": true,
+   "keysURL": "https://dev.meta.ai/platform",
+   "notes": "Supports /chat/completions and /responses. Responses keeps reasoning across turns, which one-shot translation doesn't need. No trailing slash on the base URL, or you get a 404. Leave temperature and top_p at their defaults (1.0). Contributor tier ($0.10/$0.20) lets Meta train future models on your prompts and completions, and is limited to 100 RPM per team. Standard tier: not used for training, 3000 RPM. The keys URL comes from the site navigation and isn't confirmed.",
+   "models": [
+    {
+     "id": "muse-spark-1.3",
+     "role": "best",
+     "input": 1.25,
+     "output": 4.25,
+     "context": 1048576,
+     "reason": "Meta's current model; standard tier, so your data isn't used for training",
+     "quantized": "no (first-party)",
+     "source": "https://dev.meta.ai/docs/pricing-rate-limits",
+     "checked": "2026-10-11"
+    },
+    {
+     "id": "muse-spark-1.3-contributor",
+     "role": "value",
+     "input": 0.1,
+     "output": 0.2,
+     "context": 1048576,
+     "reason": "Same model, very cheap, but Meta trains on your strings; 100 RPM",
+     "quantized": "no (first-party)",
+     "source": "https://dev.meta.ai/docs/pricing-rate-limits",
+     "checked": "2026-10-11"
+    }
+   ]
+  },
+  {
+   "id": "xai",
+   "name": "xAI",
+   "baseURL": "https://api.x.ai/v1",
+   "wire": "responses",
+   "needsKey": true,
+   "keysURL": "https://console.x.ai",
+   "notes": "xAI calls Chat Completions legacy and recommends Responses. Responses are stored for 30 days, so send store:false if that matters. On grok-4.5 and later, all tokens bill at the higher rate once the prompt reaches 200K. logprobs is ignored on grok-4.20 and newer.",
+   "models": [
+    {
+     "id": "grok-4.7",
+     "role": "best",
+     "input": 2.0,
+     "output": 6.0,
+     "context": 500000,
+     "reason": "xAI's most capable model; first-party",
+     "quantized": "no (first-party)",
+     "source": "https://docs.x.ai/docs/models",
+     "checked": "2026-10-11"
+    },
+    {
+     "id": "grok-4.3",
+     "role": "value",
+     "input": 1.25,
+     "output": 2.5,
+     "context": 1000000,
+     "reason": "Cheaper Grok with 1M context; scored below the leaders in one translation study",
+     "quantized": "no (first-party)",
+     "source": "https://docs.x.ai/docs/models",
+     "checked": "2026-10-11"
+    }
+   ]
+  },
+  {
+   "id": "zai",
+   "name": "Z.AI (GLM)",
+   "baseURL": "https://api.z.ai/api/paas/v4",
+   "wire": "chat",
+   "needsKey": true,
+   "keysURL": "https://z.ai/manage-apikey/apikey-list",
+   "notes": "GLM models reason by default, which costs output tokens; lower or disable it (reasoning_effort / thinking param) for translation. glm-4.7-flash and glm-4.5-flash are free. The context sizes come from models.dev; the Z.AI pricing page doesn't list them. The keys URL isn't confirmed.",
+   "models": [
+    {
+     "id": "glm-5.3",
+     "role": "best",
+     "input": 1.4,
+     "output": 4.4,
+     "context": 1000000,
+     "reason": "Z.AI flagship; first-party, so not quantized by a reseller; strong zh/en",
+     "quantized": "no (first-party)",
+     "source": "https://docs.z.ai/guides/overview/pricing",
+     "checked": "2026-10-11"
+    },
+    {
+     "id": "glm-5.3-flash",
+     "role": "value",
+     "input": 0.15,
+     "output": 0.5,
+     "context": 1000000,
+     "reason": "Cheap current GLM tier from the source",
+     "quantized": "no (first-party)",
+     "source": "https://docs.z.ai/guides/overview/pricing",
+     "checked": "2026-10-11"
+    },
+    {
+     "id": "glm-4.7-flash",
+     "role": "free",
+     "input": 0.0,
+     "output": 0.0,
+     "context": 200000,
+     "reason": "Free first-party model; older and smaller, so expect weaker quality",
+     "quantized": "no (first-party)",
+     "source": "https://docs.z.ai/guides/overview/pricing",
+     "checked": "2026-10-11"
+    }
+   ]
+  },
+  {
+   "id": "kimi-coding",
+   "name": "Moonshot (Kimi)",
+   "baseURL": "https://api.moonshot.ai/v1",
+   "wire": "chat",
+   "needsKey": true,
+   "keysURL": "https://platform.moonshot.ai/console/api-keys",
+   "notes": "Docs moved to platform.kimi.ai; the API base is still api.moonshot.ai/v1. kimi-k3 fixes temperature=1.0, top_p=0.95, n=1 and the penalties at 0, so omit them. Thinking is always on with reasoning_effort defaulting to max: send reasoning_effort 'low' to save cost. The keys URL isn't confirmed (it may redirect to platform.kimi.ai).",
+   "models": [
+    {
+     "id": "kimi-k3",
+     "role": "best",
+     "input": 3.0,
+     "output": 15.0,
+     "context": 1048576,
+     "reason": "Moonshot flagship; first-party; set reasoning_effort low",
+     "quantized": "no (first-party)",
+     "source": "https://platform.kimi.ai/docs/pricing/chat",
+     "checked": "2026-10-11"
+    },
+    {
+     "id": "kimi-k2.6",
+     "role": "value",
+     "input": 0.95,
+     "output": 4.0,
+     "context": 262144,
+     "reason": "Cheaper Kimi; good general multilingual quality",
+     "quantized": "no (first-party)",
+     "source": "https://platform.kimi.ai/docs/pricing/chat",
+     "checked": "2026-10-11"
+    }
+   ]
+  },
+  {
+   "id": "alibaba",
+   "name": "Alibaba DashScope (Qwen)",
+   "baseURL": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+   "wire": "chat",
+   "needsKey": true,
+   "keysURL": "https://modelstudio.console.alibabacloud.com/",
+   "notes": "International (Singapore) endpoint, which is priced higher than some other regions. Qwen3.x models can reason; turn it off with enable_thinking:false where supported. The qwen-mt-* translation models use a special translation_options API and aren't suited to JSON batches. Official pricing is a per-model page shown in CNY; the USD figures come from models.dev and aggregators.",
+   "models": [
+    {
+     "id": "qwen3.8-max",
+     "role": "best",
+     "input": 2.0,
+     "output": 6.0,
+     "context": 1000000,
+     "reason": "Qwen flagship; very strong on CJK languages; first-party",
+     "quantized": "no (first-party)",
+     "source": "https://www.alibabacloud.com/help/en/model-studio/models",
+     "checked": "2026-10-11"
+    },
+    {
+     "id": "qwen3.8-flash",
+     "role": "value",
+     "input": 0.15,
+     "output": 0.47,
+     "context": 1000000,
+     "reason": "Cheap current Qwen Flash, first-party",
+     "quantized": "no (first-party)",
+     "source": "https://help.aliyun.com/en/model-studio/qwen3-8-flash",
+     "checked": "2026-10-11"
+    }
+   ]
+  },
+  {
+   "id": "minimax",
+   "name": "MiniMax",
+   "baseURL": "https://api.minimax.io/v1",
+   "wire": "chat",
+   "needsKey": true,
+   "keysURL": "https://platform.minimax.io",
+   "notes": "Use the OpenAI-compatible base /v1 (Hermes uses the /anthropic one). Temperature must be in [0,2] (recommended 1.0). n must be 1. Penalties and logit_bias are ignored. On M2.x, reasoning comes back as <think>...</think> inside content: send reasoning_split:true or strip it before parsing JSON. M3 price doubles above 512K input.",
+   "models": [
+    {
+     "id": "MiniMax-M3",
+     "role": "value",
+     "input": 0.3,
+     "output": 1.2,
+     "context": 1000000,
+     "reason": "Cheap first-party flagship with 1M context; strip <think> before parsing JSON",
+     "quantized": "no (first-party)",
+     "source": "https://platform.minimax.io/docs/guides/pricing-paygo",
+     "checked": "2026-10-11"
+    }
+   ]
+  },
+  {
+   "id": "mistral",
+   "name": "Mistral",
+   "baseURL": "https://api.mistral.ai/v1",
+   "wire": "chat",
+   "needsKey": true,
+   "keysURL": "https://console.mistral.ai/api-keys",
+   "notes": "Mistral Large 4 is a public preview (2026-10-06) at a 50% launch price ($0.68/$2.09) that ends around 2026-10-20, so the list price is shown. The model IDs come from models.dev; Mistral's own pages show only slugs, and sources disagree on mistral-large-4 vs mistral-large-4-0, so check /v1/models. Mistral may reject unknown OpenAI fields (e.g. stream_options) with a 422.",
+   "models": [
+    {
+     "id": "mistral-large-4",
+     "role": "best",
+     "input": 1.36,
+     "output": 4.18,
+     "context": 1048576,
+     "reason": "Mistral flagship; very good on European languages (preview)",
+     "quantized": "no (first-party)",
+     "source": "https://docs.mistral.ai/inference/pricing",
+     "checked": "2026-10-11"
+    },
+    {
+     "id": "mistral-small-latest",
+     "role": "value",
+     "input": 0.15,
+     "output": 0.6,
+     "context": 262144,
+     "reason": "Cheap, solid for EU languages; Small 4 (2603)",
+     "quantized": "no (first-party)",
+     "source": "https://docs.mistral.ai/inference/pricing",
+     "checked": "2026-10-11"
+    }
+   ]
+  },
+  {
+   "id": "groq",
+   "name": "Groq",
+   "baseURL": "https://api.groq.com/openai/v1",
+   "wire": "chat",
+   "needsKey": true,
+   "keysURL": "https://console.groq.com/keys",
+   "notes": "Very fast but the model choice is small. Contexts are 131K. A free plan exists with low limits; the docs show 30 RPM / 1K RPD / 8K TPM / 200K TPD for these models, but it's unclear whether those are the free-plan or Developer-plan limits. Preview models (qwen3.8-27b) can be dropped at short notice.",
+   "models": [
+    {
+     "id": "qwen/qwen3.8-27b",
+     "role": "best",
+     "input": 0.8,
+     "output": 4.0,
+     "context": 131072,
+     "reason": "Best multilingual model on Groq (preview)",
+     "quantized": "not stated",
+     "source": "https://console.groq.com/docs/models",
+     "checked": "2026-10-11"
+    },
+    {
+     "id": "openai/gpt-oss-120b",
+     "role": "value",
+     "input": 0.15,
+     "output": 0.6,
+     "context": 131072,
+     "reason": "Cheap and fast; translation is OK for major languages",
+     "quantized": "not stated",
+     "source": "https://console.groq.com/docs/models",
+     "checked": "2026-10-11"
+    }
+   ]
+  },
+  {
+   "id": "fireworks",
+   "name": "Fireworks AI",
+   "baseURL": "https://api.fireworks.ai/inference/v1",
+   "wire": "chat",
+   "needsKey": true,
+   "keysURL": "https://app.fireworks.ai/settings/users/api-keys",
+   "notes": "The model IDs come from Fireworks page slugs and match models.dev. US-only variants cost 1.5x. GLM reasons by default, so lower reasoning effort. Precision isn't published (the Nemotron Ultra slug says nvfp4).",
+   "models": [
+    {
+     "id": "accounts/fireworks/models/glm-5p3",
+     "role": "best",
+     "input": 1.4,
+     "output": 4.4,
+     "context": 1048573,
+     "reason": "Top open-weight model on a reputable host",
+     "quantized": "not stated",
+     "source": "https://docs.fireworks.ai/serverless/pricing",
+     "checked": "2026-10-11"
+    },
+    {
+     "id": "accounts/fireworks/models/deepseek-v4p1-flash",
+     "role": "value",
+     "input": 0.3,
+     "output": 1.2,
+     "context": 1000000,
+     "reason": "Cheap, solid translator on a reputable host",
+     "quantized": "not stated",
+     "source": "https://docs.fireworks.ai/serverless/pricing",
+     "checked": "2026-10-11"
+    }
+   ]
+  },
+  {
+   "id": "deepinfra",
+   "name": "DeepInfra",
+   "baseURL": "https://api.deepinfra.com/v1/openai",
+   "wire": "chat",
+   "needsKey": true,
+   "keysURL": "https://deepinfra.com/dash/api_keys",
+   "notes": "DeepInfra shows precision per model: avoid zai-org/GLM-5.3 here because it's fp4. DeepSeek-V4.1-Flash is fp8, currently 30% off ($0.14/$0.42); list price shown. Qwen3.8-Max is a 'Partner' model.",
+   "models": [
+    {
+     "id": "Qwen/Qwen3.8-Max",
+     "role": "best",
+     "input": 1.65,
+     "output": 4.951,
+     "context": 256000,
+     "reason": "Qwen flagship (partner-hosted), cheaper than Alibaba Singapore",
+     "quantized": "not stated",
+     "source": "https://deepinfra.com/Qwen/Qwen3.8-Max",
+     "checked": "2026-10-11"
+    },
+    {
+     "id": "deepseek-ai/DeepSeek-V4.1-Flash",
+     "role": "value",
+     "input": 0.2,
+     "output": 0.6,
+     "context": 1048576,
+     "reason": "Cheap, fp8 (mild quantization)",
+     "quantized": "fp8",
+     "source": "https://deepinfra.com/deepseek-ai/DeepSeek-V4.1-Flash",
+     "checked": "2026-10-11"
+    }
+   ]
+  },
+  {
+   "id": "together",
+   "name": "Together AI",
+   "baseURL": "https://api.together.xyz/v1",
+   "wire": "chat",
+   "needsKey": true,
+   "keysURL": "https://api.together.ai/settings/api-keys",
+   "notes": "Prices are from together.ai/pricing; model IDs from models.dev (not confirmed via the authenticated /models). Precision isn't published.",
+   "models": [
+    {
+     "id": "zai-org/GLM-5.3",
+     "role": "best",
+     "input": 1.4,
+     "output": 4.4,
+     "context": 1048576,
+     "reason": "Top open-weight model on a reputable host",
+     "quantized": "not stated",
+     "source": "https://www.together.ai/pricing",
+     "checked": "2026-10-11"
+    },
+    {
+     "id": "deepseek-ai/DeepSeek-V4.1-Flash",
+     "role": "value",
+     "input": 0.3,
+     "output": 1.2,
+     "context": 1048576,
+     "reason": "Cheap, solid translator",
+     "quantized": "not stated",
+     "source": "https://www.together.ai/pricing",
+     "checked": "2026-10-11"
+    }
+   ]
+  },
+  {
+   "id": "ollama-cloud",
+   "name": "Ollama Cloud",
+   "baseURL": "https://ollama.com/v1",
+   "wire": "chat",
+   "needsKey": true,
+   "keysURL": "https://ollama.com/settings/keys",
+   "notes": "Billed per token from plan credits: Free gets starter credits and starter models only; Pro is $20/mo with $60 of credits; Max is $100/mo with $300. Off-peak (outside 12-18 UTC on weekdays, and all weekend) is cheaper; the peak price is shown. Ollama says it never logs or trains on prompts and requires zero retention from its hosts. It uses native weights but may use NVFP4 on newer GPUs. GLM-5.3's reasoning_effort defaults to max, so set it to low. Model IDs were confirmed via ollama.com/v1/models.",
+   "models": [
+    {
+     "id": "glm-5.3",
+     "role": "best",
+     "input": 1.4,
+     "output": 4.4,
+     "context": 1000000,
+     "reason": "Top open-weight model with zero data retention",
+     "quantized": "native weights; NVFP4 possible",
+     "source": "https://ollama.com/library/glm-5.3",
+     "checked": "2026-10-11"
+    },
+    {
+     "id": "deepseek-v4.1-flash",
+     "role": "value",
+     "input": 0.3,
+     "output": 1.2,
+     "context": 1000000,
+     "reason": "Cheap; half price off-peak ($0.15/$0.60)",
+     "quantized": "native weights; NVFP4 possible",
+     "source": "https://ollama.com/library/deepseek-v4.1-flash",
+     "checked": "2026-10-11"
+    }
+   ]
+  },
+  {
+   "id": "ollama",
+   "name": "Ollama (local)",
+   "baseURL": "http://localhost:11434/v1",
+   "wire": "chat",
+   "needsKey": false,
+   "keysURL": "",
+   "notes": "Local, free and private. Any non-empty Bearer string works. Choose the model by unified memory: a 16 GB Mac runs gemma4:12b (~8 GB download); 32 GB+ runs qwen3.8:27b or gemma4:31b (18-20 GB). Ollama may load models with a short default context, so raise it (OLLAMA_CONTEXT_LENGTH or num_ctx) if long batches get cut off. qwen3.8 thinks by default; turn that off or lower reasoning_effort. Expect lower quality than frontier cloud models, especially for less common languages.",
+   "models": [
+    {
+     "id": "gemma4:12b",
+     "role": "free",
+     "input": 0.0,
+     "output": 0.0,
+     "context": 262144,
+     "reason": "For 16 GB Macs: ~8 GB, Gemma is trained on many languages",
+     "quantized": "~4-bit (inferred from download size)",
+     "source": "https://ollama.com/library/gemma4",
+     "checked": "2026-10-11"
+    },
+    {
+     "id": "qwen3.8:27b",
+     "role": "free",
+     "input": 0.0,
+     "output": 0.0,
+     "context": 262144,
+     "reason": "For 32 GB Macs: 18 GB; strongest local pick for CJK; turn thinking off",
+     "quantized": "~4-bit (inferred from download size)",
+     "source": "https://ollama.com/library/qwen3.8",
+     "checked": "2026-10-11"
+    },
+    {
+     "id": "gemma4:31b",
+     "role": "free",
+     "input": 0.0,
+     "output": 0.0,
+     "context": 262144,
+     "reason": "For 32 GB+ Macs: 19-20 GB; best local Gemma for broad language coverage",
+     "quantized": "~4-bit (inferred from download size)",
+     "source": "https://ollama.com/library/gemma4",
+     "checked": "2026-10-11"
+    }
+   ]
+  },
+  {
+   "id": "lmstudio",
+   "name": "LM Studio (local)",
+   "baseURL": "http://localhost:1234/v1",
+   "wire": "chat",
+   "needsKey": false,
+   "keysURL": "",
+   "notes": "Local, free and private. Prefer MLX builds on Apple silicon. Set the context length when loading a model, since the load default can be small. qwen/qwen3.8-27b thinks by default; turn it off or set low reasoning effort. Each Gemma variant has a -qat (quantization-aware) build, which keeps quality better at 4-bit. Any non-empty Bearer string works unless the server's auth is turned on.",
+   "models": [
+    {
+     "id": "google/gemma-4-12b",
+     "role": "free",
+     "input": 0.0,
+     "output": 0.0,
+     "context": 262144,
+     "reason": "For 16 GB Macs: 7.4 GB download; broad language coverage",
+     "quantized": "~4-bit (inferred from download size)",
+     "source": "https://lmstudio.ai/models/gemma-4",
+     "checked": "2026-10-11"
+    },
+    {
+     "id": "qwen/qwen3.8-27b",
+     "role": "free",
+     "input": 0.0,
+     "output": 0.0,
+     "context": 262144,
+     "reason": "For 32 GB Macs: 16.1 GB; strong on CJK; turn thinking off",
+     "quantized": "~4-bit (inferred from download size)",
+     "source": "https://lmstudio.ai/models/qwen3.8",
+     "checked": "2026-10-11"
+    },
+    {
+     "id": "google/gemma-4-31b",
+     "role": "free",
+     "input": 0.0,
+     "output": 0.0,
+     "context": 262144,
+     "reason": "For 32 GB+ Macs: 19 GB; best local Gemma",
+     "quantized": "~4-bit (inferred from download size)",
+     "source": "https://lmstudio.ai/models/gemma-4",
+     "checked": "2026-10-11"
+    }
+   ]
+  }
+ ],
+ "overall": {
+  "defaultProvider": "commandcode",
+  "defaultModel": "deepseek/deepseek-v4.1-flash",
+  "cheapest": "openai gpt-6-luna",
+  "free": "openrouter google/gemma-4-31b-it:free"
+ }
+}
