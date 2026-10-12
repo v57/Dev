@@ -32,6 +32,9 @@ nonisolated extension StorageDiscovery {
       let identifier = info["CFBundleIdentifier"] as? String ?? ""
       let isApple = identifier.hasPrefix("com.apple.")
       let fileName = ((bundle as NSString).lastPathComponent as NSString).deletingPathExtension
+      if !identifier.isEmpty { installedIdentifiers.insert(identifier.lowercased()) }
+      installedNames.insert(fileName.lowercased())
+      if let name = info["CFBundleName"] as? String { installedNames.insert(name.lowercased()) }
       let names = Set([fileName, info["CFBundleName"] as? String].compactMap { $0 }.filter { !$0.isEmpty })
       let leftovers = isApple
         ? [] : appLeftovers(identifier: identifier, names: names, groupContainers: groupContainers)
@@ -88,6 +91,7 @@ nonisolated extension StorageDiscovery {
   /// manages them and several are protected.
   mutating func addOther() {
     let library = h("Library")
+    addLeftovers(in: library)
     func sweep(
       _ folder: String, _ category: StorageCategory, _ group: String, _ safety: StorageSafety,
       minBytes: Int64, detail: String
@@ -112,6 +116,64 @@ nonisolated extension StorageDiscovery {
       detail: "Device backup")
     folder(.trash, "Trash", "Trash", ".Trash", .data,
       cleanup: .revealOnly(reason: "Empty it from the Finder"))
+  }
+
+  /// Library folders named like an app's bundle identifier (`com.vendor.App`)
+  /// when no installed app has that identifier or name: what a deleted app
+  /// left behind. Caches are safe to clean; support data and containers are
+  /// listed as your data, since a reinstalled app would read them again.
+  mutating func addLeftovers(in library: String) {
+    let places: [(String, StorageSafety)] = [
+      ("Caches", .cache), ("Application Support", .data), ("Logs", .cache),
+      ("HTTPStorages", .cache), ("WebKit", .cache), ("Saved Application State", .cache),
+    ] + (fullDiskAccess ? [("Containers", .data)] : [])
+    for (folder, safety) in places {
+      for path in children(of: "\(library)/\(folder)") where isDirectory(path) {
+        var name = (path as NSString).lastPathComponent
+        if name.hasSuffix(".savedState") { name = (name as NSString).deletingPathExtension }
+        guard isLeftover(name), !isCovered(path), !isClaimed(path) else { continue }
+        let app = Self.appName(fromIdentifier: name)
+        add(StorageItem(
+          id: path, category: .leftovers, group: app, title: folder, detail: name, paths: [path],
+          safety: safety, cleanup: .trash, minBytes: 1_000_000))
+      }
+    }
+  }
+
+  /// A reverse-DNS name no installed app answers to.
+  func isLeftover(_ name: String) -> Bool {
+    let lowered = name.lowercased()
+    let parts = lowered.split(separator: ".")
+    guard parts.count >= 3, parts.allSatisfy({ !$0.isEmpty }), !lowered.hasPrefix("com.apple."),
+          ["com", "org", "net", "io", "dev", "app", "co", "us", "de", "me"].contains(String(parts[0]))
+    else { return false }
+    if installedIdentifiers.contains(lowered) { return false }
+    // An AI tool's folder belongs to the AI section, whatever its name.
+    if Self.assistant(named: name) != nil { return false }
+    // Names under a code host belong to libraries any app may use.
+    if lowered.hasPrefix("com.github.") || lowered.hasPrefix("io.github.") { return false }
+    // A vendor that still has an app here keeps its helpers and updaters
+    // (`com.figma.agent` beside Figma, `com.google.GoogleUpdater` beside Chrome).
+    let vendor = parts.prefix(2).joined(separator: ".")
+    if installedIdentifiers.contains(where: { $0.hasPrefix(vendor + ".") }) { return false }
+    if let last = parts.last.map(String.init) {
+      if installedNames.contains(last) { return false }
+      // A command-line tool that is still installed (`swiftformat`).
+      if ["/opt/homebrew/bin/", "/usr/local/bin/"].contains(where: { fileManager.fileExists(atPath: $0 + last) }) {
+        return false
+      }
+    }
+    return true
+  }
+
+  /// `com.bohemiancoding.sketch3` → `Sketch3`.
+  static func appName(fromIdentifier identifier: String) -> String {
+    // The last component that names something: `com.duckduckgo.macos.browser`
+    // is DuckDuckGo's, `com.gamemac.www` is gamemac's.
+    let generic: Set<String> = ["www", "app", "macos", "mac", "osx", "browser", "desktop", "client", "helper"]
+    let parts = identifier.split(separator: ".").map(String.init)
+    let name = parts.dropFirst().last { !generic.contains($0.lowercased()) } ?? parts.last ?? identifier
+    return name.prefix(1).uppercased() + name.dropFirst()
   }
 
   /// The AI category a Library folder belongs to by name (Codex's cache,
