@@ -85,7 +85,7 @@ final class VMStore {
     return runner
   }
 
-  static let utmctlPaths = ["/opt/homebrew/bin/utmctl", "/usr/local/bin/utmctl",
+  nonisolated static let utmctlPaths = ["/opt/homebrew/bin/utmctl", "/usr/local/bin/utmctl",
                             "/Applications/UTM.app/Contents/MacOS/utmctl"]
   static var utmctl: String? {
     utmctlPaths.first { FileManager.default.isExecutableFile(atPath: $0) }

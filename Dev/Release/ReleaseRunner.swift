@@ -9,7 +9,7 @@ import Observation
 // MARK: - ReleaseStep
 
 /// One step of `release.sh`, in the order the script runs them.
-enum ReleaseStep: String, CaseIterable, Identifiable, Sendable {
+nonisolated enum ReleaseStep: String, CaseIterable, Identifiable, Sendable {
   case check, build, test, screenshots, archive, direct, github, appstore
 
   var id: String { rawValue }

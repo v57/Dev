@@ -20,7 +20,7 @@ final class VMRunner {
   private var process: LineProcess?
 
   /// Folders never copied: VCS state and build output, rebuilt on the guest.
-  static let excluded = [".git", ".build", "build", "DerivedData", "node_modules", ".swiftpm",
+  nonisolated static let excluded = [".git", ".build", "build", "DerivedData", "node_modules", ".swiftpm",
                          "xcuserdata", ".DS_Store", "graphify-out"]
 
   /// A sensible first command for a project, from what it holds.
@@ -37,18 +37,26 @@ final class VMRunner {
     return system == .windows ? "dir" : "ls -la"
   }
 
+  /// The process that syncs `root` to `target` and runs `command` there. Run on VM
+  /// and the Workflows tool's VM steps both start their runs through it.
+  nonisolated static func process(
+    project root: URL, on target: String, system: VirtualMachine.System, command: String
+  ) -> LineProcess {
+    let name = root.lastPathComponent.replacingOccurrences(of: " ", with: "-")
+    let script = system == .windows ? windowsScript : linuxScript
+    return LineProcess(
+      "/bin/bash", ["-c", script],
+      environment: [
+        "DEV_ROOT": root.path, "DEV_TARGET": target, "DEV_NAME": name, "DEV_COMMAND": command,
+        "DEV_EXCLUDES": excluded.joined(separator: "\n"),
+      ])
+  }
+
   func run(project root: URL, on target: String, system: VirtualMachine.System, command: String) {
     guard !isRunning else { return }
     log = []
     exitStatus = nil
-    let name = root.lastPathComponent.replacingOccurrences(of: " ", with: "-")
-    let script = system == .windows ? Self.windowsScript : Self.linuxScript
-    let process = LineProcess(
-      "/bin/bash", ["-c", script],
-      environment: [
-        "DEV_ROOT": root.path, "DEV_TARGET": target, "DEV_NAME": name, "DEV_COMMAND": command,
-        "DEV_EXCLUDES": Self.excluded.joined(separator: "\n"),
-      ])
+    let process = Self.process(project: root, on: target, system: system, command: command)
     self.process = process
     isRunning = true
     Task { [weak self] in
@@ -69,11 +77,11 @@ final class VMRunner {
 
   func cancel() { process?.terminate() }
 
-  private static let sshOptions =
+  nonisolated private static let sshOptions =
     #"SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new)"#
 
   /// rsync, then the command in a login shell (so the guest's PATH has its toolchains).
-  private static let linuxScript = sshOptions + #"""
+  nonisolated private static let linuxScript = sshOptions + #"""
 
     set -o pipefail
     excludes=()
@@ -92,7 +100,7 @@ final class VMRunner {
 
   /// A tar stream whose entries already carry the `dev-sync/<name>/` prefix, so
   /// the guest's tar creates the folder itself in cmd and PowerShell alike.
-  private static let windowsScript = sshOptions + #"""
+  nonisolated private static let windowsScript = sshOptions + #"""
 
     set -o pipefail
     excludes=()
