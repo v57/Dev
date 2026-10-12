@@ -8,31 +8,20 @@
 import SwiftData
 import SwiftUI
 
-/// Detail pane for a SELECTED sidebar project: the two dev tools bound to
-/// it (P40 — binding IS the integration). The binding source is the row
-/// snapshot from the shared SidebarViewModel (the SAME rows the sidebar
-/// renders); nothing here tracks 'which project is selected' on its own.
+/// Detail pane for a SELECTED sidebar project: the tab the toolbar picked
+/// (`SidebarViewModel.projectTool`) — Overview first, then the tools bound to
+/// the project. The binding source is the row snapshot from the shared
+/// SidebarViewModel (the SAME rows the sidebar renders).
 ///
-/// WHICH tool fills the pane is owned by the ONE toolbar picker
-/// (`SidebarViewModel.projectTool`), not by this view: it is deselected by
-/// default, and while it is, the pane prompts for a pick. There is no
-/// project header here — the sidebar row already carries the project's
-/// icon, name and translation badge.
-///
-///  - App Icon: CreateIconView exports into the project's root directory
-///    (no folder picker), so Export writes the project's OWN
-///    Assets.xcassets/AppIcon.appiconset. Projects without a rootURL
-///    (legacy catalog-file rows) fall back to the picker.
-///  - Localization: picking the tool opens the project's catalog into the
-///    shared LocalizationStore — reconcile find-or-creates by catalogURL and
-///    reuses the selected project's row, so no duplicate is ever created —
-///    and LocalizationView shows the catalog, or a 'no catalog' state when
-///    the file is absent. LAZY: the open happens when the Localization tool is
-///    first opened for the project, never on selection alone, so browsing the
-///    sidebar costs no parse, no mirror and no row build (see
-///    `openCatalogIfPicked`). The store is shared with the projectless tool;
-///    the bound view only renders content while the store holds THIS project's
-///    catalog.
+///  - Overview: what the project is and how its localization, icon, workflows
+///    and App Store screenshots stand, each a click from its tab.
+///  - Localization: picking the tab opens the project's catalog into the
+///    shared LocalizationStore. LAZY: the open happens when the tab is first
+///    opened for the project, never on selection alone, so browsing the sidebar
+///    costs no parse (see `openCatalogIfPicked`).
+///  - App Icon: CreateIconView exports into the project's root directory.
+///  - Screenshots: capture, post-process and review the App Store pictures.
+///  - Workflows: the project's CI.
 struct ProjectDetailView: View {
   let model: SidebarViewModel
   let row: SidebarProjectRow
@@ -49,52 +38,50 @@ struct ProjectDetailView: View {
   /// after a trip to App Icon).
   private struct CatalogOpenKey: Equatable {
     let project: PersistentIdentifier
-    let tool: DevTool?
+    let tool: DevTool
   }
 
   var body: some View {
     Group {
-      if let tool = model.projectTool {
-        switch tool {
-        case .icon:
-          CreateIconView(exportRootURL: row.rootURL)
-        case .localization:
-          LocalizationView(
-            projectCatalogURL: row.catalogURL,
-            projectRootURL: row.rootURL,
-            onCatalogCreated: { model.refresh() })
-        case .release:
-          if let root = row.rootURL {
-            ReleaseView(root: root)
-          } else {
-            ContentUnavailableView(
-              "No project folder", systemImage: "folder.badge.questionmark",
-              description: Text("Drop the project's folder on the sidebar to release it."))
-          }
+      switch model.projectTool {
+      case .overview:
+        ProjectOverviewView(model: model, row: row)
+      case .icon:
+        CreateIconView(exportRootURL: row.rootURL)
+      case .localization:
+        LocalizationView(
+          projectCatalogURL: row.catalogURL,
+          projectRootURL: row.rootURL,
+          onCatalogCreated: { model.refresh() })
+      case .screenshots:
+        if let root = row.rootURL {
+          ScreenshotsView(root: root, projectName: row.name)
+        } else {
+          noFolder("Drop the project's folder on the sidebar to capture its screenshots.")
         }
-      } else {
-        toolPrompt
+      case .workflows:
+        if let root = row.rootURL {
+          WorkflowsView(root: root, projectName: row.name)
+        } else {
+          noFolder("Drop the project's folder on the sidebar to run its workflows.")
+        }
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     // Binding side effect, LAZY: the catalog loads the moment the
-    // Localization tool is first opened for this project — not when the
-    // project is selected, and not while another tool (or no tool) is picked.
-    // A catalog the store already holds is left untouched, so per-catalog
-    // view state survives a revisit; a missing file stays closed and the
-    // Localization pane shows its 'no catalog' state.
+    // Localization tab is first opened for this project — not when the
+    // project is selected, and not while another tab is showing. A catalog the
+    // store already holds is left untouched, so per-catalog view state survives
+    // a revisit; a missing file stays closed and the Localization pane shows
+    // its 'no catalog' state.
     .task(id: CatalogOpenKey(project: row.id, tool: model.projectTool)) {
       await openCatalogIfPicked()
     }
   }
 
-  /// Deselected toolbar picker state: explain the single picker instead of
-  /// guessing a tool.
-  private var toolPrompt: some View {
+  private func noFolder(_ message: String) -> some View {
     ContentUnavailableView(
-      "Choose a tool",
-      systemImage: "wrench.and.screwdriver",
-      description: Text("Pick App Icon, Localization or Release in the toolbar to open it for this project."))
+      "No project folder", systemImage: "folder.badge.questionmark", description: Text(message))
   }
 
   /// Opens the bound catalog — only for the Localization tool, and only when

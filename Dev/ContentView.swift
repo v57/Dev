@@ -2,19 +2,17 @@ import AppKit
 import SwiftUI
 
 /// Thin host for the project-centric split view: owns the ONE sidebar view
-/// model (single source of truth for project/tool selection — the sidebar's
-/// projectless bottom bar and the project-bound tools read it) and the two
-/// shared tool observables (CreateIcon settings + the LocalizationStore's
-/// open catalog), then routes the detail pane from the sidebar selection.
-/// Both are injected at the split level so the sidebar's live projectless
-/// mini-status rows and the tools themselves read the SAME instances.
+/// model (single source of truth for project/tool selection) and the shared
+/// tool observables, injected at the split level so the sidebar rows and the
+/// tools read the SAME instances, then routes the detail pane from the
+/// sidebar selection.
 ///
-/// There is exactly ONE tool picker — the toolbar one — and it is
-/// PROJECT-BOUND: it appears only while a project is the selection, starts
-/// deselected, and picks which tool fills the pane for that project.
-/// Projectless tools are reached from the sidebar's bottom bar instead.
+/// A selected project gets the toolbar's tab control — Overview, Localization,
+/// App Icon, Screenshots, Workflows — and opens on Overview (or the tab it was
+/// last left on). With no project yet, the pane is the welcome screen.
 struct ContentView: View {
   @State private var model = SidebarViewModel()
+  @Environment(\.openSettings) private var openSettings
   @State private var createIcon = CreateIcon()
   @State private var localizationStore = LocalizationStore()
   /// The localize servers the sidebar lists and the server pane reads: one
@@ -23,8 +21,6 @@ struct ContentView: View {
   @State private var servers = ServerStore()
   /// The Storage tool's last scan: the sidebar row and the pane read the same one.
   @State private var storage = StorageStore()
-  /// Release runs per project, kept across tool and project switches.
-  @State private var releases = ReleaseStore()
   /// The UTM VMs and their Run on VM logs.
   @State private var vms = VMStore()
   /// The redesign's shell (Design notes 8.1): the bridge that builds a project's
@@ -32,6 +28,12 @@ struct ContentView: View {
   /// (10.16), so the toolbar's Start, the panes' overlays and the panes' status bars
   /// all speak about ONE run.
   @State private var translation = Translation.Shell()
+  /// Screenshot captures and their post-processing, per project.
+  @State private var screenshots = ScreenshotsStore()
+  /// Workflow definitions and runs, per project.
+  @State private var workflows = WorkflowStore()
+  /// Requests from agents over MCP that need this window: runs and "Ask First".
+  @State private var agents = AgentBridge()
 
   var body: some View {
     @Bindable var model = model
@@ -44,9 +46,40 @@ struct ContentView: View {
     .environment(localizationStore)
     .environment(servers)
     .environment(storage)
-    .environment(releases)
     .environment(vms)
     .environment(translation)
+    .environment(screenshots)
+    .environment(workflows)
+    .navigationTitle(windowTitle)
+    .navigationSubtitle(windowSubtitle)
+    .onAppear {
+      AppContext.shared.localization = localizationStore
+      AppContext.shared.shell = translation
+      AppContext.shared.sidebar = model
+      workflows.vms = vms
+      agents.workflows = workflows
+      agents.screenshots = screenshots
+      workflows.watchedRoots = model.projects.compactMap(\.rootURL)
+    }
+    .onChange(of: model.projects.compactMap(\.rootURL)) { _, roots in
+      workflows.watchedRoots = roots
+    }
+    .alert(
+      "\(agents.pending?.client ?? "An agent") wants to \(agents.pending?.summary ?? "")",
+      isPresented: Binding(get: { agents.pending != nil }, set: { _ in })
+    ) {
+      Button("Don't Allow", role: .cancel) { agents.answer(false) }
+      Button("Allow") { agents.answer(true) }
+    } message: {
+      Text("The request came over Dev's MCP server. Settings ▸ Agents sets what agents may do without asking.")
+    }
+    // File ▸ New Icon: the App Icon tool without a project.
+    .onReceive(NotificationCenter.default.publisher(for: .devOpenProjectlessIcon)) { _ in
+      model.selection = .tool(.icon)
+    }
+    .onReceive(NotificationCenter.default.publisher(for: .devAddProject)) { _ in
+      model.addProjectsFromPanel()
+    }
     // Unsaved-changes prompt: Reload…, Open…, a sidebar project switch and
     // quitting all hold their request here until it is answered, because
     // Save is the only writer of the .xcstrings. Attached at the root so a
@@ -98,55 +131,91 @@ struct ContentView: View {
         window.setFrame(NSRect(x: 0, y: 0, width: 1280, height: 800), display: true)
         window.center()
       }
+      if let tab = LaunchOptions.settingsTab {
+        UserDefaults.standard.set(tab, forKey: "settings.tab")
+        openSettings()
+      }
       let demo = LaunchOptions.demoProjects
-      guard !demo.isEmpty, let first = await model.importDroppedURLs(demo) else { return }
-      model.selection = .project(first)
+      if !demo.isEmpty, let first = await model.importDroppedURLs(demo) {
+        model.selection = .project(first)
+        if let tab = LaunchOptions.tab.flatMap(DevTool.init(rawValue:)) { model.projectTool = tab }
+        if let id = LaunchOptions.runWorkflow, let root = model.projectRow(id: first)?.rootURL,
+           let workflow = workflows.workflows(for: root).first(where: { $0.id == id }) {
+          workflows.start(workflow, in: root, startedBy: "launch argument")
+        }
+      }
+      switch LaunchOptions.open {
+      case "storage": model.selection = .storage
+      case "vms": model.selection = .vms
+      default: break
+      }
     }
     .toolbar {
-      // The one tool picker: project-bound, so it is absent until a project
-      // is opened, and deselected (nil) by default.
+      // The project's tabs: only while a project is open.
       if model.hasSelectedProject {
-        ToolbarItemGroup(placement: .primaryAction) {
+        ToolbarItem(placement: .principal) {
           Picker("Tool", selection: $model.projectTool) {
             ForEach(DevTool.allCases) { tool in
-              Text(tool.title).tag(tool as DevTool?)
+              Text(tool.title).tag(tool)
             }
           }
           .pickerStyle(.segmented)
-          .help("Open a tool for the selected project")
+          .labelsHidden()
+          .help("Switch between this project's tools (⌘1–⌘5)")
         }
       }
-      // The redesign's Starts (Design notes 8.1): the one button that runs the
-      // new plan — prepare, prelearn, learn, translate, then the row pass —
-      // for the project whose Localization pane is showing, because that pane
-      // is where its run reports (its overlay, and its status bar at the
-      // foot). Its twin, immediately after it, is the same run with the two
-      // learning steps left out (reader, 2026-09-14): the pane's own status bar
-      // offers both, so the toolbar does too — wherever the reader looks for
-      // Start, both ways to start it are there. Disabled while a run is in
-      // flight: such a run is paused or cancelled from its own pages, and
-      // pressing Start again resumes it.
+      // One Translate button for the project whose Localization pane is showing:
+      // it runs the whole plan (prepare, prelearn, learn, translate, the row pass);
+      // its menu holds the same run without the two learning steps. Disabled while
+      // a run is in flight: such a run is paused or cancelled from its own pages,
+      // and pressing Translate again resumes it.
       if let catalogURL = paneCatalogURL {
-        ToolbarItemGroup(placement: .primaryAction) {
-          Button {
-            Task { await translation.start(catalogURL) }
+        ToolbarItem(placement: .primaryAction) {
+          Menu {
+            Button("Translate Without Learning") {
+              Task { await translation.startSkippingLearning(catalogURL) }
+            }
+            .help(translation.skipLearningHelp(catalogURL))
           } label: {
-            Label("Start", systemImage: "play.fill")
+            Label("Translate", systemImage: "play.fill")
+              .labelStyle(.titleAndIcon)
+          } primaryAction: {
+            Task { await translation.start(catalogURL) }
           }
           .disabled(!translation.canStart(catalogURL))
           .help(translation.startHelp(catalogURL))
-          // Icon-only, and the twin of the button beside it: it differs by ONE
-          // thing — the learning steps — and the tooltip is where that is said.
-          Button {
-            Task { await translation.startSkippingLearning(catalogURL) }
-          } label: {
-            Image(systemName: "forward.fill")
-          }
-          .disabled(!translation.canStart(catalogURL))
-          .help(translation.skipLearningHelp(catalogURL))
         }
       }
     }
+    // ⌘1–⌘5 switch the tabs of the open project.
+    .background {
+      if model.hasSelectedProject {
+        ForEach(Array(DevTool.allCases.enumerated()), id: \.element) { index, tool in
+          Button("") { model.projectTool = tool }
+            .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command)
+            .hidden()
+        }
+      }
+    }
+  }
+
+  /// The window title: the open project, tool, or Dev.
+  private var windowTitle: String {
+    switch model.selection {
+    case .project(let id): return model.projectRow(id: id)?.name ?? "Dev"
+    case .tool(.icon): return "App Icon"
+    case .storage: return "Storage"
+    case .vms: return "Virtual Machines"
+    case .server(let id): return servers.connection(id: id)?.name ?? "Localization Server"
+    default: return "Dev"
+    }
+  }
+
+  /// The line under the title: the project's folder, or nothing.
+  private var windowSubtitle: String {
+    guard case .project(let id) = model.selection, let row = model.projectRow(id: id) else { return "" }
+    let path = (row.rootURL ?? row.catalogURL.deletingLastPathComponent()).path(percentEncoded: false)
+    return path.replacingOccurrences(of: NSHomeDirectory(), with: "~")
   }
 
   /// The catalog of the project pane the toolbar is bound to, or nil when no
@@ -165,7 +234,7 @@ struct ContentView: View {
     switch model.selection {
     case .tool(.icon):
       CreateIconView()
-    case .tool(.localization), .tool(.release):
+    case .tool:
       ContentUnavailableView("Select a project", systemImage: "sidebar.left")
     case .project(let id):
       if let row = model.projectRow(id: id) {
@@ -180,9 +249,21 @@ struct ContentView: View {
     case .vms:
       VMsView(projects: model.projects)
     case nil:
-      ContentUnavailableView("Select a project", systemImage: "sidebar.left")
+      if model.projects.isEmpty {
+        WelcomeView(model: model)
+      } else {
+        ContentUnavailableView("Select a project", systemImage: "sidebar.left",
+          description: Text("Pick a project in the sidebar, or open Storage or Virtual Machines."))
+      }
     }
   }
+}
+
+extension Notification.Name {
+  /// File ▸ New Icon.
+  static let devOpenProjectlessIcon = Notification.Name("dev.openProjectlessIcon")
+  /// File ▸ Add Project…
+  static let devAddProject = Notification.Name("dev.addProject")
 }
 
 #Preview {

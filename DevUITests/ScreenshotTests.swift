@@ -38,20 +38,34 @@ final class ScreenshotTests: XCTestCase {
     let project = window.staticTexts["DemoApp"].firstMatch
     XCTAssertTrue(project.waitForExistence(timeout: 10), "the demo project did not appear")
 
+    // A project opens on its Overview.
+    snapshot("01-overview")
+
     pick("Localization")
     _ = window.staticTexts["Save changes"].firstMatch.waitForExistence(timeout: 15)
-    snapshot("01-localization")
+    snapshot("02-localization")
 
     pick("App Icon")
-    snapshot("02-app-icon")
+    snapshot("03-app-icon")
 
-    pick("Release")
-    snapshot("03-release")
+    pick("Screenshots")
+    snapshot("04-screenshots")
+
+    pick("Workflows")
+    snapshot("05-workflows")
+
+    let storage = window.descendants(matching: .any)["sidebar.storage"].firstMatch
+    if storage.waitForExistence(timeout: 5) {
+      storage.click()
+      _ = window.staticTexts["Smart Scan"].firstMatch.waitForExistence(timeout: 5)
+      Thread.sleep(forTimeInterval: 1)  // the project's tabs leave the toolbar
+      snapshot("06-storage")
+    }
 
     app.typeKey(",", modifierFlags: .command)
     let settings = app.windows["Translation"].firstMatch
     if settings.waitForExistence(timeout: 5) {
-      snapshot("04-settings", of: settings)
+      snapshot("07-settings", of: settings)
       app.typeKey("w", modifierFlags: .command)
     }
   }
@@ -61,6 +75,7 @@ final class ScreenshotTests: XCTestCase {
     for candidate in [app.radioButtons[tool], app.buttons[tool], app.segmentedControls.buttons[tool]]
     where candidate.firstMatch.exists {
       candidate.firstMatch.click()
+      Thread.sleep(forTimeInterval: 1)  // the toolbar crossfades to the tool's buttons
       return
     }
     XCTFail("no tool picker entry \(tool)")

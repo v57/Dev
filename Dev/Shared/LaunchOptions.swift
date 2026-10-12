@@ -17,4 +17,27 @@ nonisolated enum LaunchOptions {
     (ProcessInfo.processInfo.environment["DEV_DEMO_PROJECTS"] ?? "")
       .split(separator: ":").map { URL(fileURLWithPath: String($0)) }
   }
+
+  /// `-DevTab overview|localization|icon|screenshots|workflows`: the tab the
+  /// first project opens on (screenshot tests and design checks).
+  static var tab: String? { value(after: "-DevTab") }
+
+  /// `-DevOpen storage|vms`: a tool to open instead of a project.
+  static var open: String? { value(after: "-DevOpen") }
+
+  /// `-DevStoragePage smartScan|languages|<category>`: Storage's first page.
+  static var storagePage: String? { value(after: "-DevStoragePage") }
+
+  /// `-DevSettingsTab general|translation|agents|advanced`: opens Settings on it.
+  static var settingsTab: String? { value(after: "-DevSettingsTab") }
+
+  /// `-DevRunWorkflow <id>`: runs that workflow of the first project at launch
+  /// (design checks of a run in flight).
+  static var runWorkflow: String? { value(after: "-DevRunWorkflow") }
+
+  private static func value(after flag: String) -> String? {
+    let arguments = ProcessInfo.processInfo.arguments
+    guard let index = arguments.firstIndex(of: flag), index + 1 < arguments.count else { return nil }
+    return arguments[index + 1]
+  }
 }
