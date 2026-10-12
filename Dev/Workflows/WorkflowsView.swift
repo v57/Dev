@@ -69,6 +69,11 @@ struct WorkflowsView: View {
       releaseConfig = ReleaseConfig.load(from: root)
       store.reload(root)
       if vms.machines.isEmpty { await vms.refresh() }
+      // Design checks: Release Settings for the project as detected, never saved.
+      if LaunchOptions.isScreenshotMode, LaunchOptions.open == "releaseSettings" {
+        if releaseConfig == nil { releaseConfig = await ReleaseConfig.detect(in: root) }
+        showsReleaseSettings = true
+      }
     }
     .alert("Run \(confirmingRun?.name ?? "")?", isPresented: Binding(
       get: { confirmingRun != nil }, set: { if !$0 { confirmingRun = nil } })

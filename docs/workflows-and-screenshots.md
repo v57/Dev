@@ -62,6 +62,11 @@ Run history is kept in `~/Library/Application Support/dev.v57.dev/Workflows/hist
   (`build/screenshots/report.json`).
 - Upload… in the Screenshots tab replaces the screenshots of the app's version in Prepare for Submission through the
   App Store Connect API, with the key `release.env` names (`ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_PATH`).
+- The key is set up as in Shell's Notarization sheet (Release Settings, or the upload sheet when there is none):
+  Choose… takes the `.p8` App Store Connect downloads, reads the key ID from `AuthKey_<KEY ID>.p8` and copies the
+  file to `~/.appstoreconnect/private_keys` (mode 600). Check with Apple lists the account's apps. An empty issuer
+  means an individual key (the token signs as `sub: user`). Use for Notarization saves the same key as the
+  `NOTARY_PROFILE` notarytool profile.
 
 ## MCP server
 

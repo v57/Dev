@@ -26,8 +26,8 @@ nonisolated struct AppStoreConnectAPI: Sendable {
   init(config: ReleaseConfig) throws {
     let keyID = config["ASC_KEY_ID"], issuer = config["ASC_ISSUER_ID"]
     var path = config["ASC_KEY_PATH"]
-    guard !keyID.isEmpty, !issuer.isEmpty, !path.isEmpty else {
-      throw Failure(message: "Set ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_PATH in release.env (an App Store Connect API key).")
+    guard !keyID.isEmpty, !path.isEmpty else {
+      throw Failure(message: "Add an App Store Connect API key in Release Settings (a key file and its key ID).")
     }
     if path.hasPrefix("~") { path = NSHomeDirectory() + path.dropFirst() }
     guard let pem = try? String(contentsOfFile: path, encoding: .utf8) else {
@@ -35,7 +35,16 @@ nonisolated struct AppStoreConnectAPI: Sendable {
     }
     self.keyID = keyID
     self.issuerID = issuer
-    self.privateKey = try P256.Signing.PrivateKey(pemRepresentation: pem)
+    self.privateKey = try Self.privateKey(pem: pem)
+  }
+
+  /// The key in a `.p8` file (PKCS #8 PEM, as App Store Connect downloads it).
+  static func privateKey(pem: String) throws -> P256.Signing.PrivateKey {
+    do {
+      return try P256.Signing.PrivateKey(pemRepresentation: pem)
+    } catch {
+      throw Failure(message: "Not an App Store Connect API key: expected a P-256 private key in PEM form.")
+    }
   }
 
   /// A 15-minute ES256 token.
@@ -46,9 +55,10 @@ nonisolated struct AppStoreConnectAPI: Sendable {
     }
     let header = try JSONSerialization.data(withJSONObject: ["alg": "ES256", "kid": keyID, "typ": "JWT"])
     let now = Int(Date().timeIntervalSince1970)
-    let claims = try JSONSerialization.data(withJSONObject: [
-      "iss": issuerID, "iat": now, "exp": now + 900, "aud": "appstoreconnect-v1",
-    ])
+    // A team key names its issuer; an individual key has none and signs as the user.
+    var payload: [String: Any] = ["iat": now, "exp": now + 900, "aud": "appstoreconnect-v1"]
+    if issuerID.isEmpty { payload["sub"] = "user" } else { payload["iss"] = issuerID }
+    let claims = try JSONSerialization.data(withJSONObject: payload)
     let signingInput = base64URL(header) + "." + base64URL(claims)
     let signature = try privateKey.signature(for: Data(signingInput.utf8))
     return signingInput + "." + base64URL(signature.rawRepresentation)
@@ -197,9 +207,13 @@ struct AppStoreUploadSheet: View {
   @State private var isUploading = false
   @State private var error: String?
   @State private var done = false
+  /// release.env, nil when the project has none; the key fields edit it.
+  @State private var config: ReleaseConfig?
+  @State private var savedConfig: ReleaseConfig?
+
+  private var hasKey: Bool { config.map { !$0["ASC_KEY_ID"].isEmpty && !$0["ASC_KEY_PATH"].isEmpty } ?? false }
 
   var body: some View {
-    let config = ReleaseConfig.load(from: root) ?? ReleaseConfig()
     let finals = finalFiles()
     VStack(alignment: .leading, spacing: 14) {
       Text("Upload to App Store Connect").font(.headline)
@@ -215,6 +229,20 @@ struct AppStoreUploadSheet: View {
       .padding(10)
       .frame(maxWidth: .infinity, alignment: .leading)
       .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
+      if config == nil {
+        Label("This project has no release.env. Set it up in Workflows ▸ Release Settings first.", systemImage: "exclamationmark.triangle.fill")
+          .foregroundStyle(.orange)
+      } else if !hasKey || savedConfig != config {
+        // Shell's key import: choose the .p8, check it with Apple; saved to release.env on Upload.
+        Form {
+          Section("App Store Connect API key") {
+            AppStoreConnectKeyFields(config: Binding(get: { config ?? ReleaseConfig() }, set: { config = $0 }), offersNotary: false)
+          }
+        }
+        .formStyle(.grouped)
+        .frame(height: 230)
+        .scrollDisabled(true)
+      }
       Toggle("Delete the version's current screenshots first", isOn: $replace)
       if !lines.isEmpty {
         ScrollView {
@@ -233,14 +261,18 @@ struct AppStoreUploadSheet: View {
         Button(done ? "Done" : "Cancel") { dismiss() }
           .keyboardShortcut(.cancelAction)
         if !done {
-          Button("Upload") { Task { await upload(config, finals) } }
+          Button("Upload") { Task { await upload(finals) } }
             .keyboardShortcut(.defaultAction)
-            .disabled(isUploading || finals.isEmpty)
+            .disabled(isUploading || finals.isEmpty || !hasKey)
         }
       }
     }
     .padding(20)
-    .frame(width: 480)
+    .frame(width: 500)
+    .task {
+      config = ReleaseConfig.load(from: root)
+      savedConfig = config
+    }
   }
 
   private func finalFiles() -> [String: [URL]] {
@@ -250,11 +282,16 @@ struct AppStoreUploadSheet: View {
     return out
   }
 
-  private func upload(_ config: ReleaseConfig, _ files: [String: [URL]]) async {
+  private func upload(_ files: [String: [URL]]) async {
+    guard let config else { return }
     isUploading = true
     error = nil
     defer { isUploading = false }
     do {
+      if config != savedConfig {
+        try config.save(to: root)
+        savedConfig = config
+      }
       let api = try AppStoreConnectAPI(config: config)
       let bundleID = try await Self.bundleID(root: root, config: config)
       lines.append("App \(bundleID)")

@@ -12,6 +12,7 @@ struct ReleaseSettingsSheet: View {
   @State var config: ReleaseConfig
   let onSave: (ReleaseConfig) -> Void
   @Environment(\.dismiss) private var dismiss
+  @State private var notary: AppStoreConnectKey.Status = .idle
 
   var body: some View {
     VStack(spacing: 0) {
@@ -35,17 +36,32 @@ struct ReleaseSettingsSheet: View {
         }
         Section {
           field("Formats", "DIRECT_DOWNLOAD", "zip dmg")
-          Picker("Builds", selection: binding("DIRECT_ARCHS")) {
+          // Empty means universal to release.sh.
+          Picker("Builds", selection: Binding(
+            get: { config["DIRECT_ARCHS"].isEmpty ? "universal" : config["DIRECT_ARCHS"] },
+            set: { config["DIRECT_ARCHS"] = $0 })) {
             Text("Universal").tag("universal")
             Text("Apple silicon").tag("arm64")
             Text("Both").tag("universal arm64")
           }
           .help("Both ships <App> (universal) and <App>-AppleSilicon, half the size")
-          field("Notary profile", "NOTARY_PROFILE", "v57-notary")
+          HStack {
+            field("Notary profile", "NOTARY_PROFILE", "notary")
+            Button("Check") { Task { await checkNotary() } }
+              .disabled(config["NOTARY_PROFILE"].isEmpty || notary == .checking)
+          }
+          switch notary {
+          case .idle: EmptyView()
+          case .checking:
+            HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Checking with Apple…").foregroundStyle(.secondary) }
+          case .valid(let text): Label(text, systemImage: "checkmark.seal.fill").foregroundStyle(.green)
+          case .failed(let text):
+            Label(text, systemImage: "xmark.octagon.fill").foregroundStyle(.red).lineLimit(4).textSelection(.enabled)
+          }
         } header: {
           Text("Direct download")
         } footer: {
-          Text("Create the notary profile once in Terminal: xcrun notarytool store-credentials <name>")
+          Text("A notarytool keychain profile. Use for Notarization below saves the App Store Connect key as one.")
         }
         Section("GitHub") {
           field("Repository", "GITHUB_REPO", "owner/repo")
@@ -57,13 +73,11 @@ struct ReleaseSettingsSheet: View {
           Toggle("Upload to App Store Connect", isOn: Binding(
             get: { config["APP_STORE"] == "yes" },
             set: { config["APP_STORE"] = $0 ? "yes" : "no" }))
-          field("API key ID", "ASC_KEY_ID", "optional")
-          field("Issuer ID", "ASC_ISSUER_ID", "optional")
-          field("Key file", "ASC_KEY_PATH", "~/.appstoreconnect/AuthKey_XXXX.p8")
+          AppStoreConnectKeyFields(config: $config)
         } header: {
           Text("App Store Connect")
         } footer: {
-          Text("Without an API key the upload uses the account signed in to Xcode.")
+          Text("The API key uploads screenshots, and builds without the account signed in to Xcode. Dev copies it to ~/.appstoreconnect/private_keys.")
         }
       }
       .formStyle(.grouped)
@@ -79,7 +93,12 @@ struct ReleaseSettingsSheet: View {
       }
       .padding(16)
     }
-    .frame(width: 520, height: 640)
+    .frame(width: 540, height: 680)
+  }
+
+  private func checkNotary() async {
+    notary = .checking
+    notary = await AppStoreConnectKey.checkNotaryProfile(config["NOTARY_PROFILE"])
   }
 
   private func binding(_ key: String) -> Binding<String> {

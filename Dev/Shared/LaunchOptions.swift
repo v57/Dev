@@ -22,7 +22,8 @@ nonisolated enum LaunchOptions {
   /// first project opens on (screenshot tests and design checks).
   static var tab: String? { value(after: "-DevTab") }
 
-  /// `-DevOpen storage|vms`: a tool to open instead of a project.
+  /// `-DevOpen storage|vms`: a tool to open instead of a project;
+  /// `-DevOpen releaseSettings` (with `-DevTab workflows`) opens Release Settings.
   static var open: String? { value(after: "-DevOpen") }
 
   /// `-DevStoragePage smartScan|languages|<category>`: Storage's first page.
