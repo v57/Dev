@@ -784,6 +784,15 @@ final class LocalizationStore {
     saveRow(key)
   }
 
+  /// Marks one language of a row (and its plural forms) `reviewed` /
+  /// `needs_review`: the inspector's per-language review.
+  func setCellState(_ key: String, language: String, _ state: TranslationState) {
+    guard let project else { return }
+    let context = TranslationStore.shared.context
+    Reconcile.applyReviewState(key: key, state: state, project: project, context: context, language: language)
+    saveRow(key)
+  }
+
   // MARK: - reviewer note
 
   /// The key whose note editor is open, or nil. Drives the note sheet.
