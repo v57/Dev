@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		D5C0DE000000000000000003 /* UpdateKit in Frameworks */ = {isa = PBXBuildFile; productRef = D5C0DE000000000000000002 /* UpdateKit */; };
 		DA7AB45E0000000000000003 /* SQLite in Frameworks */ = {isa = PBXBuildFile; productRef = DA7AB45E0000000000000002 /* SQLite */; };
 /* End PBXBuildFile section */
 
@@ -43,6 +44,7 @@
 			isa = PBXFrameworksBuildPhase;
 			files = (
 				DA7AB45E0000000000000003 /* SQLite in Frameworks */,
+				D5C0DE000000000000000003 /* UpdateKit in Frameworks */,
 			);
 		};
 		000000000000000230000000 /* Frameworks */ = {
@@ -89,6 +91,7 @@
 			);
 			name = Dev;
 			packageProductDependencies = (
+				D5C0DE000000000000000002 /* UpdateKit */,
 				DA7AB45E0000000000000002 /* SQLite */,
 			);
 			productName = MyApp;
@@ -145,6 +148,7 @@
 			mainGroup = 000000000000000000000001;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				D5C0DE000000000000000001 /* XCLocalSwiftPackageReference "../UpdateKit" */,
 				DA7AB45E0000000000000001 /* XCLocalSwiftPackageReference "../Database" */,
 			);
 			preferredProjectObjectVersion = 90;
@@ -453,6 +457,10 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
+		D5C0DE000000000000000001 /* XCLocalSwiftPackageReference "../UpdateKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../UpdateKit;
+		};
 		DA7AB45E0000000000000001 /* XCLocalSwiftPackageReference "../Database" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../Database;
@@ -460,6 +468,10 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		D5C0DE000000000000000002 /* UpdateKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = UpdateKit;
+		};
 		DA7AB45E0000000000000002 /* SQLite */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = DA7AB45E0000000000000001 /* XCLocalSwiftPackageReference "../Database" */;

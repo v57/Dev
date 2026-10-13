@@ -1,14 +1,23 @@
 import AppKit
 import SwiftUI
+import UpdateKit
 
 @main struct MyApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+
+    /// Updates from GitHub Releases (the universal Dev.zip, built by Tools/release/release.sh):
+    /// checked daily once the user turns on automatic checks (never before), installed in place
+    /// with a relaunch.
+    private let updater = AppUpdater(github: "v57/Dev", assetName: "Dev.zip")
+
+    init() { updater.start() }
 
     var body: some Scene {
         WindowGroup {
             ContentView()
         }
         .defaultSize(width: 1280, height: 800)
+        .commands { UpdaterCommands(updater: updater) }
         Settings {
             SettingsView()
         }
