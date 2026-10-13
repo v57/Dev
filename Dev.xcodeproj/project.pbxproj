@@ -6,6 +6,10 @@
 	objectVersion = 90;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		DA7AB45E0000000000000003 /* SQLite in Frameworks */ = {isa = PBXBuildFile; productRef = DA7AB45E0000000000000002 /* SQLite */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		000000000000000000000120 /* Dev.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Dev.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		000000000000000000000121 /* DevUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DevUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -38,6 +42,7 @@
 		000000000000000130000000 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			files = (
+				DA7AB45E0000000000000003 /* SQLite in Frameworks */,
 			);
 		};
 		000000000000000230000000 /* Frameworks */ = {
@@ -83,6 +88,9 @@
 				000000000000000000000010 /* Dev */,
 			);
 			name = Dev;
+			packageProductDependencies = (
+				DA7AB45E0000000000000002 /* SQLite */,
+			);
 			productName = MyApp;
 			productReference = 000000000000000000000120 /* Dev.app */;
 			productType = "com.apple.product-type.application";
@@ -136,6 +144,9 @@
 			);
 			mainGroup = 000000000000000000000001;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				DA7AB45E0000000000000001 /* XCLocalSwiftPackageReference "../Database" */,
+			);
 			preferredProjectObjectVersion = 90;
 			productRefGroup = 000000000000000000000020 /* Products */;
 			projectDirPath = "";
@@ -440,6 +451,21 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		DA7AB45E0000000000000001 /* XCLocalSwiftPackageReference "../Database" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../Database;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		DA7AB45E0000000000000002 /* SQLite */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = DA7AB45E0000000000000001 /* XCLocalSwiftPackageReference "../Database" */;
+			productName = SQLite;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 000000000000000000000000 /* Project object */;
 }

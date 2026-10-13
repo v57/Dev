@@ -8,6 +8,7 @@
 import AppKit
 import Foundation
 import Observation
+import SQLite
 import UniformTypeIdentifiers
 
 // MARK: - ImportedDBStats
@@ -312,7 +313,7 @@ final class ImportedTranslationDB {
   func rows(forSource source: String) async throws -> [ImportedDBRow] {
     try await ensureOpen()
     guard let connection else { return [] }
-    let rows = try await connection.selectBound(
+    let rows = try await connection.select(
       sql: "SELECT language, target, app FROM translations WHERE source = ?1 LIMIT 20000",
       binds: [source])
     return rows.compactMap { row -> ImportedDBRow? in

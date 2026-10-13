@@ -17,6 +17,7 @@
 //
 
 import Foundation
+import SQLite
 import SQLite3
 
 extension Translation {
