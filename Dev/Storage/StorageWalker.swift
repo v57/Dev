@@ -16,10 +16,12 @@ import Foundation
 nonisolated extension StorageDiscovery {
   /// The folders walked by default: every visible folder in the home folder
   /// except Library and Applications, which the rules and the app sweep read.
+  /// Symlinks are left out: the walk is physical and reports them as files.
   var defaultWalkRoots: [String] {
     children(of: home).filter { path in
       let name = (path as NSString).lastPathComponent
-      return isDirectory(path) && !["Library", "Applications"].contains(name)
+      let isLink = (try? fileManager.destinationOfSymbolicLink(atPath: path)) != nil
+      return !isLink && isDirectory(path) && !["Library", "Applications"].contains(name)
     }
   }
 
@@ -63,7 +65,9 @@ nonisolated extension StorageDiscovery {
         leftover[branch[min(level, 2)], default: 0] += entry.allocatedBytes
         return .descend
       }
-      let bucket = branch[min(entry.level - 1, 2)]
+      // A root that is not a folder (a file, or a symlink the walk won't follow).
+      guard entry.level > 0, !branch.isEmpty else { return .descend }
+      let bucket = branch[min(entry.level - 1, 2, branch.count - 1)]
 
       // Files: database markers at any size, everything else only when large.
       if let engine = Self.databaseMarkers[name] {
