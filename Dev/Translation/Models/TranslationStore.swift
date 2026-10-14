@@ -75,9 +75,10 @@ final class TranslationStore {
     // file default.store couldn't be opened", dropped tables, lost data).
     // Pinning a per-app URL keeps sandboxed and unsandboxed builds isolated
     // from each other and from other apps.
-    // Screenshot runs never touch the user's store.
+    // Screenshot runs never touch the user's store. No CloudKit either: with the iCloud
+    // entitlement, SwiftData's default would sync it and refuse the unique constraints.
     if LaunchOptions.isScreenshotMode {
-      let memory = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+      let memory = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
       return try! ModelContainer(for: schema, configurations: [memory])
     }
     let appSupport = URL.applicationSupportDirectory.appendingPathComponent(
@@ -93,7 +94,7 @@ final class TranslationStore {
     // the learning corpus.
     do { return try ModelContainer(for: schema, configurations: [disk]) } catch {
       NSLog("[TranslationStore] disk container failed, falling back to memory: %@", error as NSError)
-      let memory = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+      let memory = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
       return try! ModelContainer(for: schema, configurations: [memory])
     }
   }()
