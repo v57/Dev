@@ -93,6 +93,14 @@ struct ContentView: View {
     }
     // The projects the v57 apps share (added in Git and the others) join the sidebar.
     .task { VaultProjects.shared.start(model: model) }
+    // A folder opened in Dev (Shell's Open With, `open -a Dev <folder>`): added like a drop, then shown.
+    .onOpenURL { url in
+      guard url.isFileURL else { return }
+      Task {
+        if let id = await model.importDroppedURLs([url]) { model.selection = .project(id) }
+      }
+    }
+    .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
     // The screenshot tests hand in a demo project instead of dropping one, and
     // every picture has the same frame whatever size the window was last left at.
     .task {
