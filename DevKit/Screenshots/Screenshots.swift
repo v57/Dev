@@ -7,7 +7,7 @@ import Foundation
 /// ready, so nothing is captured half-loaded or unfocused.
 ///
 /// With a scene handler, the whole capture runs in this one launch (per locale): after each picture the next scene
-/// arrives on stdin, the handler opens it, and the kit says when it's ready. Without one, the app is relaunched for
+/// arrives on stdin (in a simulator, a FIFO), the handler opens it, and the kit says when it's ready. Without one, the app is relaunched for
 /// every scene.
 ///
 /// ```swift
@@ -78,9 +78,9 @@ public enum Screenshots {
     ScreenshotSignal.send((window.map { "ready window=\($0)" } ?? "ready") + (scene.map { " scene=\($0)" } ?? ""))
   }
 
-  /// The next scenes, one JSON line each on stdin, sent once the picture before is taken.
+  /// The next scenes, one JSON line each on the input, sent once the picture before is taken.
   private static func followScenes() async {
-    for await line in ScreenshotSignal.stdinLines() {
+    for await line in ScreenshotSignal.inputLines() {
       guard let message = try? JSONDecoder().decode(ScreenshotSignal.NextScene.self, from: Data(line.utf8))
       else { continue }
       Platform.apply(message.appearance)
@@ -108,7 +108,7 @@ extension ScreenshotConfig.Scene {
 /// What the app and `dev-screenshots` exchange: environment variables at launch, `dev-screenshot: …` lines on stdout
 /// (`hello pid=… [scenes]`, `reopen`, `activate`, `focus active|inactive`, `ready [window=…] [scene=…]`) and, for apps
 /// with a scene handler,
-/// the next scene as a JSON line on stdin.
+/// the next scene as a JSON line on stdin, or on the FIFO `DEV_SCREENSHOT_INPUT` names.
 public enum ScreenshotSignal {
   public static let prefix = "dev-screenshot: "
   public static let sceneKey = "DEV_SCREENSHOT"
@@ -116,6 +116,8 @@ public enum ScreenshotSignal {
   public static let windowKey = "DEV_SCREENSHOT_WINDOW"
   public static let delayKey = "DEV_SCREENSHOT_DELAY"
   public static let activateKey = "DEV_SCREENSHOT_ACTIVATE"
+  /// A FIFO the next scenes come from instead of stdin: a simulator's app gets `/dev/null` as stdin.
+  public static let inputKey = "DEV_SCREENSHOT_INPUT"
 
   /// A later scene for an app that opens scenes in one launch.
   public struct NextScene: Codable, Sendable {
@@ -159,14 +161,32 @@ public enum ScreenshotSignal {
     FileHandle.standardOutput.write(Data((prefix + message + "\n").utf8))
   }
 
-  /// stdin's lines, read on a thread of their own so the blocking reads never hold up the app.
-  static func stdinLines() -> AsyncStream<String> {
+  /// The next scenes' lines: from the `DEV_SCREENSHOT_INPUT` FIFO, else stdin.
+  static func inputLines() -> AsyncStream<String> {
+    let path = environment(inputKey)
+    return lines { path.map { FileHandle(forReadingAtPath: $0) } ?? .standardInput }
+  }
+
+  /// The lines of `open()`'s file until it ends, read on a thread of their own so the blocking open and reads never
+  /// hold up the app.
+  static func lines(of open: @escaping @Sendable () -> FileHandle?) -> AsyncStream<String> {
     AsyncStream { continuation in
       let thread = Thread {
-        while let line = readLine() { continuation.yield(line) }
-        continuation.finish()
+        defer { continuation.finish() }
+        guard let file = open() else { return }
+        var buffer = Data()
+        while true {
+          let data = file.availableData
+          if data.isEmpty { break }
+          buffer.append(data)
+          while let end = buffer.firstIndex(of: UInt8(ascii: "\n")) {
+            continuation.yield(String(decoding: buffer[buffer.startIndex..<end], as: UTF8.self))
+            buffer.removeSubrange(buffer.startIndex...end)
+          }
+        }
+        if !buffer.isEmpty { continuation.yield(String(decoding: buffer, as: UTF8.self)) }
       }
-      thread.name = "dev-screenshot stdin"
+      thread.name = "dev-screenshot input"
       thread.start()
     }
   }

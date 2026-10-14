@@ -104,10 +104,13 @@
       }
     }
 
-    /// `simctl launch --console`: it runs as long as the app does and passes our pipe on as the app's stdin.
+    /// `simctl launch --console`: it runs as long as the app does. The app's stdin is `/dev/null`, so the next scenes
+    /// go through a FIFO in the device's temporary folder, named by `DEV_SCREENSHOT_INPUT`.
     final class Instance {
       let process = Process()
-      let input = Pipe()
+      /// Our end of the app's input FIFO.
+      let input: FileHandle
+      let fifo: URL
       let follower: LineFollower
       let scratch: URL
       let started = Date()
@@ -126,9 +129,27 @@
         let stdout = scratch.appendingPathComponent("stdout.log")
         follower = LineFollower(stdout)
 
+        // In the device's temporary folder, which its apps can read.
+        let tmp = Shell.run("xcrun", ["simctl", "getenv", udid, "TMPDIR"])
+        guard tmp.succeeded, !tmp.trimmed.isEmpty else {
+          try? FileManager.default.removeItem(at: scratch)
+          throw CaptureError("simctl couldn't find \(capturer.device.name)'s temporary folder:\n" + tmp.tail())
+        }
+        fifo = URL(fileURLWithPath: tmp.trimmed, isDirectory: true)
+          .appendingPathComponent("dev-screenshots-\(UUID().uuidString)")
+        // Opened read-write here first, so the app's open never waits for a writer.
+        let fd = mkfifo(fifo.path, 0o600) == 0 ? open(fifo.path, O_RDWR) : -1
+        guard fd >= 0 else {
+          try? FileManager.default.removeItem(at: scratch)
+          try? FileManager.default.removeItem(at: fifo)
+          throw CaptureError("couldn't make the app's input at \(fifo.path)")
+        }
+        input = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+
         // simctl passes SIMCTL_CHILD_X to the app as X.
         let scene = shot.scene
         var environment = scene.environment
+        environment[ScreenshotSignal.inputKey] = fifo.path
         environment[ScreenshotSignal.sceneKey] = scene.id
         environment[ScreenshotSignal.appearanceKey] = shot.appearance.rawValue
         environment[ScreenshotSignal.delayKey] = String(scene.delay)
@@ -142,13 +163,14 @@
             "-AppleLanguages", "(\(locale), \(language))", "-AppleLocale",
             locale.replacingOccurrences(of: "-", with: "_"),
           ] + scene.arguments
-        process.standardInput = input
+        process.standardInput = FileHandle.nullDevice
         process.standardOutput = try FileHandle(forWritingTo: stdout)
         process.standardError = FileHandle.nullDevice
         do {
           try process.run()
         } catch {
           try? FileManager.default.removeItem(at: scratch)
+          try? FileManager.default.removeItem(at: fifo)
           throw CaptureError("simctl launch failed: \(error.localizedDescription)")
         }
       }
@@ -178,7 +200,7 @@
 
       func send(_ shot: CaptureShot) throws {
         let line = ScreenshotSignal.NextScene(scene: shot.scene, appearance: shot.appearance).line
-        try input.fileHandleForWriting.write(contentsOf: Data(line.utf8))
+        try input.write(contentsOf: Data(line.utf8))
       }
 
       private func readMessages(until scene: String?) -> Bool {
@@ -200,10 +222,11 @@
         guard !quitDone else { return }
         quitDone = true
         Shell.run("xcrun", ["simctl", "terminate", udid, bundleID])
-        try? input.fileHandleForWriting.close()
+        try? input.close()
         if process.isRunning { process.terminate() }
         process.waitUntilExit()
         try? FileManager.default.removeItem(at: scratch)
+        try? FileManager.default.removeItem(at: fifo)
       }
     }
 

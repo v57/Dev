@@ -1,4 +1,4 @@
-import DevScreenshots
+@testable import DevScreenshots
 import Foundation
 import Testing
 
@@ -82,6 +82,17 @@ struct ScreenshotConfigTests {
     #expect(line.hasSuffix("\n") && line.dropLast().contains("\n") == false)
     let read = try JSONDecoder().decode(ScreenshotSignal.NextScene.self, from: Data(line.utf8))
     #expect(read.scene == message.scene && read.appearance == .dark)
+  }
+
+  @Test func theInputIsReadLineByLine() async throws {
+    let pipe = Pipe()
+    let lines = ScreenshotSignal.lines { pipe.fileHandleForReading }
+    try pipe.fileHandleForWriting.write(contentsOf: Data("first\nsec".utf8))
+    try pipe.fileHandleForWriting.write(contentsOf: Data("ond\n{\"a\": 1}".utf8))
+    try pipe.fileHandleForWriting.close()
+    var read: [String] = []
+    for await line in lines { read.append(line) }
+    #expect(read == ["first", "second", #"{"a": 1}"#])
   }
 
   @Test func savedConfigReadsBack() throws {

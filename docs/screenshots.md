@@ -118,7 +118,7 @@ Screenshots.ready()
   `"activate": false` it stays in the background. With `waitsForReady`, the picture waits for `ready()` instead of a
   fixed delay.
 - With a scene handler, every scene of a locale is taken in **one launch**: after each picture the next scene arrives
-  on stdin, the handler opens it, and the picture is taken once it returns and the scene's delay has passed. Undo what
+  on stdin (in a simulator, whose apps get `/dev/null` as stdin, on a FIFO), the handler opens it, and the picture is taken once it returns and the scene's delay has passed. Undo what
   the scene before changed; mark a scene `relaunch` when that isn't possible.
 - The window a scene opened (a Settings window) is the one taken; otherwise the front one.
 - Without `DEV_SCREENSHOT` in the environment it does nothing, so the calls can stay in release builds.
@@ -127,7 +127,8 @@ Screenshots.ready()
 
 The exchange, for apps in other languages: the environment carries `DEV_SCREENSHOT` (the first scene's id),
 `DEV_SCREENSHOT_APPEARANCE`, `DEV_SCREENSHOT_WINDOW` (`1440x900`), `DEV_SCREENSHOT_DELAY` and
-`DEV_SCREENSHOT_ACTIVATE`; the app writes `dev-screenshot: hello pid=<pid> [scenes]`, `reopen`, `activate`,
+`DEV_SCREENSHOT_ACTIVATE`, and in a simulator `DEV_SCREENSHOT_INPUT` (a FIFO to read the next scenes from instead of
+stdin); the app writes `dev-screenshot: hello pid=<pid> [scenes]`, `reopen`, `activate`,
 `focus active|inactive` and `ready [window=<number>] [scene=<id>]` lines to stdout; the next scene is a JSON line on stdin,
 `{"scene": {…}, "appearance": "dark"}`.
 
