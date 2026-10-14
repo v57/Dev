@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import UpdateKit
+import VaultKit
 
 @main struct MyApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
@@ -10,7 +11,11 @@ import UpdateKit
     /// with a relaunch.
     private let updater = AppUpdater(github: "v57/Dev", assetName: "Dev.zip")
 
-    init() { updater.start() }
+    init() {
+        updater.start()
+        // Projects added here sync with the other v57 apps and devices through the vault.
+        if !LaunchOptions.isScreenshotMode { Vault.shared.startSync() }
+    }
 
     var body: some Scene {
         WindowGroup {

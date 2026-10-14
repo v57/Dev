@@ -91,6 +91,8 @@ struct ContentView: View {
       guard !LaunchOptions.isScreenshotMode else { return }
       ImportedTranslationDB.shared.restoreIfNeeded()
     }
+    // The projects the v57 apps share (added in Git and the others) join the sidebar.
+    .task { VaultProjects.shared.start(model: model) }
     // The screenshot tests hand in a demo project instead of dropping one, and
     // every picture has the same frame whatever size the window was last left at.
     .task {

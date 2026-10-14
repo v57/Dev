@@ -9,6 +9,8 @@
 /* Begin PBXBuildFile section */
 		D5C0DE000000000000000003 /* UpdateKit in Frameworks */ = {isa = PBXBuildFile; productRef = D5C0DE000000000000000002 /* UpdateKit */; };
 		DA7AB45E0000000000000003 /* SQLite in Frameworks */ = {isa = PBXBuildFile; productRef = DA7AB45E0000000000000002 /* SQLite */; };
+		4906C9282497EB178F132060 /* VaultKit in Frameworks */ = {isa = PBXBuildFile; productRef = F325E5137AFD249B69F073D5 /* VaultKit */; };
+		0E31D847659438A515BB01E6 /* GitHubKit in Frameworks */ = {isa = PBXBuildFile; productRef = 7C6D4739B153B8EFB362C33A /* GitHubKit */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -45,6 +47,8 @@
 			files = (
 				DA7AB45E0000000000000003 /* SQLite in Frameworks */,
 				D5C0DE000000000000000003 /* UpdateKit in Frameworks */,
+				4906C9282497EB178F132060 /* VaultKit in Frameworks */,
+				0E31D847659438A515BB01E6 /* GitHubKit in Frameworks */,
 			);
 		};
 		000000000000000230000000 /* Frameworks */ = {
@@ -93,6 +97,8 @@
 			packageProductDependencies = (
 				D5C0DE000000000000000002 /* UpdateKit */,
 				DA7AB45E0000000000000002 /* SQLite */,
+				F325E5137AFD249B69F073D5 /* VaultKit */,
+				7C6D4739B153B8EFB362C33A /* GitHubKit */,
 			);
 			productName = MyApp;
 			productReference = 000000000000000000000120 /* Dev.app */;
@@ -150,6 +156,8 @@
 			packageReferences = (
 				D5C0DE000000000000000001 /* XCLocalSwiftPackageReference "../UpdateKit" */,
 				DA7AB45E0000000000000001 /* XCLocalSwiftPackageReference "../Database" */,
+				9B3A7F6AB825F8F67EEFD8FF /* XCLocalSwiftPackageReference "../Vault" */,
+				8DF881F3EAA5B613209FE067 /* XCLocalSwiftPackageReference "../Git" */,
 			);
 			preferredProjectObjectVersion = 90;
 			productRefGroup = 000000000000000000000020 /* Products */;
@@ -465,6 +473,14 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../Database;
 		};
+		9B3A7F6AB825F8F67EEFD8FF /* XCLocalSwiftPackageReference "../Vault" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../Vault;
+		};
+		8DF881F3EAA5B613209FE067 /* XCLocalSwiftPackageReference "../Git" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../Git;
+		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -476,6 +492,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = DA7AB45E0000000000000001 /* XCLocalSwiftPackageReference "../Database" */;
 			productName = SQLite;
+		};
+		F325E5137AFD249B69F073D5 /* VaultKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 9B3A7F6AB825F8F67EEFD8FF /* XCLocalSwiftPackageReference "../Vault" */;
+			productName = VaultKit;
+		};
+		7C6D4739B153B8EFB362C33A /* GitHubKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 8DF881F3EAA5B613209FE067 /* XCLocalSwiftPackageReference "../Git" */;
+			productName = GitHubKit;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

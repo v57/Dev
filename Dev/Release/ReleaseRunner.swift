@@ -4,6 +4,7 @@
 //
 
 import Foundation
+import GitHubKit
 import Observation
 
 // MARK: - ReleaseStep
@@ -29,7 +30,7 @@ enum ReleaseStep: String, CaseIterable, Identifiable, Sendable {
 
   var detail: String {
     switch self {
-    case .check: return "Tools, certificate, notary profile, GitHub login"
+    case .check: return "Tools, certificate, notary profile, GitHub sign-in"
     case .build: return "A release build"
     case .test: return "The test scheme"
     case .screenshots: return "UI test screenshots per locale"
@@ -91,7 +92,11 @@ final class ReleaseRunner {
     if !version.isEmpty { arguments += ["--version", version] }
     if dryRun { arguments.append("--dry-run") }
     arguments += steps.map(\.rawValue)
-    let process = LineProcess("/bin/bash", arguments, directory: root)
+    // The GitHub sign-in the v57 apps share (Git, Markdown): gh takes it from GH_TOKEN, so a GitHub
+    // release needs no separate `gh auth login`.
+    var environment: [String: String] = [:]
+    if let token = (try? KeychainTokenStore.shared.load())?.token { environment["GH_TOKEN"] = token }
+    let process = LineProcess("/bin/bash", arguments, directory: root, environment: environment)
     self.process = process
     isRunning = true
     task = Task { [weak self] in

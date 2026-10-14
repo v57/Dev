@@ -308,6 +308,7 @@ final class SidebarViewModel {
       localization.closeCatalog()
     }
 
+    let rootURL = project.rootURL
     context.delete(project)
     do {
       try context.save()
@@ -322,6 +323,8 @@ final class SidebarViewModel {
     if selection == .project(id) {
       selection = nil
     }
+    // Removed here only: Git and the other apps keep it, and Dev doesn't bring it back.
+    VaultProjects.shared.dismiss(rootURL: rootURL)
     refresh()
   }
 
@@ -391,6 +394,7 @@ final class SidebarViewModel {
 
     let context = TranslationStore.shared.context
     var firstID: PersistentIdentifier?
+    var resolved: [Project] = []
     for item in dropped {
       let projects: [Project]
       switch item {
@@ -403,6 +407,7 @@ final class SidebarViewModel {
         projects = [resolveCatalogFileDrop(fileURL, in: context)]
       }
       if firstID == nil { firstID = projects.first?.persistentModelID }
+      resolved += projects
     }
     do {
       try context.save()
@@ -413,6 +418,8 @@ final class SidebarViewModel {
       return nil
     }
     refresh()
+    // The other v57 apps list the folder too.
+    VaultProjects.shared.publish(resolved.compactMap(\.rootURL))
     // Offer only what is not a project already: re-dropping a folder must not
     // keep suggesting the directories the reader added from its last drop.
     let known = Set(projects.compactMap(\.rootURL))
@@ -442,7 +449,25 @@ final class SidebarViewModel {
       return nil
     }
     refresh()
+    VaultProjects.shared.publish(added.compactMap(\.rootURL))
     return added.first?.persistentModelID
+  }
+
+  /// Removes the project at `rootPath` because the vault dropped it (removed in Git), unless it holds
+  /// translation records or is selected. Returns whether it's gone.
+  func removeUnusedProject(rootPath: String) -> Bool {
+    let context = TranslationStore.shared.context
+    let all = (try? context.fetch(FetchDescriptor<Project>())) ?? []
+    guard let project = all.first(where: { $0.rootURL?.standardizedFileURL.path == rootPath }) else { return true }
+    guard (project.records ?? []).isEmpty, selection != .project(project.persistentModelID) else { return false }
+    context.delete(project)
+    do {
+      try context.save()
+    } catch {
+      return false
+    }
+    refresh()
+    return true
   }
 
   /// Each root's catalog, searched off the main actor.

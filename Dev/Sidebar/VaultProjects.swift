@@ -1,0 +1,82 @@
+import Foundation
+import VaultKit
+
+/// Dev's side of the projects the v57 apps share through the vault (`../Vault`): the repositories added in Git
+/// (or in Code, Markdown, Shell) appear in the sidebar as they're added, and folders dropped here are published
+/// for the others.
+///
+/// A project removed in Dev stays in the other apps: Dev remembers it and doesn't bring it back. A project
+/// removed in Git leaves Dev too, unless Dev holds translation work for it.
+@MainActor final class VaultProjects {
+  static let shared = VaultProjects()
+
+  private let vault = Vault.shared
+  private var observer: VaultChangeObserver?
+  private weak var model: SidebarViewModel?
+
+  /// Vault projects removed in Dev, by id.
+  private var dismissed: Set<String> {
+    get { Set(UserDefaults.standard.stringArray(forKey: "DismissedVaultProjects") ?? []) }
+    set { UserDefaults.standard.set(Array(newValue), forKey: "DismissedVaultProjects") }
+  }
+
+  /// Folders Dev added because the vault had them, so they leave when the vault drops them.
+  private var adopted: Set<String> {
+    get { Set(UserDefaults.standard.stringArray(forKey: "AdoptedVaultProjects") ?? []) }
+    set { UserDefaults.standard.set(Array(newValue), forKey: "AdoptedVaultProjects") }
+  }
+
+  /// Starts following the vault for the sidebar (at launch, outside screenshot mode).
+  func start(model: SidebarViewModel) {
+    guard !LaunchOptions.isScreenshotMode, observer == nil else { return }
+    self.model = model
+    observer = VaultChangeObserver { [weak self] in
+      Task { @MainActor in
+        self?.vault.reload()
+        await self?.follow()
+      }
+    }
+    Task {
+      model.refresh()
+      publish(model.projects.compactMap(\.rootURL))
+      await follow()
+    }
+  }
+
+  /// Adds the vault's projects on this Mac that Dev doesn't list, and removes adopted ones the vault no
+  /// longer has.
+  private func follow() async {
+    guard let model else { return }
+    let fileManager = FileManager.default
+    let local = vault.localProjects.filter { !dismissed.contains($0.id) }
+    let known = Set(model.projects.compactMap { $0.rootURL?.standardizedFileURL.path })
+    let missing = local.compactMap(\.localPath).filter { path in
+      !known.contains(path) && fileManager.fileExists(atPath: path)
+    }
+    if !missing.isEmpty {
+      adopted.formUnion(missing)
+      await model.addSuggestedDirectories(missing.map { URL(fileURLWithPath: $0, isDirectory: true) })
+    }
+    let inVault = Set(vault.localProjects.compactMap(\.localPath))
+    for path in adopted where !inVault.contains(path) {
+      if model.removeUnusedProject(rootPath: path) { adopted.remove(path) }
+    }
+  }
+
+  /// Publishes project folders for the other apps.
+  func publish(_ roots: [URL]) {
+    guard !LaunchOptions.isScreenshotMode, !roots.isEmpty else { return }
+    vault.perform { store in
+      for root in roots { try store.addProject(path: root.standardizedFileURL.path) }
+    }
+  }
+
+  /// The user removed a project in Dev: keep it out of Dev, but leave it in the other apps.
+  func dismiss(rootURL: URL?) {
+    guard let path = rootURL?.standardizedFileURL.path,
+      let project = vault.localProjects.first(where: { $0.localPath == path })
+    else { return }
+    dismissed.insert(project.id)
+    adopted.remove(path)
+  }
+}
