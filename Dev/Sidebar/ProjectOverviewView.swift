@@ -341,7 +341,14 @@ struct ProjectOverviewView: View {
       if let library, !library.shots.isEmpty {
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 14), count: 5), spacing: 14) {
           ForEach(overviewShots(library)) { shot in
-            ScreenshotThumbnail(shot: shot, preferFinal: true)
+            Button {
+              // Both appearances of the shown device, so the viewer's Dark toggle has the dark ones.
+              let shots = library.shots(in: shot.locale, on: shot.target)
+              ScreenshotViewer.present(shots, selected: shot, framed: true)
+            } label: {
+              ScreenshotThumbnail(shot: shot, preferFinal: true)
+            }
+            .buttonStyle(.plain)
           }
         }
       } else {

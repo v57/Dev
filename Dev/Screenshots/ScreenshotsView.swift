@@ -169,9 +169,11 @@ struct ScreenshotsView: View {
         .padding(16)
         ScrollView {
           LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 16)], spacing: 18) {
-            ForEach(library.shots(in: current, on: device)) { shot in
+            let shots = library.shots(in: current, on: device)
+            ForEach(shots) { shot in
               Button {
                 selectedScene = shot.name
+                ScreenshotViewer.present(shots, selected: shot, framed: showsFinal)
               } label: {
                 ScreenshotThumbnail(
                   shot: shot, preferFinal: showsFinal,
