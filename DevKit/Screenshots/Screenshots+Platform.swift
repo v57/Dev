@@ -63,19 +63,50 @@ import Foundation
                 y: max(screen.visibleFrame.minY, screen.visibleFrame.midY - window.frame.height / 2)))
           }
         }
-        if ScreenshotSignal.activates {
-          // An app launched in the background can't make itself active; `dev-screenshots` reopens it like a Dock
-          // click when it reads this.
-          ScreenshotSignal.send("activate")
-          for _ in 0..<50 where !NSApp.isActive { try? await Task.sleep(for: .milliseconds(100)) }
-          window.makeKeyAndOrderFront(nil)
+        while true {
+          if ScreenshotSignal.activates {
+            await waitForFocus()
+            window.makeKeyAndOrderFront(nil)
+          }
+          window.orderFrontRegardless()
+          window.sheets.forEach { $0.orderFrontRegardless() }
+          // The resize lays out again, and a window that just got focus redraws.
+          try? await Task.sleep(for: .milliseconds(600))
+          // Focus lost while it settled: wait for it again.
+          if !ScreenshotSignal.activates || NSApp.isActive { break }
         }
-        window.orderFrontRegardless()
-        window.sheets.forEach { $0.orderFrontRegardless() }
-        // The resize lays out again.
-        try? await Task.sleep(for: .milliseconds(600))
         pictured.formUnion(candidates.map(\.windowNumber))
         return window.windowNumber
+      }
+
+      private static var askedToActivate = false
+
+      /// Until the app is the active one. An app launched in the background can't make itself active, so the first
+      /// time it asks `dev-screenshots`, which reopens it like a Dock click. After that a reader who switched to
+      /// another app is waited for, not interrupted: the capture goes on when they come back.
+      static func waitForFocus() async {
+        guard !NSApp.isActive else { return }
+        if !askedToActivate {
+          askedToActivate = true
+          ScreenshotSignal.send("activate")
+        }
+        while !NSApp.isActive { try? await Task.sleep(for: .milliseconds(100)) }
+      }
+
+      private static var focusObservers: [NSObjectProtocol] = []
+
+      /// Tells `dev-screenshots` when the app gains and loses focus, so it pauses its timeout while the reader is
+      /// elsewhere and retakes a picture that focus left during.
+      static func reportFocus() {
+        let center = NotificationCenter.default
+        focusObservers = [
+          center.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
+            ScreenshotSignal.send("focus active")
+          },
+          center.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { _ in
+            ScreenshotSignal.send("focus inactive")
+          },
+        ]
       }
     }
   }
@@ -88,6 +119,8 @@ import Foundation
     enum Platform {
       /// `dev-screenshots` sets the simulator's appearance for a launch; a later scene in the same launch switches
       /// the app's windows.
+      static func reportFocus() {}
+
       static func apply(_ appearance: ScreenshotConfig.Appearance?) {
         guard let appearance else { return }
         for window in windows { window.overrideUserInterfaceStyle = appearance == .dark ? .dark : .light }
@@ -117,6 +150,7 @@ import Foundation
     @MainActor
     enum Platform {
       static func apply(_ appearance: ScreenshotConfig.Appearance?) {}
+      static func reportFocus() {}
       static func waitForWindow() async {}
       static func present() async -> Int? { nil }
     }

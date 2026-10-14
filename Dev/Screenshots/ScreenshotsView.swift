@@ -75,7 +75,9 @@ struct ScreenshotsView: View {
     let processed = library?.shots.contains { $0.final != nil } ?? false
     let outdated = library?.outdated.count ?? 0
     return HStack(spacing: 10) {
-      stage(1, "Capture", phase == .capturing ? "Taking the scenes…" : captureDetail(library),
+      stage(1, "Capture", phase == .capturing
+              ? (store.paused.contains(root) ? "Paused: switch back to the app" : "Taking the scenes…")
+              : captureDetail(library),
             done: captured && phase != .capturing && outdated == 0, current: phase == .capturing || !captured,
             warning: captured && phase != .capturing && outdated > 0)
       connector(captured)

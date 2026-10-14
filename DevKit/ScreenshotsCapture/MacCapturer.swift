@@ -4,7 +4,9 @@
   import Foundation
 
   /// Takes a locale's pictures of a Mac app: launches a new instance in the background (`open -n -g`, so nobody's
-  /// typing lands in it), waits until the scene is up and captures its window with `screencapture -l`.
+  /// typing lands in it), waits until the scene is up and captures its window with `screencapture -l`. With
+  /// `mac.activate` (the default) the app is brought to the front once and every picture is taken while it is
+  /// focused: the capture pauses while the reader is in another app, and a picture focus left during is taken again.
   ///
   /// An app with a scene handler (`Screenshots.prepare { scene in … }`) takes every scene in that one launch; the
   /// others are launched again for each. Apps without `Screenshots.prepare()` are captured by their largest window
@@ -31,17 +33,24 @@
       for shot in shots {
         do {
           let window: Int
-          if let running = instance, running.takesScenes, !shot.scene.relaunch {
+          let running: Instance
+          if let instance, instance.takesScenes, !shot.scene.relaunch {
+            running = instance
             try running.send(shot)
             window = try running.waitForReady(scene: shot.scene.id, timeout: timeout)
           } else {
             instance?.quit()
             instance = nil
-            let launched = try Instance(app: app, first: shot, locale: locale, settings: settings)
-            instance = launched
-            window = try launched.waitForFirstReady(delay: shot.scene.delay, timeout: timeout)
+            running = try Instance(app: app, first: shot, locale: locale, settings: settings, log: log)
+            instance = running
+            window = try running.waitForFirstReady(delay: shot.scene.delay, timeout: timeout)
           }
           try Self.screencapture(window: window, to: shot.file)
+          // The reader switched away while the picture was taken: again, once they're back.
+          while try running.lostFocusSinceReady() {
+            try running.waitForFocus()
+            try Self.screencapture(window: window, to: shot.file)
+          }
           report(shot, nil)
         } catch {
           report(shot, error)
@@ -62,13 +71,26 @@
       /// Our end of the app's stdin (a FIFO), for the next scenes.
       let input: FileHandle
       let started = Date()
+      let activates: Bool
+      let log: (String) -> Void
       private(set) var pid: pid_t?
       private(set) var usesKit = false
       private(set) var takesScenes = false
+      /// What the app last said about its focus; apps without the kit never say.
+      private(set) var focused = true
+      /// The app lost focus since its last `ready`.
+      private var lostFocus = false
+      /// `ready` lines not waited for yet: the scene (nil: the first) and the window.
+      private var readies: [(scene: String?, window: Int?)] = []
       private var quitDone = false
 
-      init(app: URL, first shot: CaptureShot, locale: String, settings: ScreenshotConfig.Mac) throws {
+      init(
+        app: URL, first shot: CaptureShot, locale: String, settings: ScreenshotConfig.Mac,
+        log: @escaping (String) -> Void
+      ) throws {
         self.app = app
+        self.activates = settings.activate
+        self.log = log
         scratch = FileManager.default.temporaryDirectory
           .appendingPathComponent("dev-screenshots-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
@@ -111,15 +133,23 @@
       func waitForFirstReady(delay: Double, timeout: TimeInterval) throws -> Int {
         var windowSeen: Date?
         var reopened = false
-        while Date().timeIntervalSince(started) < timeout {
-          if let ready = try readMessages(until: nil) { return ready }
+        var counted: TimeInterval = 0
+        while counted < timeout {
+          if let ready = try takeReady(scene: nil) { return ready }
           pid = pid ?? MacCapturer.newInstance(of: app, since: started)
           let waited = Date().timeIntervalSince(started)
           if let pid, !usesKit, waited > 3 {
             if let window = MacCapturer.largestWindow(of: pid) {
               let seen = windowSeen ?? Date()
               windowSeen = seen
-              if Date().timeIntervalSince(seen) >= delay { return window }
+              if Date().timeIntervalSince(seen) >= delay {
+                if activates {
+                  // Without the kit nothing says when the app is focused: bring it forward and let it redraw.
+                  Shell.run("/usr/bin/open", [app.path])
+                  Thread.sleep(forTimeInterval: 1)
+                }
+                return window
+              }
             } else if !reopened, waited > 4 {
               // A background launch doesn't present SwiftUI's first window; a reopen event does, still unfocused.
               reopened = true
@@ -128,6 +158,8 @@
           }
           try checkAlive()
           Thread.sleep(forTimeInterval: 0.2)
+          // Time the reader spends in another app doesn't count.
+          if focused { counted += 0.2 }
         }
         throw CaptureError(
           pid == nil
@@ -137,13 +169,35 @@
 
       /// A later scene, after `send`.
       func waitForReady(scene: String, timeout: TimeInterval) throws -> Int {
-        let start = Date()
-        while Date().timeIntervalSince(start) < timeout {
-          if let ready = try readMessages(until: scene) { return ready }
+        var counted: TimeInterval = 0
+        while counted < timeout {
+          if let ready = try takeReady(scene: scene) { return ready }
           try checkAlive()
           Thread.sleep(forTimeInterval: 0.2)
+          if focused { counted += 0.2 }
         }
         throw CaptureError("the app didn't open “\(scene)” in \(Int(timeout)) s")
+      }
+
+      /// Whether the app said it lost focus since its `ready`, so the picture may show an inactive window.
+      func lostFocusSinceReady() throws -> Bool {
+        try readMessages()
+        defer { lostFocus = false }
+        return lostFocus
+      }
+
+      /// Until the app says it is focused again, then a moment for its windows to redraw. No timeout: the reader
+      /// decides when to come back (or stops the capture).
+      func waitForFocus() throws {
+        try readMessages()
+        guard !focused else { return }
+        while !focused {
+          try checkAlive()
+          Thread.sleep(forTimeInterval: 0.2)
+          try readMessages()
+        }
+        Thread.sleep(forTimeInterval: 0.6)
+        try readMessages()
       }
 
       func send(_ shot: CaptureShot) throws {
@@ -151,12 +205,24 @@
         try input.write(contentsOf: Data(line.utf8))
       }
 
-      /// Handles the app's messages; the window number once it says the scene (nil: the first) is ready.
-      private func readMessages(until scene: String?) throws -> Int? {
+      /// The window of the scene's (nil: the first one's) `ready`, once the app has said it.
+      private func takeReady(scene: String?) throws -> Int? {
+        try readMessages()
+        guard let index = readies.firstIndex(where: { $0.scene == scene }) else { return nil }
+        let ready = readies.remove(at: index)
+        guard let window = ready.window ?? pid.flatMap(MacCapturer.largestWindow) else {
+          throw CaptureError("the app was ready but has no window")
+        }
+        return window
+      }
+
+      /// Handles the app's new messages.
+      private func readMessages() throws {
         for line in follower.newLines() {
           guard let message = ScreenshotSignal.message(in: line) else { continue }
           let fields = Self.fields(message)
-          switch message.split(separator: " ").first {
+          let words = message.split(separator: " ")
+          switch words.first {
           case "hello":
             usesKit = true
             takesScenes = message.split(separator: " ").contains("scenes")
@@ -165,16 +231,22 @@
             Shell.run("/usr/bin/open", ["-g", app.path])
           case "activate":
             Shell.run("/usr/bin/open", [app.path])
-          case "ready":
-            guard fields["scene"] == scene else { continue }
-            guard let window = fields["window"].flatMap({ Int($0) }) ?? pid.flatMap(MacCapturer.largestWindow) else {
-              throw CaptureError("the app was ready but has no window")
+          case "focus":
+            let active = words.dropFirst().first == "active"
+            guard active != focused else { continue }
+            focused = active
+            if active {
+              log("  Going on: \(app.deletingPathExtension().lastPathComponent) is focused again.")
+            } else {
+              lostFocus = true
+              log("  Paused: switch back to \(app.deletingPathExtension().lastPathComponent) (⌘-Tab or the Dock) to go on.")
             }
-            return window
+          case "ready":
+            lostFocus = false
+            readies.append((fields["scene"], fields["window"].flatMap { Int($0) }))
           default: continue
           }
         }
-        return nil
       }
 
       private func checkAlive() throws {

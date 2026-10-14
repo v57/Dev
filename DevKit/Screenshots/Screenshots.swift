@@ -3,7 +3,8 @@ import Foundation
 /// The app's side of a screenshot capture. `dev-screenshots` launches the app with the first scene's launch arguments
 /// and `DEV_SCREENSHOT=<scene id>`; the app opens that screen from its own arguments, as it already does for scripted
 /// checks. Calling `prepare()` at launch adds what the arguments can't: the appearance, the window size, bringing the
-/// window up without focus and saying when the screen is ready, so nothing is captured half-loaded.
+/// window to the front with focus (and waiting while the reader is in another app) and saying when the screen is
+/// ready, so nothing is captured half-loaded or unfocused.
 ///
 /// With a scene handler, the whole capture runs in this one launch (per locale): after each picture the next scene
 /// arrives on stdin, the handler opens it, and the kit says when it's ready. Without one, the app is relaunched for
@@ -42,6 +43,7 @@ public enum Screenshots {
     handler = scenes
     ScreenshotSignal.send("hello pid=\(ProcessInfo.processInfo.processIdentifier)" + (scenes == nil ? "" : " scenes"))
     Platform.apply(ScreenshotSignal.appearance)
+    if ScreenshotSignal.activates { Platform.reportFocus() }
     Task {
       await Platform.waitForWindow()
       windowUp = true
@@ -104,7 +106,8 @@ extension ScreenshotConfig.Scene {
 }
 
 /// What the app and `dev-screenshots` exchange: environment variables at launch, `dev-screenshot: …` lines on stdout
-/// (`hello pid=… [scenes]`, `reopen`, `activate`, `ready [window=…] [scene=…]`) and, for apps with a scene handler,
+/// (`hello pid=… [scenes]`, `reopen`, `activate`, `focus active|inactive`, `ready [window=…] [scene=…]`) and, for apps
+/// with a scene handler,
 /// the next scene as a JSON line on stdin.
 public enum ScreenshotSignal {
   public static let prefix = "dev-screenshot: "

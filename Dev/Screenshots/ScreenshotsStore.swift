@@ -23,6 +23,8 @@ final class ScreenshotsStore {
   private(set) var phases: [URL: Phase] = [:]
   /// The capture's output, for the log sheet.
   private(set) var logs: [URL: [String]] = [:]
+  /// The capture waits for the reader to switch back to the app it captures.
+  private(set) var paused: Set<URL> = []
   /// Why the last capture or framing failed, shown once.
   var errors: [URL: String] = [:]
 
@@ -55,12 +57,15 @@ final class ScreenshotsStore {
       do {
         for try await line in process.lines() {
           logs[root, default: []].append(line)
+          if line.contains("Paused: ") { paused.insert(root) }
+          if line.contains("Going on: ") { paused.remove(root) }
           if line.hasPrefix("error: ") { errors[root] = String(line.dropFirst("error: ".count)) }
         }
       } catch {
         errors[root] = error.localizedDescription
       }
       processes[root] = nil
+      paused.remove(root)
       phases[root] = .idle
       if process.status != 0, errors[root] == nil {
         let failed = logs[root, default: []].filter { $0.contains(" failed: ") }.count

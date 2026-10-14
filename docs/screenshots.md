@@ -42,7 +42,7 @@ The package is `DevKit/` in this repo (`Package.swift` at the root):
 | `appearances` | `["light"]` | `light`, `dark` |
 | `variables` | none | `$NAME` / `${NAME}` in arguments and environment; `$ROOT` is the project root |
 | `watch` | the whole repo | paths whose commits outdate the pictures |
-| `mac` | `{ "window": [1440, 900] }` when there's no `ios` | `window` in points (Retina pictures are twice that), `activate` (the active-window look; brings the app forward, off by default), `app` |
+| `mac` | `{ "window": [1440, 900] }` when there's no `ios` | `window` in points (Retina pictures are twice that), `activate` (on by default: the app comes forward once and every picture waits until it is focused; `false` keeps it in the background, with the inactive look), `app` |
 | `ios` | none | `devices` (simulator names), `cleanStatusBar` (9:41, full bars, on by default), `app` |
 | `framing` | none | how Dev's Screenshots tool frames the pictures for the App Store: see below |
 | scene `id` | required | the file name; no spaces or slashes |
@@ -97,7 +97,8 @@ the reader saves.
 
 Any app that opens its screens from launch arguments (Git's `--mode`, Database's `--select`) works without code
 changes: `dev-screenshots` launches it in the background (`open -n -g`), forces the appearance through the argument
-domain and takes its largest window once it has appeared and the scene's delay has passed. Each scene is a new launch.
+domain and takes its largest window once it has appeared and the scene's delay has passed, after bringing the app
+forward (`mac.activate`). Each scene is a new launch. Only apps with the kit say when they lose focus, so only they pause.
 
 Linking `DevScreenshots` and calling `Screenshots.prepare()` at launch adds the rest:
 
@@ -111,8 +112,11 @@ Screenshots.prepare(waitsForReady: true) { scene in   // the scene handler is op
 Screenshots.ready()
 ```
 
-- The window gets the config's size and comes forward without taking focus; with `waitsForReady`, the picture waits
-  for `ready()` instead of a fixed delay.
+- The window gets the config's size and comes forward with focus: the app asks to be activated once, and every
+  picture waits until it is the active app. Switching to another app pauses the capture (the timeout stops too)
+  until you come back with ⌘-Tab or the Dock; a picture taken while focus left is taken again. With
+  `"activate": false` it stays in the background. With `waitsForReady`, the picture waits for `ready()` instead of a
+  fixed delay.
 - With a scene handler, every scene of a locale is taken in **one launch**: after each picture the next scene arrives
   on stdin, the handler opens it, and the picture is taken once it returns and the scene's delay has passed. Undo what
   the scene before changed; mark a scene `relaunch` when that isn't possible.
@@ -123,8 +127,8 @@ Screenshots.ready()
 
 The exchange, for apps in other languages: the environment carries `DEV_SCREENSHOT` (the first scene's id),
 `DEV_SCREENSHOT_APPEARANCE`, `DEV_SCREENSHOT_WINDOW` (`1440x900`), `DEV_SCREENSHOT_DELAY` and
-`DEV_SCREENSHOT_ACTIVATE`; the app writes `dev-screenshot: hello pid=<pid> [scenes]`, `reopen`, `activate` and
-`ready [window=<number>] [scene=<id>]` lines to stdout; the next scene is a JSON line on stdin,
+`DEV_SCREENSHOT_ACTIVATE`; the app writes `dev-screenshot: hello pid=<pid> [scenes]`, `reopen`, `activate`,
+`focus active|inactive` and `ready [window=<number>] [scene=<id>]` lines to stdout; the next scene is a JSON line on stdin,
 `{"scene": {…}, "appearance": "dark"}`.
 
 ## Commands
