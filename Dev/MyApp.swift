@@ -1,9 +1,22 @@
 import AppKit
+import DevScreenshotsCapture
 import SwiftUI
 import UpdateKit
 import VaultKit
 
-@main struct MyApp: App {
+/// `Dev --screenshots <command>` is `dev-screenshots` (release.sh's screenshots step runs it this way); any other
+/// launch is the app.
+@main enum DevMain {
+    static func main() {
+        if let index = CommandLine.arguments.firstIndex(of: "--screenshots") {
+            setvbuf(stdout, nil, _IOLBF, 0)
+            exit(ScreenshotTool.run(Array(CommandLine.arguments[(index + 1)...])))
+        }
+        MyApp.main()
+    }
+}
+
+struct MyApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     /// Updates from GitHub Releases (the universal Dev.zip, built by Tools/release/release.sh):

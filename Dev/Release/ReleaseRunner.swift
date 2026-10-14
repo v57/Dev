@@ -33,7 +33,7 @@ enum ReleaseStep: String, CaseIterable, Identifiable, Sendable {
     case .check: return "Tools, certificate, notary profile, GitHub sign-in"
     case .build: return "A release build"
     case .test: return "The test scheme"
-    case .screenshots: return "UI test screenshots per locale"
+    case .screenshots: return "The scenes in .dev/screenshots.json, or a UI test per locale"
     case .archive: return "An archive with the version and build number"
     case .direct: return "Developer ID, notarized and stapled .zip and .dmg"
     case .github: return "A release with the download files"
@@ -96,6 +96,8 @@ final class ReleaseRunner {
     // release needs no separate `gh auth login`.
     var environment: [String: String] = [:]
     if let token = (try? KeychainTokenStore.shared.load())?.token { environment["GH_TOKEN"] = token }
+    // The screenshots step runs this app as dev-screenshots (`Dev --screenshots`).
+    if let executable = Bundle.main.executablePath { environment["DEV_APP_EXECUTABLE"] = executable }
     let process = LineProcess("/bin/bash", arguments, directory: root, environment: environment)
     self.process = process
     isRunning = true

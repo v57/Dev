@@ -11,7 +11,8 @@
 #   check        tools, signing identity, notary profile, gh login, clean tree
 #   build        xcodebuild build
 #   test         xcodebuild test (skipped when TEST_SCHEME is empty)
-#   screenshots  UI test SCREENSHOT_TEST per locale, attachments exported as PNGs
+#   screenshots  the scenes in .dev/screenshots.json (dev-screenshots; pictures in its output folder),
+#                else UI test SCREENSHOT_TEST per locale, attachments exported as PNGs
 #   archive      xcodebuild archive with the release version and build number
 #   direct       Developer ID export, notarize + staple, <App>.zip and <App>.dmg (macOS);
 #                with DIRECT_ARCHS="universal arm64" also <App>-AppleSilicon.zip/.dmg
@@ -26,6 +27,8 @@
 set -euo pipefail
 
 STEPS_ALL="check build test screenshots archive direct github appstore"
+# The Dev repo this script sits in (Tools/release/ or Dev/Release/), for dev-screenshots; in Dev.app it's no repo.
+SCRIPT_REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 PROJECT_DIR="$PWD"
 VERSION=""
 DRY_RUN=0
@@ -156,9 +159,30 @@ do_test() {
   done_step
 }
 
+# dev-screenshots: $DEV_SCREENSHOTS, Dev's own binary (Dev sets DEV_APP_EXECUTABLE), one on the PATH, this repo's
+# package, or the installed Dev.
+screenshot_tool() {
+  if [ -n "${DEV_SCREENSHOTS:-}" ]; then SHOT_TOOL=("$DEV_SCREENSHOTS")
+  elif [ -n "${DEV_APP_EXECUTABLE:-}" ]; then SHOT_TOOL=("$DEV_APP_EXECUTABLE" --screenshots)
+  elif command -v dev-screenshots >/dev/null; then SHOT_TOOL=(dev-screenshots)
+  elif [ -f "$SCRIPT_REPO/Package.swift" ] && grep -q dev-screenshots "$SCRIPT_REPO/Package.swift"; then
+    SHOT_TOOL=(swift run -c release --package-path "$SCRIPT_REPO" dev-screenshots)
+  elif [ -x /Applications/Dev.app/Contents/MacOS/Dev ]; then SHOT_TOOL=(/Applications/Dev.app/Contents/MacOS/Dev --screenshots)
+  else fail "dev-screenshots not found (set DEV_SCREENSHOTS, or install Dev)"; fi
+}
+
 do_screenshots() {
   step screenshots
-  [ -n "$SCREENSHOT_TEST" ] || { skip "SCREENSHOT_TEST is empty"; return; }
+  if [ -f .dev/screenshots.json ]; then
+    screenshot_tool
+    run "${SHOT_TOOL[@]}" capture --project "$PROJECT_DIR" || fail "some scenes were not captured"
+    local output
+    output=$(sed -n 's/.*"output" *: *"\([^"]*\)".*/\1/p' .dev/screenshots.json | head -1)
+    artifact "$PROJECT_DIR/${output:-.build/screenshots}"
+    done_step
+    return
+  fi
+  [ -n "$SCREENSHOT_TEST" ] || { skip "no .dev/screenshots.json and SCREENSHOT_TEST is empty"; return; }
   local destination="${SCREENSHOT_DESTINATION:-$TEST_DESTINATION}"
   local scheme="${TEST_SCHEME:-$SCHEME}"
   for locale in $SCREENSHOT_LOCALES; do

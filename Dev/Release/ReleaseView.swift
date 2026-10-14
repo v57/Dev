@@ -4,6 +4,7 @@
 //
 
 import AppKit
+import DevScreenshotsCapture
 import SwiftUI
 
 /// Every project's release runs, kept while the app is open so a run survives a
@@ -35,6 +36,8 @@ struct ReleaseView: View {
   @State private var confirming: [ReleaseStep] = []
   @State private var showsSettings = false
   @State private var saveError: String?
+  /// The pictures `.dev/screenshots.json` describes against the current commit; nil without one.
+  @State private var screenshots: ScreenshotStatus?
 
   var body: some View {
     let runner = store.runner(for: root)
@@ -50,7 +53,13 @@ struct ReleaseView: View {
         setupPrompt
       }
     }
-    .task(id: root) { config = ReleaseConfig.load(from: root) }
+    .task(id: root) {
+      config = ReleaseConfig.load(from: root)
+      await loadScreenshotStatus()
+    }
+    .onChange(of: runner.isRunning) { _, running in
+      if !running { Task { await loadScreenshotStatus() } }
+    }
     .sheet(isPresented: $showsSettings) {
       if let config {
         ReleaseSettingsSheet(config: config) { edited in
@@ -95,6 +104,12 @@ struct ReleaseView: View {
     }
   }
 
+  /// Reads git and the manifest off the main actor.
+  private func loadScreenshotStatus() async {
+    let root = root
+    screenshots = await Task.detached { try? ScreenshotStatus.check(root: root) }.value
+  }
+
   private func save(_ edited: ReleaseConfig) {
     do {
       try edited.save(to: root)
@@ -132,6 +147,7 @@ struct ReleaseView: View {
           StepRow(
             step: step,
             state: runner.state(step),
+            note: step == .screenshots ? screenshots.map { ($0.summary, !$0.isCurrent) } : nil,
             isOn: Binding(
               get: { selected.contains(step) },
               set: { if $0 { selected.insert(step) } else { selected.remove(step) } }),
@@ -239,6 +255,9 @@ struct ReleaseView: View {
 private struct StepRow: View {
   let step: ReleaseStep
   let state: ReleaseRunner.StepState
+  /// What the step's output says now (the screenshots against the current commit), and
+  /// whether it needs a run.
+  var note: (text: String, needsRun: Bool)?
   @Binding var isOn: Bool
   let isEnabled: Bool
 
@@ -266,14 +285,18 @@ private struct StepRow: View {
   private var subtitle: String {
     switch state {
     case .skipped(let reason), .failed(let reason): return reason
-    default: return step.detail
+    default: return note?.text ?? step.detail
     }
   }
 
   @ViewBuilder
   private var status: some View {
     switch state {
-    case .idle: EmptyView()
+    case .idle:
+      if note?.needsRun == true {
+        Image(systemName: "clock.badge.exclamationmark").foregroundStyle(.orange)
+          .help("The code or .dev/screenshots.json changed since these pictures were taken")
+      }
     case .running: ProgressView().controlSize(.small)
     case .done: Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
     case .skipped: Image(systemName: "minus.circle").foregroundStyle(.secondary)

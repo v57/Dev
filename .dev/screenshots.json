@@ -1,0 +1,33 @@
+{
+  "build": { "scheme": "Dev", "project": "Dev.xcodeproj" },
+  "mac": { "window": [1280, 800] },
+  "variables": { "DEMO": "$ROOT/Tools/screenshots/DemoApp" },
+  "watch": ["Dev", "Tools/screenshots"],
+  "scenes": [
+    {
+      "id": "01-localization",
+      "arguments": ["-DevScreenshotMode", "-DevTool", "localization"],
+      "environment": { "DEV_DEMO_PROJECTS": "$DEMO" },
+      "delay": 3,
+      "caption": "Translate every string in one run"
+    },
+    {
+      "id": "02-app-icon",
+      "arguments": ["-DevScreenshotMode", "-DevTool", "icon"],
+      "environment": { "DEV_DEMO_PROJECTS": "$DEMO" },
+      "caption": "Make the app icon"
+    },
+    {
+      "id": "03-release",
+      "arguments": ["-DevScreenshotMode", "-DevTool", "release"],
+      "environment": { "DEV_DEMO_PROJECTS": "$DEMO" },
+      "caption": "Build, notarize and publish in one place"
+    },
+    {
+      "id": "04-settings",
+      "arguments": ["-DevScreenshotMode", "-DevSettings"],
+      "environment": { "DEV_DEMO_PROJECTS": "$DEMO" },
+      "caption": "Pick the model that translates"
+    }
+  ]
+}

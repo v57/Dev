@@ -1,4 +1,5 @@
 import AppKit
+import DevScreenshots
 import SwiftUI
 
 /// Thin host for the project-centric split view: owns the ONE sidebar view
@@ -14,6 +15,10 @@ import SwiftUI
 /// deselected, and picks which tool fills the pane for that project.
 /// Projectless tools are reached from the sidebar's bottom bar instead.
 struct ContentView: View {
+  @Environment(\.openSettings) private var openSettings
+  /// A screenshot scene asks for Settings; the view opens it, since the environment's
+  /// action only works from a view update.
+  @State private var settingsRequests = 0
   @State private var model = SidebarViewModel()
   @State private var createIcon = CreateIcon()
   @State private var localizationStore = LocalizationStore()
@@ -101,17 +106,18 @@ struct ContentView: View {
       }
     }
     .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
-    // The screenshot tests hand in a demo project instead of dropping one, and
-    // every picture has the same frame whatever size the window was last left at.
+    // Screenshots (.dev/screenshots.json): a demo project instead of a dropped one, and
+    // each scene's tool from its arguments, all scenes in one launch.
     .task {
-      if LaunchOptions.isScreenshotMode, let window = NSApp.windows.first(where: \.isVisible) {
-        window.setFrame(NSRect(x: 0, y: 0, width: 1280, height: 800), display: true)
-        window.center()
-      }
+      Screenshots.prepare(waitsForReady: true) { scene in await open(scene.arguments) }
       let demo = LaunchOptions.demoProjects
-      guard !demo.isEmpty, let first = await model.importDroppedURLs(demo) else { return }
-      model.selection = .project(first)
+      if !demo.isEmpty, let first = await model.importDroppedURLs(demo) {
+        model.selection = .project(first)
+      }
+      await open(ProcessInfo.processInfo.arguments)
+      Screenshots.ready()
     }
+    .onChange(of: settingsRequests) { openSettings() }
     .toolbar {
       // The one tool picker: project-bound, so it is absent until a project
       // is opened, and deselected (nil) by default.
@@ -156,6 +162,20 @@ struct ContentView: View {
           .help(translation.skipLearningHelp(catalogURL))
         }
       }
+    }
+  }
+
+  /// A screenshot scene's screen: `-DevTool icon|localization|release` picks the project's
+  /// tool, `-DevSettings` opens Settings.
+  private func open(_ arguments: [String]) async {
+    guard LaunchOptions.isScreenshotMode else { return }
+    if let index = arguments.firstIndex(of: "-DevTool"), index + 1 < arguments.count {
+      model.projectTool = DevTool(rawValue: arguments[index + 1])
+    }
+    if arguments.contains("-DevSettings") { settingsRequests += 1 }
+    // A catalog loads after the tool opens.
+    if model.projectTool == .localization {
+      for _ in 0..<100 where localizationStore.catalogURL == nil { try? await Task.sleep(for: .milliseconds(100)) }
     }
   }
 
