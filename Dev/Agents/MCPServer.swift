@@ -4,15 +4,17 @@
 //
 
 import AppKit
+import DevScreenshots
+import DevScreenshotsCapture
 import Foundation
 
 /// Dev's MCP server: `Dev.app/Contents/MacOS/Dev --mcp` speaks the Model
 /// Context Protocol over stdin/stdout (one JSON-RPC message per line), so an
-/// agent can set up a project's screenshot post-processing and its CI:
+/// agent can set up how a project's screenshots are framed and its CI:
 ///
 ///   claude mcp add dev -- /Applications/Dev.app/Contents/MacOS/Dev --mcp
 ///
-/// Reading and editing files (recipes, workflows) and rendering screenshots
+/// Reading and editing files (`.dev/screenshots.json`, workflows) and rendering screenshots
 /// happen in this process. Starting a run is asked of the open app, which owns
 /// the runs, the VMs and the reader's confirmation. Every tool checks the
 /// permission set for it in Settings ▸ Agents.
@@ -54,7 +56,7 @@ nonisolated enum MCPServer {
         "protocolVersion": params["protocolVersion"] as? String ?? "2025-06-18",
         "capabilities": ["tools": ["listChanged": false]],
         "serverInfo": ["name": "dev", "title": "Dev", "version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"],
-        "instructions": "Dev is a macOS developer toolbox. Use list_projects first, then read or change a project's App Store screenshot recipe (.dev/screenshots.json) and its CI workflows (.dev/workflows). Captions in a recipe are keys of the project's Screenshots.xcstrings, translated in Dev's Localization tool. Build numbers are the git commit count.",
+        "instructions": "Dev is a macOS developer toolbox. Use list_projects first, then read or change how a project's App Store screenshots are framed (the framing section and scene captions of .dev/screenshots.json, whose scenes say how the app opens each screen) and its CI workflows (.dev/workflows). Captions are keys of the project's Screenshots.xcstrings, translated in Dev's Localization tool. Build numbers are the git commit count.",
       ])
     case "ping":
       reply(id, [:])
@@ -108,14 +110,14 @@ nonisolated enum MCPServer {
        "inputSchema": ["type": "object", "properties": properties, "required": required]]
     }
     return [
-      tool("list_projects", "The projects in Dev's sidebar, with whether each has a screenshot recipe and which workflows."),
-      tool("get_screenshot_recipe", "A project's App Store screenshot post-processing recipe (.dev/screenshots.json) and the captured scene names it applies to.",
+      tool("list_projects", "The projects in Dev's sidebar, with their screenshot scenes, whether they are framed, and which workflows."),
+      tool("get_screenshot_framing", "How a project's App Store screenshots are framed (the framing section of .dev/screenshots.json, or the defaults when it has none), its scenes with their captions and backgrounds, and the captured locales.",
            ["project": projectArg], required: ["project"]),
-      tool("set_screenshot_recipe", "Replaces a project's screenshot recipe. Fields: width, height (an App Store size), background (#RRGGBB), caption {catalog, fontSize, color, bold, maxLines, top}, window {scale 0.5–1, shadow, align bottom|center, cornerRadius}, scenes [{match: captured name, caption: catalog key in the development language, background}]. Captions are added to the catalog for translation.",
-           ["project": projectArg, "recipe": ["type": "object"]], required: ["project", "recipe"]),
-      tool("render_screenshots", "Applies the recipe to the latest captured screenshots and reports what it rendered and which captions do not fit.",
+      tool("set_screenshot_framing", "Changes how a project's screenshots are framed; the scenes' launch arguments stay as they are. framing: {platform mac|iphone|ipad, width, height (an App Store size), background #RRGGBB, backgrounds {scene id: #RRGGBB}, caption {catalog, fontSize, color, bold, maxLines, top}, window {scale 0.5–1, shadow, align bottom|center, cornerRadius}}, every key optional, replacing the section. captions: {scene id: caption key in the development language, or null to remove}. New captions are added to the catalog for translation.",
+           ["project": projectArg, "framing": ["type": "object"], "captions": ["type": "object"]], required: ["project"]),
+      tool("render_screenshots", "Frames the latest captured screenshots and reports what it rendered and which captions do not fit.",
            ["project": projectArg], required: ["project"]),
-      tool("list_screenshots", "The latest captured and rendered screenshots of a project, per locale, with file paths.",
+      tool("list_screenshots", "A project's captured and framed screenshots, per locale and device, with file paths and whether each scene needs a new capture.",
            ["project": projectArg], required: ["project"]),
       tool("list_workflows", "A project's CI workflows: names, triggers and steps.",
            ["project": projectArg], required: ["project"]),
@@ -139,28 +141,47 @@ nonisolated enum MCPServer {
       try require(.read, "read projects")
       return KnownProjects.read().map { entry -> [String: Any] in
         let root = URL(fileURLWithPath: entry.root)
+        let config = try? ScreenshotConfig.load(in: root)
         return ["name": entry.name, "root": entry.root,
-                "hasScreenshotRecipe": ScreenshotRecipe.load(in: root) != nil,
+                "screenshotScenes": config?.scenes.count ?? 0,
+                "hasScreenshotFraming": config?.framing != nil,
                 "workflows": Workflow.load(in: root).map(\.id)]
       }
-    case "get_screenshot_recipe":
-      try require(.read, "read the screenshot recipe")
+    case "get_screenshot_framing":
+      try require(.read, "read the screenshot framing")
       let root = try project(arguments)
       let library = ScreenshotLibrary.scan(root)
-      let recipe = ScreenshotRecipe.load(in: root)
-      return ["recipe": try recipe.map { try json($0) } ?? NSNull(),
-              "capturedScenes": Array(Set(library.shots.map(\.name))).sorted(),
-              "locales": library.locales,
-              "captionCatalog": ScreenshotRecipe.load(in: root)?.caption.catalog ?? "Screenshots.xcstrings"]
-    case "set_screenshot_recipe":
+      guard let config = library.config else {
+        throw ToolError(message: library.configError ?? "\(root.lastPathComponent) has no \(ScreenshotConfig.path): its scenes are written there first (see Dev's docs/screenshots.md).")
+      }
+      let framing = config.framing ?? .starter(for: config.framedPlatform ?? .mac)
+      return ["framing": try json(framing),
+              "isDefault": config.framing == nil,
+              "framedPlatform": (config.framedPlatform?.rawValue as Any?) ?? NSNull(),
+              "scenes": config.scenes.map { scene -> [String: Any] in
+                ["id": scene.id, "caption": (scene.caption as Any?) ?? NSNull(),
+                 "background": framing.background(of: scene.id),
+                 "captured": library.shots.contains { $0.name == scene.id }]
+              },
+              "locales": library.locales]
+    case "set_screenshot_framing":
       let root = try project(arguments)
-      try require(.edit, "change the screenshot recipe of \(root.lastPathComponent)")
-      let recipe: ScreenshotRecipe = try decode(arguments["recipe"])
-      try recipe.save(in: root, by: AgentPermissions.authorName)
-      let keys = recipe.scenes.compactMap(\.caption).filter { !$0.isEmpty }
-      try? CaptionCatalog.addMissingKeys(keys, to: root.appendingPathComponent(recipe.caption.catalog))
+      try require(.edit, "change the screenshot framing of \(root.lastPathComponent)")
+      let framing: ScreenshotConfig.Framing? = try arguments["framing"].map { try decode($0) }
+      var captions: [String: String?] = [:]
+      if let given = arguments["captions"] {
+        guard let given = given as? [String: Any] else { throw ToolError(message: "captions is an object of scene id → caption.") }
+        let ids = Set((try? ScreenshotConfig.load(in: root))?.scenes.map(\.id) ?? [])
+        let unknown = given.keys.filter { !ids.contains($0) }
+        guard unknown.isEmpty else {
+          throw ToolError(message: "No scene \(unknown.sorted().joined(separator: ", ")). Scenes: \(ids.sorted().joined(separator: ", ")).")
+        }
+        for (id, value) in given { captions[id] = .some(value as? String) }
+      }
+      guard framing != nil || !captions.isEmpty else { throw ToolError(message: "Give framing, captions or both.") }
+      try ScreenshotsStore.save(framing: framing, captions: captions, in: root, by: AgentPermissions.authorName)
       announce(root)
-      AgentPermissions.log("Changed the screenshot recipe of \(root.lastPathComponent)")
+      AgentPermissions.log("Changed the screenshot framing of \(root.lastPathComponent)")
       return "Saved .dev/screenshots.json. Call render_screenshots to apply it."
     case "render_screenshots":
       let root = try project(arguments)
@@ -174,11 +195,14 @@ nonisolated enum MCPServer {
       try require(.read, "read screenshots")
       let root = try project(arguments)
       let library = ScreenshotLibrary.scan(root)
-      return ["version": (library.version as Any?) ?? NSNull(), "locales": library.locales,
+      return ["build": (library.build as Any?) ?? NSNull(), "locales": library.locales,
+              "status": (library.status?.summary as Any?) ?? NSNull(),
               "shots": library.shots.map { shot -> [String: Any] in
-                ["name": shot.name, "locale": shot.locale, "captured": shot.captured.path,
-                 "final": (shot.final?.path as Any?) ?? NSNull(), "width": shot.pixelWidth, "height": shot.pixelHeight,
-                 "changedSinceLastVersion": shot.changed]
+                ["scene": shot.name, "locale": shot.locale, "platform": shot.platform.rawValue,
+                 "device": (shot.device as Any?) ?? NSNull(), "appearance": shot.appearance.rawValue,
+                 "captured": shot.captured.path, "framed": (shot.final?.path as Any?) ?? NSNull(),
+                 "width": shot.pixelWidth, "height": shot.pixelHeight,
+                 "needsCapture": (shot.state.reason as Any?) ?? NSNull()]
               }]
     case "list_workflows":
       try require(.read, "read workflows")

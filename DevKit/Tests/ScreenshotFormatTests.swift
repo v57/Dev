@@ -122,6 +122,128 @@ struct ScreenshotConfigTests {
   }
 }
 
+struct ScreenshotFramingTests {
+  @Test func aConfigWithoutFramingHasNone() throws {
+    let config = try JSONDecoder().decode(ScreenshotConfig.self, from: Data(#"{ "scenes": [{ "id": "a" }] }"#.utf8))
+    #expect(config.framing == nil)
+  }
+
+  @Test func framingKeysAreOptionalAndBadValuesTakeTheirDefaults() throws {
+    let json = #"""
+      { "framing": { "width": "wide", "height": 2868, "backgrounds": { "a": "#0A5FC2" },
+                     "caption": { "fontSize": 96, "bold": "yes" }, "window": { "align": "sideways", "scale": 0.9 } },
+        "scenes": [{ "id": "a", "caption": "Hello" }] }
+      """#
+    let config = try JSONDecoder().decode(ScreenshotConfig.self, from: Data(json.utf8))
+    let framing = try #require(config.framing)
+    #expect(framing.width == 2880 && framing.height == 2868)
+    #expect(framing.background(of: "a") == "#0A5FC2")
+    #expect(framing.background(of: "b") == "#1D1D1F")
+    #expect(framing.caption.fontSize == 96 && framing.caption.bold && framing.caption.catalog == "Screenshots.xcstrings")
+    #expect(framing.window.align == .bottom && framing.window.scale == 0.9)
+  }
+
+  @Test func aBrokenFramingNeverStopsTheScenes() throws {
+    let json = #"{ "framing": [1, 2], "scenes": [{ "id": "a" }] }"#
+    let config = try JSONDecoder().decode(ScreenshotConfig.self, from: Data(json.utf8))
+    #expect(config.framing == nil)
+    #expect(config.scenes.map(\.id) == ["a"])
+  }
+
+  @Test func savingTheFramingKeepsTheScenes() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let written = #"""
+      { "build": { "scheme": "Dev", "project": "Dev.xcodeproj" }, "mac": { "window": [1280, 800] },
+        "variables": { "DEMO": "$ROOT/demo" }, "watch": ["Dev"],
+        "scenes": [{ "id": "01", "arguments": ["-DevTool", "icon"], "delay": 3, "caption": "Make the icon" }] }
+      """#
+    try FileManager.default.createDirectory(
+      at: ScreenshotConfig.url(in: root).deletingLastPathComponent(), withIntermediateDirectories: true)
+    try Data(written.utf8).write(to: ScreenshotConfig.url(in: root))
+    var config = try #require(try ScreenshotConfig.load(in: root))
+    let scenes = config.scenes
+    config.framing = .init(backgrounds: ["01": "#0A5FC2"], updatedBy: "you", updatedAt: Date(timeIntervalSince1970: 1_800_000_000))
+    try config.save(in: root)
+
+    let read = try #require(try ScreenshotConfig.load(in: root))
+    #expect(read == config)
+    #expect(read.scenes == scenes)
+    // Only what the reader wrote and the framing: no defaults spelled out.
+    let json = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: ScreenshotConfig.url(in: root))) as? [String: Any])
+    #expect(Set(json.keys) == ["build", "mac", "variables", "watch", "framing", "scenes"])
+    #expect((json["build"] as? [String: Any])?.keys.sorted() == ["project", "scheme"])
+    #expect((json["mac"] as? [String: Any])?.keys.sorted() == ["window"])
+  }
+
+  @Test func aHandWrittenFileSavesAsWritten() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let written = """
+      {
+        "build": { "scheme": "Dev", "project": "Dev.xcodeproj" },
+        "variables": { "DEMO": "$ROOT/Tools/screenshots/DemoApp" },
+        "watch": ["Dev", "Tools/screenshots"],
+        "mac": { "window": [1280, 800] },
+        "scenes": [
+          {
+            "id": "01-localization",
+            "arguments": ["-DevScreenshotMode", "-DevTool", "localization"],
+            "environment": { "DEV_DEMO_PROJECTS": "$DEMO" },
+            "delay": 3,
+            "caption": "Translate every string in one run"
+          },
+          { "id": "02-app-icon", "arguments": ["-DevScreenshotMode", "-DevTool", "icon"], "caption": "Make the app icon" }
+        ]
+      }
+
+      """
+    try FileManager.default.createDirectory(
+      at: ScreenshotConfig.url(in: root).deletingLastPathComponent(), withIntermediateDirectories: true)
+    try Data(written.utf8).write(to: ScreenshotConfig.url(in: root))
+    try #require(try ScreenshotConfig.load(in: root)).save(in: root)
+    #expect(String(decoding: try Data(contentsOf: ScreenshotConfig.url(in: root)), as: UTF8.self) == written)
+  }
+
+  @Test func aNullWindowSurvivesASave() throws {
+    let config = try JSONDecoder().decode(
+      ScreenshotConfig.self, from: Data(#"{ "mac": { "window": null }, "scenes": [{ "id": "a" }] }"#.utf8))
+    let again = try JSONDecoder().decode(ScreenshotConfig.self, from: JSONEncoder().encode(config))
+    #expect(again.mac?.window == nil)
+  }
+
+  @Test func theCaptionDoesNotOutdateTheCapture() {
+    var config = ScreenshotConfig(scenes: [.init(id: "a", caption: "Hello")])
+    let before = config.fingerprint(of: config.scenes[0], on: .mac)
+    config.scenes[0].caption = "Hello again"
+    config.framing = .init(width: 1440, height: 900)
+    #expect(config.fingerprint(of: config.scenes[0], on: .mac) == before)
+  }
+
+  @Test func theFramedPlatformIsTheFirstCaptured() {
+    var config = ScreenshotConfig(mac: nil, ios: .init(devices: ["iPad Pro 13-inch (M5)", "iPhone 17 Pro Max"]))
+    #expect(config.framedPlatform == .ipad)
+    config.mac = .init()
+    #expect(config.framedPlatform == .mac)
+    config.framing = .init(platform: .iphone)
+    #expect(config.framedPlatform == .iphone)
+    #expect(ScreenshotConfig.Framing.starter(for: .iphone).problems().isEmpty)
+  }
+
+  @Test func appStoreSizes() {
+    #expect(ScreenshotConfig.Framing.isAppStoreSize(width: 2880, height: 1800))
+    #expect(ScreenshotConfig.Framing.isAppStoreSize(width: 2868, height: 1320))
+    #expect(!ScreenshotConfig.Framing.isAppStoreSize(width: 2000, height: 1000))
+    #expect(ScreenshotConfig.Framing(width: 2000, height: 1000).problems().count == 1)
+  }
+
+  @Test func framedPicturesSitBesideTheCaptures() {
+    let config = ScreenshotConfig()
+    let url = config.framedURL(of: "mac/en-US/01.png", in: URL(fileURLWithPath: "/p"))
+    #expect(url.path == "/p/.build/screenshots/framed/mac/en-US/01.png")
+  }
+}
+
 struct ScreenshotManifestTests {
   static func shot(_ scene: String, locale: String = "en-US", build: Int, commit: String, fingerprint: String = "f")
     -> ScreenshotManifest.Shot

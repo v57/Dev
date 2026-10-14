@@ -204,7 +204,7 @@ final class WorkflowStore {
     case .screenshots:
       passed = await runRelease("screenshots", stepID: step.id, runID: runID, root: root, version: version)
       if passed {
-        append(runID, step.id, root, "Post-processing with .dev/screenshots.json")
+        append(runID, step.id, root, "Framing with .dev/screenshots.json")
         let report = await ScreenshotProcessor.processLatest(in: root)
         for line in report.lines { append(runID, step.id, root, line) }
         passed = report.succeeded

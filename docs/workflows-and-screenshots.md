@@ -22,8 +22,9 @@ all edit the same thing.
 }
 ```
 
-- `kind`: `release` runs one `release.sh` step (configured by the project's `release.env`), `screenshots` runs the
-  screenshot UI test and then the recipe below, `command` runs a shell command in the project folder.
+- `kind`: `release` runs one `release.sh` step (configured by the project's `release.env`), `screenshots` runs
+  `release.sh screenshots` (the scenes in `.dev/screenshots.json`) and then frames them, `command` runs a shell
+  command in the project folder.
 - `runner`: `mac`, or `vm:<UTM machine name>` for commands. Dev starts the machine when it is stopped, copies the
   project into it (`VMRunner`) and runs the command there.
 - `parallel`: the step runs at the same time as the step before it.
@@ -39,29 +40,37 @@ Run history is kept in `~/Library/Application Support/dev.v57.dev/Workflows/hist
 
 ## Screenshots — `.dev/screenshots.json`
 
-`release.sh screenshots` runs the project's screenshot UI test per locale and exports the attachments to
-`build/release/<version>/screenshots/<locale>/`. The recipe turns them into App Store pictures in
-`build/screenshots/<locale>/<scene>.png`:
+One file describes a project's screenshots: the scenes and how the app opens each (DevKit's format,
+[screenshots.md](screenshots.md)), and the `framing` section that makes App Store pictures of them. The Screenshots
+tab's Capture runs `Dev --screenshots capture --project <root>` (`dev-screenshots`), which writes
+`.build/screenshots/<platform>/<locale>/<id>.png` and `manifest.json`; the tab reads the manifest, frames the pictures
+of the framed platform into `.build/screenshots/framed/` and shows each scene's status (outdated by commits under
+`watch`, or by edited scenes).
 
 ```json
 {
-  "width": 2880, "height": 1800,
-  "background": "#1D1D1F",
-  "caption": { "catalog": "Screenshots.xcstrings", "fontSize": 110, "color": "#FFFFFF", "bold": true,
-               "maxLines": 2, "top": 0.07 },
-  "window": { "scale": 0.82, "shadow": true, "align": "bottom", "cornerRadius": 24 },
+  "build": { "scheme": "Dev", "project": "Dev.xcodeproj" },
   "scenes": [
-    { "match": "01-localization", "caption": "Translate every string in one run", "background": "#0A5FC2" }
-  ]
+    { "id": "01-localization", "arguments": ["-DevTool", "localization"], "caption": "Translate every string in one run" }
+  ],
+  "framing": {
+    "width": 2880, "height": 1800, "background": "#1D1D1F",
+    "backgrounds": { "01-localization": "#0A5FC2" },
+    "caption": { "catalog": "Screenshots.xcstrings", "fontSize": 110, "color": "#FFFFFF", "bold": true,
+                 "maxLines": 2, "top": 0.07 },
+    "window": { "scale": 0.82, "shadow": true, "align": "bottom", "cornerRadius": 24 }
+  }
 }
 ```
 
-- A scene's `caption` is a key of the caption catalog, in the development language. Saving a recipe adds missing
-  keys to the catalog, so the Localization tool translates them with the rest of the project.
+- A scene's `caption` is a key of the caption catalog, in the development language. Saving adds missing keys to the
+  catalog, so the Localization tool translates them with the rest of the project.
+- The tab saves only `framing` and the scenes' captions, into the file as it is on disk, so the scenes and the
+  capture settings are never dropped.
 - Checks: the size must be an App Store Connect size; a caption that needs more than `maxLines` is reported
-  (`build/screenshots/report.json`).
-- Upload… in the Screenshots tab replaces the screenshots of the app's version in Prepare for Submission through the
-  App Store Connect API, with the key `release.env` names (`ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_PATH`).
+  (`.build/screenshots/framed/report.json`); scenes that need a new capture are listed.
+- Upload… in the Screenshots tab replaces the screenshots of the app's version in Prepare for Submission with the
+  framed pictures (the first appearance and device) through the App Store Connect API, with the key `release.env` names (`ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_PATH`).
 - The key is set up as in Shell's Notarization sheet (Release Settings, or the upload sheet when there is none):
   Choose… takes the `.p8` App Store Connect downloads, reads the key ID from `AuthKey_<KEY ID>.p8` and copies the
   file to `~/.appstoreconnect/private_keys` (mode 600). Check with Apple lists the account's apps. An empty issuer
@@ -76,8 +85,11 @@ Run history is kept in `~/Library/Application Support/dev.v57.dev/Workflows/hist
 claude mcp add dev -- /Applications/Dev.app/Contents/MacOS/Dev --mcp
 ```
 
-Tools: `list_projects`, `get_screenshot_recipe`, `set_screenshot_recipe`, `render_screenshots`,
+Tools: `list_projects`, `get_screenshot_framing`, `set_screenshot_framing`, `render_screenshots`,
 `list_screenshots`, `list_workflows`, `set_workflow`, `delete_workflow`, `run_workflow`, `get_runs`.
+
+- `set_screenshot_framing` takes `framing` (the section, replacing it) and `captions` (`{scene id: key or null}`);
+  it never changes the scenes' arguments. A project without `.dev/screenshots.json` has nothing to frame.
 
 - Files are read and written by the MCP process itself; `run_workflow` and every "Ask First" permission are asked of
   the open app over distributed notifications (`AgentBridge`), which shows the reader an alert.

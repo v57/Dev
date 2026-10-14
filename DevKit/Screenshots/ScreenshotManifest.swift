@@ -124,23 +124,34 @@ public struct ScreenshotManifest: Codable, Hashable, Sendable {
 
 extension ScreenshotConfig {
   /// What a scene's picture on a platform depends on in the config: the scene as written, the variables and the
-  /// platform's settings. Editing any of them outdates that picture; paths on this Mac don't enter it.
+  /// platform's settings. Editing any of them outdates that picture; paths on this Mac, the caption and the framing
+  /// don't enter it.
   public func fingerprint(of scene: Scene, on platform: Platform) -> String {
+    // Spelled out, so the fingerprint doesn't move with how the config writes its file.
+    struct MacInputs: Encodable {
+      var window: [Int]?
+      var activate: Bool
+    }
+    struct IOSInputs: Encodable {
+      var devices: [String] = []
+      var cleanStatusBar: Bool
+    }
     struct Inputs: Encodable {
       var scene: Scene
       var variables: [String: String]
-      var mac: Mac?
-      var ios: IOS?
+      var mac: MacInputs?
+      var ios: IOSInputs?
     }
-    // How the scene is reached doesn't change what it shows.
+    // How the scene is reached, and the caption framing puts over it, don't change what the capture shows.
     var shown = scene
     shown.relaunch = false
+    shown.caption = nil
     var inputs = Inputs(scene: shown, variables: variables)
     // The devices list and app paths say where to capture, not what the picture shows.
     if platform == .mac {
-      inputs.mac = mac.map { Mac(window: $0.window, activate: $0.activate) }
+      inputs.mac = mac.map { MacInputs(window: $0.window, activate: $0.activate) }
     } else {
-      inputs.ios = ios.map { IOS(devices: [], cleanStatusBar: $0.cleanStatusBar) }
+      inputs.ios = ios.map { IOSInputs(cleanStatusBar: $0.cleanStatusBar) }
     }
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]

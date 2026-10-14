@@ -70,7 +70,7 @@ nonisolated struct Workflow: Codable, Hashable, Identifiable, Sendable {
     var commandLine: String {
       switch kind {
       case .release: return "release.sh \(releaseStep ?? "")"
-      case .screenshots: return "release.sh screenshots, then the post-processing recipe"
+      case .screenshots: return "release.sh screenshots, then the framing"
       case .command: return command ?? ""
       }
     }

@@ -117,7 +117,7 @@ struct AgentsSettingsView: View {
       Section("MCP Server") {
         Toggle(isOn: $enabled) {
           Text("Let agents use Dev")
-          Text("Agents can set up screenshot post-processing and workflows, and run them.")
+          Text("Agents can set up screenshot framing and workflows, and run them.")
         }
         HStack(spacing: 8) {
           Circle().fill(statusColor).frame(width: 8, height: 8)

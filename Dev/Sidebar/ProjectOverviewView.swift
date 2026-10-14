@@ -4,6 +4,8 @@
 //
 
 import AppKit
+import DevScreenshots
+import DevScreenshotsCapture
 import SwiftUI
 
 // MARK: - Facts
@@ -307,11 +309,12 @@ struct ProjectOverviewView: View {
         Text("App Store Screenshots")
           .font(.title3.weight(.semibold))
         if let library, let first = library.shots.first {
-          Text("\(first.pixelWidth) × \(first.pixelHeight) · from \(library.version ?? "")")
+          Text("\(first.pixelWidth) × \(first.pixelHeight)" + (library.build.map { " · build \($0)" } ?? ""))
             .foregroundStyle(.secondary)
-          let changed = library.shots(in: currentLocale(library)).filter(\.changed).count
-          if changed > 0 {
-            Text("\(changed) changed since the last version")
+          let outdated = library.outdated.count
+          if outdated > 0 {
+            // dev-screenshots' status: commits under `watch`, or edited scenes, since the pictures.
+            Text(outdated == library.status?.scenes.count ? "Outdated" : "\(outdated) scenes outdated")
               .font(.caption)
               .padding(.horizontal, 8)
               .padding(.vertical, 2)
@@ -337,13 +340,15 @@ struct ProjectOverviewView: View {
       }
       if let library, !library.shots.isEmpty {
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 14), count: 5), spacing: 14) {
-          ForEach(library.shots(in: currentLocale(library))) { shot in
+          ForEach(overviewShots(library)) { shot in
             ScreenshotThumbnail(shot: shot, preferFinal: true)
           }
         }
       } else {
         HStack {
-          Text("No screenshots captured yet. The Screenshots tab runs the project's screenshot UI test and turns the captures into App Store pictures.")
+          Text(library?.config == nil
+               ? "No screenshot scenes. Describe them in .dev/screenshots.json, and the Screenshots tab captures them and frames them for the App Store."
+               : "No screenshots captured yet. The Screenshots tab takes the scenes in .dev/screenshots.json and frames them for the App Store.")
             .foregroundStyle(.secondary)
           Spacer()
         }
@@ -356,6 +361,15 @@ struct ProjectOverviewView: View {
   private func currentLocale(_ library: ScreenshotLibrary) -> String {
     if let locale, library.locales.contains(locale) { return locale }
     return library.locales.first ?? ""
+  }
+
+  /// One picture per scene: the light one on the first device, framed when it can be.
+  private func overviewShots(_ library: ScreenshotLibrary) -> [ScreenshotLibrary.Shot] {
+    let shots = library.shots(in: currentLocale(library))
+    let framed = shots.first { $0.final != nil }?.target
+    let target = framed ?? shots.first?.target
+    let appearance = library.config?.appearances.first ?? .light
+    return shots.filter { $0.target == target && $0.appearance == appearance }
   }
 
   @ViewBuilder
@@ -424,18 +438,19 @@ struct DotLabelStyle: LabelStyle {
   }
 }
 
-/// One screenshot at thumbnail size, with its name and a "changed" dot.
+/// One screenshot at thumbnail size, with its name and an "outdated" dot.
 struct ScreenshotThumbnail: View {
   let shot: ScreenshotLibrary.Shot
-  /// Show the post-processed picture when there is one.
+  /// Show the framed picture when there is one.
   var preferFinal = true
   var flag: String?
 
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
+      let picture = shot.picture(framed: preferFinal)
       ZStack(alignment: .topTrailing) {
-        AsyncImageFile(url: preferFinal ? (shot.final ?? shot.captured) : shot.captured)
-          .aspectRatio(CGFloat(max(shot.pixelWidth, 1)) / CGFloat(max(shot.pixelHeight, 1)), contentMode: .fit)
+        AsyncImageFile(url: picture.url)
+          .aspectRatio(CGFloat(max(picture.width, 1)) / CGFloat(max(picture.height, 1)), contentMode: .fit)
           .clipShape(RoundedRectangle(cornerRadius: 8))
           .shadow(color: .black.opacity(0.15), radius: 3, y: 1)
         if let flag {
@@ -449,11 +464,11 @@ struct ScreenshotThumbnail: View {
         }
       }
       HStack(spacing: 6) {
-        Text(shot.name)
+        Text(shot.title)
           .lineLimit(1)
         Spacer(minLength: 0)
-        if shot.changed {
-          Circle().fill(.orange).frame(width: 7, height: 7).help("Changed since the last version")
+        if let reason = shot.state.reason {
+          Circle().fill(.orange).frame(width: 7, height: 7).help("Needs a new capture: \(reason)")
         }
       }
       .font(.caption)

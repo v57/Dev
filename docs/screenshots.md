@@ -25,6 +25,7 @@ The package is `DevKit/` in this repo (`Package.swift` at the root):
   "watch": ["Git", "Sources"],
   "mac": { "window": [1440, 900] },
   "ios": { "devices": ["iPhone 17 Pro Max", "iPad Pro 13-inch (M5)"] },
+  "framing": { "width": 2880, "height": 1800, "backgrounds": { "01-history": "#0A5FC2" } },
   "scenes": [
     { "id": "01-history", "arguments": ["--in-memory", "--add-folder", "$DEMO/Repo", "--mode", "history"],
       "caption": "Every branch at a glance" },
@@ -43,15 +44,54 @@ The package is `DevKit/` in this repo (`Package.swift` at the root):
 | `watch` | the whole repo | paths whose commits outdate the pictures |
 | `mac` | `{ "window": [1440, 900] }` when there's no `ios` | `window` in points (Retina pictures are twice that), `activate` (the active-window look; brings the app forward, off by default), `app` |
 | `ios` | none | `devices` (simulator names), `cleanStatusBar` (9:41, full bars, on by default), `app` |
+| `framing` | none | how Dev's Screenshots tool frames the pictures for the App Store: see below |
 | scene `id` | required | the file name; no spaces or slashes |
 | scene `arguments`, `environment` | none | the app's own launch arguments for this screen |
 | scene `platforms` | all | `mac`, `iphone`, `ipad` |
 | scene `delay` | 2 | seconds to settle before the picture |
-| scene `caption` | none | the caption key, for framing and the App Store |
+| scene `caption` | none | the caption key in the development language, for `framing` and the App Store |
 | scene `relaunch` | false | a fresh launch even when the app takes scenes in one launch |
 
 Pictures: `<output>/mac/<locale>/<id>.png`, `<output>/<device-slug>/<locale>/<id>.png`, and `-dark` before `.png` for
 dark. A run that captures some scenes keeps the others' pictures.
+
+Saving the file from Dev (or `ScreenshotConfig.save`) writes only what differs from the defaults, keys in the order
+above and arrays or objects on one line when they fit in 120 columns, so a hand-written file changes only where edited.
+
+## Framing
+
+`framing` turns the captures into App Store pictures: the capture scaled with rounded corners and a shadow on a
+background, under the scene's `caption` translated through a String Catalog, at one App Store size. Dev's Screenshots
+tool edits it (and its agents, over MCP); captures don't depend on it, and neither does a scene's status, so editing a
+caption or the framing never outdates a picture. Framed pictures go to `<output>/framed/`, at the capture's own path,
+with `report.json` (captions that don't fit).
+
+```json
+"framing": {
+  "platform": "mac",
+  "width": 2880, "height": 1800,
+  "background": "#1D1D1F",
+  "backgrounds": { "01-history": "#0A5FC2" },
+  "caption": { "catalog": "Screenshots.xcstrings", "fontSize": 110, "color": "#FFFFFF", "bold": true,
+               "maxLines": 2, "top": 0.07 },
+  "window": { "scale": 0.82, "shadow": true, "align": "bottom", "cornerRadius": 24 },
+  "updatedBy": "Claude through MCP", "updatedAt": "2026-10-14T20:00:00Z"
+}
+```
+
+| Key | Default | |
+|---|---|---|
+| `platform` | the Mac when `mac` is set, else the first device's | the platform whose pictures are framed: one size fits one platform |
+| `width`, `height` | 2880 × 1800 (1320 × 2868 iPhone, 2064 × 2752 iPad) | pixels; must be an App Store Connect size |
+| `background` | `#1D1D1F` | `#RRGGBB` |
+| `backgrounds` | none | per scene `id`, its background |
+| `caption` | as above | `catalog` (relative to the root; the scenes' captions are its keys, added when Dev saves), `fontSize` (points at the framed size), `color`, `bold`, `maxLines` (more is reported), `top` (space above, a fraction of the height) |
+| `window` | as above | `scale` (the capture's width as a fraction of the picture's), `shadow`, `align` (`bottom` runs off the edge, `center` floats), `cornerRadius` |
+| `updatedBy`, `updatedAt` | none | who saved the framing last; Dev writes them |
+
+Every key is optional and a value that doesn't read takes its default; a `framing` that isn't an object is ignored, so
+it never stops a capture. Without the section, Dev frames with the defaults for the platform and writes nothing until
+the reader saves.
 
 ## The app's side
 
@@ -98,7 +138,8 @@ swift run --package-path ~/Developer/v57/Dev dev-screenshots capture --project .
 
 `status` compares each scene's pictures with the project: **missing**, **incomplete** (a device, locale or appearance
 has none), **changed** (its arguments, the variables or the platform settings were edited), **outdated** (commits
-under `watch` since the picture's commit) or **current**. Dev's Release tool shows the same line under Screenshots.
+under `watch` since the picture's commit) or **current**. Dev's Screenshots tab and the project's Overview show the
+same status. A scene's `caption` and `relaunch` and the `framing` don't enter it.
 
 `release.sh screenshots` runs `capture` when the project has the file (otherwise the old `SCREENSHOT_TEST` UI test),
 through `$DEV_SCREENSHOTS`, Dev's own binary when Dev runs the release, `dev-screenshots` on the `PATH`, this

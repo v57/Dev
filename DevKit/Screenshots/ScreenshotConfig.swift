@@ -11,6 +11,7 @@ import Foundation
 ///   "variables": { "DEMO": "$ROOT/Tools/screenshots" },
 ///   "mac": { "window": [1440, 900] },
 ///   "ios": { "devices": ["iPhone 17 Pro Max"] },
+///   "framing": { "width": 2880, "height": 1800, "backgrounds": { "01-history": "#0A5FC2" } },
 ///   "scenes": [
 ///     { "id": "01-history", "arguments": ["--add-folder", "$DEMO/Repo", "--mode", "history"],
 ///       "caption": "Every branch at a glance" }
@@ -31,6 +32,8 @@ public struct ScreenshotConfig: Codable, Hashable, Sendable {
   public var ios: IOS?
   /// Paths whose commits outdate the screenshots (`["Git", "Sources"]`). Without it, any commit does.
   public var watch: [String]?
+  /// How the pictures are framed for the App Store; nil until the project frames them.
+  public var framing: Framing?
   public var scenes: [Scene]
 
   public static let path = ".dev/screenshots.json"
@@ -38,7 +41,7 @@ public struct ScreenshotConfig: Codable, Hashable, Sendable {
   public init(
     output: String = ".build/screenshots", locales: [String] = ["en-US"], appearances: [Appearance] = [.light],
     variables: [String: String] = [:], build: Build? = nil, mac: Mac? = Mac(), ios: IOS? = nil,
-    watch: [String]? = nil, scenes: [Scene] = []
+    watch: [String]? = nil, framing: Framing? = nil, scenes: [Scene] = []
   ) {
     self.output = output
     self.locales = locales
@@ -48,6 +51,7 @@ public struct ScreenshotConfig: Codable, Hashable, Sendable {
     self.mac = mac
     self.ios = ios
     self.watch = watch
+    self.framing = framing
     self.scenes = scenes
   }
 
@@ -118,7 +122,7 @@ public struct ScreenshotConfig: Codable, Hashable, Sendable {
     /// Seconds to let the screen settle before the picture: after the app says it is ready, or after its window
     /// appears for apps without `Screenshots.prepare()`.
     public var delay: Double
-    /// The caption key in the development language, for framing and App Store text.
+    /// The caption key in the development language, for `framing` and App Store text. It doesn't change the capture.
     public var caption: String?
     /// Start the app afresh for this scene even when it opens scenes in one launch: for arguments that only work at
     /// launch, or state the scene handler can't undo.
@@ -149,7 +153,7 @@ public struct ScreenshotConfig: Codable, Hashable, Sendable {
 
 extension ScreenshotConfig {
   private enum CodingKeys: String, CodingKey {
-    case output, locales, appearances, variables, build, mac, ios, watch, scenes
+    case output, locales, appearances, variables, build, mac, ios, watch, framing, scenes
   }
 
   public init(from decoder: Decoder) throws {
@@ -163,9 +167,27 @@ extension ScreenshotConfig {
     mac = try c.decodeIfPresent(Mac.self, forKey: .mac)
     ios = try c.decodeIfPresent(IOS.self, forKey: .ios)
     watch = try c.decodeIfPresent([String].self, forKey: .watch)
+    // The framing never stops a capture: a section that doesn't parse is left out.
+    framing = (try? c.decodeIfPresent(Framing.self, forKey: .framing)) ?? nil
     scenes = try c.decodeIfPresent([Scene].self, forKey: .scenes) ?? []
     // A file with neither section captures on the Mac.
     if mac == nil && ios == nil { mac = Mac() }
+  }
+
+  /// Writes what differs from the defaults, so a saved file stays as short as a written one.
+  public func encode(to encoder: Encoder) throws {
+    var c = encoder.container(keyedBy: CodingKeys.self)
+    let defaults = ScreenshotConfig()
+    if output != defaults.output { try c.encode(output, forKey: .output) }
+    if locales != defaults.locales { try c.encode(locales, forKey: .locales) }
+    if appearances != defaults.appearances { try c.encode(appearances, forKey: .appearances) }
+    if !variables.isEmpty { try c.encode(variables, forKey: .variables) }
+    try c.encodeIfPresent(build, forKey: .build)
+    try c.encodeIfPresent(mac, forKey: .mac)
+    try c.encodeIfPresent(ios, forKey: .ios)
+    try c.encodeIfPresent(watch, forKey: .watch)
+    try c.encodeIfPresent(framing, forKey: .framing)
+    try c.encode(scenes, forKey: .scenes)
   }
 }
 
@@ -181,6 +203,15 @@ extension ScreenshotConfig.Build {
       configuration: try c.decodeIfPresent(String.self, forKey: .configuration) ?? "Debug",
       derivedData: try c.decodeIfPresent(String.self, forKey: .derivedData) ?? ".build/xcode")
   }
+
+  public func encode(to encoder: Encoder) throws {
+    var c = encoder.container(keyedBy: CodingKeys.self)
+    try c.encode(scheme, forKey: .scheme)
+    try c.encodeIfPresent(project, forKey: .project)
+    try c.encodeIfPresent(workspace, forKey: .workspace)
+    if configuration != "Debug" { try c.encode(configuration, forKey: .configuration) }
+    if derivedData != ".build/xcode" { try c.encode(derivedData, forKey: .derivedData) }
+  }
 }
 
 extension ScreenshotConfig.Mac {
@@ -193,6 +224,18 @@ extension ScreenshotConfig.Mac {
       activate: try c.decodeIfPresent(Bool.self, forKey: .activate) ?? false,
       app: try c.decodeIfPresent(String.self, forKey: .app))
   }
+
+  public func encode(to encoder: Encoder) throws {
+    var c = encoder.container(keyedBy: CodingKeys.self)
+    // A missing window is the default size; null keeps the app's own.
+    if let window {
+      if window != [1440, 900] { try c.encode(window, forKey: .window) }
+    } else {
+      try c.encodeNil(forKey: .window)
+    }
+    if activate { try c.encode(activate, forKey: .activate) }
+    try c.encodeIfPresent(app, forKey: .app)
+  }
 }
 
 extension ScreenshotConfig.IOS {
@@ -204,6 +247,13 @@ extension ScreenshotConfig.IOS {
       devices: try c.decodeIfPresent([String].self, forKey: .devices) ?? [],
       app: try c.decodeIfPresent(String.self, forKey: .app),
       cleanStatusBar: try c.decodeIfPresent(Bool.self, forKey: .cleanStatusBar) ?? true)
+  }
+
+  public func encode(to encoder: Encoder) throws {
+    var c = encoder.container(keyedBy: CodingKeys.self)
+    try c.encode(devices, forKey: .devices)
+    try c.encodeIfPresent(app, forKey: .app)
+    if !cleanStatusBar { try c.encode(cleanStatusBar, forKey: .cleanStatusBar) }
   }
 }
 
@@ -248,9 +298,7 @@ extension ScreenshotConfig {
   public func save(in root: URL) throws {
     let url = Self.url(in: root)
     try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-    let encoder = JSONEncoder()
-    encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-    try encoder.encode(self).write(to: url, options: .atomic)
+    try ScreenshotJSON.data(self).write(to: url, options: .atomic)
   }
 
   public func outputURL(in root: URL) -> URL { root.appendingPathComponent(output, isDirectory: true) }

@@ -20,7 +20,7 @@ import SwiftUI
 ///    opened for the project, never on selection alone, so browsing the sidebar
 ///    costs no parse (see `openCatalogIfPicked`).
 ///  - App Icon: CreateIconView exports into the project's root directory.
-///  - Screenshots: capture, post-process and review the App Store pictures.
+///  - Screenshots: capture, frame and review the App Store pictures.
 ///  - Workflows: the project's CI.
 struct ProjectDetailView: View {
   let model: SidebarViewModel

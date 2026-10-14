@@ -22,9 +22,9 @@ nonisolated enum AgentPermissions {
   }
 
   enum Action: String, CaseIterable, Identifiable, Sendable {
-    /// Read projects, recipes, workflows, screenshots and runs.
+    /// Read projects, screenshot framing, workflows, screenshots and runs.
     case read
-    /// Change screenshot recipes and workflows, render screenshots.
+    /// Change screenshot framing and workflows, render screenshots.
     case edit
     /// Start workflow runs.
     case run
@@ -36,7 +36,7 @@ nonisolated enum AgentPermissions {
     var title: String {
       switch self {
       case .read: "Read projects, runs and screenshots"
-      case .edit: "Change screenshot recipes and workflows"
+      case .edit: "Change screenshot framing and workflows"
       case .run: "Start workflow runs"
       case .publish: "Sign, notarize, upload and publish"
       }
@@ -85,7 +85,7 @@ nonisolated enum AgentPermissions {
 nonisolated enum AgentChannel {
   static let request = Notification.Name("dev.v57.dev.agent.request")
   static let reply = Notification.Name("dev.v57.dev.agent.reply")
-  /// Posted after the MCP process wrote a file the app shows (a recipe, a workflow).
+  /// Posted after the MCP process wrote a file the app shows (the screenshots file, a workflow).
   static let changed = Notification.Name("dev.v57.dev.agent.changed")
 }
 

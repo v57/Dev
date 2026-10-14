@@ -35,7 +35,7 @@ struct ContentView: View {
   /// (10.16), so the toolbar's Start, the panes' overlays and the panes' status bars
   /// all speak about ONE run.
   @State private var translation = Translation.Shell()
-  /// Screenshot captures and their post-processing, per project.
+  /// Screenshot captures and their framing, per project.
   @State private var screenshots = ScreenshotsStore()
   /// Workflow definitions and runs, per project.
   @State private var workflows = WorkflowStore()

@@ -5,123 +5,128 @@
 
 import AppKit
 import CoreText
-import CryptoKit
+import DevScreenshots
+import DevScreenshotsCapture
 import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
 // MARK: - Library
 
-/// The screenshots a project has on disk: what release.sh's screenshots step
-/// captured (`build/release/<version>/screenshots/<locale>/`) and what the
-/// recipe made of them (`build/screenshots/<locale>/`).
+/// The screenshots a project has on disk: what `dev-screenshots` captured for the scenes in `.dev/screenshots.json`
+/// (`<output>/manifest.json`, `.build/screenshots/` by default) and what `framing` made of them
+/// (`<output>/framed/`), with each scene's status against the current commit.
 nonisolated struct ScreenshotLibrary: Sendable {
   struct Shot: Identifiable, Hashable, Sendable {
-    /// The scene name: the attachment's name without the test's suffixes.
+    /// The scene's id.
     let name: String
     let locale: String
+    let platform: ScreenshotConfig.Platform
+    /// The simulator's name; nil on the Mac.
+    let device: String?
+    let appearance: ScreenshotConfig.Appearance
+    /// The manifest's path, relative to the output folder (`mac/en-US/01-history.png`).
+    let file: String
     let captured: URL
-    /// The post-processed picture, when the recipe has run.
+    /// The framed picture, when it was rendered after this capture.
     let final: URL?
     let pixelWidth: Int
     let pixelHeight: Int
-    /// True when the capture differs from the same scene in the previous version.
-    let changed: Bool
+    /// The framed picture's size: the framing's.
+    let framedWidth: Int
+    let framedHeight: Int
+    let taken: ScreenshotManifest.Taken
+    /// The scene's state against the current commit and config.
+    let state: ScreenshotStatus.State
 
-    var id: String { locale + "/" + name }
+    var id: String { file }
+    var target: String { device ?? "Mac" }
+    var needsCapture: Bool { !state.isCurrent }
+    var title: String { appearance == .dark ? "\(name) (Dark)" : name }
+
+    /// The picture to show and its pixel size.
+    func picture(framed: Bool) -> (url: URL, width: Int, height: Int) {
+      if framed, let final { return (final, framedWidth, framedHeight) }
+      return (captured, pixelWidth, pixelHeight)
+    }
   }
 
   let root: URL
-  /// The version folder the captures came from (`2.4.2`), or nil when none exist.
-  let version: String?
-  let capturedAt: Date?
+  /// nil when the project has no `.dev/screenshots.json`.
+  let config: ScreenshotConfig?
+  /// Why the file didn't parse.
+  let configError: String?
+  let status: ScreenshotStatus?
   let locales: [String]
+  /// "Mac" and the simulators' names, in the config's order.
+  let targets: [String]
   let shots: [Shot]
 
-  func shots(in locale: String) -> [Shot] { shots.filter { $0.locale == locale } }
+  var capturedAt: Date? { shots.map(\.taken.date).max() }
+  var build: Int? { shots.compactMap(\.taken.build).max() }
+  /// The scenes the commits or the config have moved past since their pictures.
+  var outdated: [ScreenshotStatus.Scene] { status?.scenes.filter { !$0.state.isCurrent } ?? [] }
 
-  static func finalFolder(in root: URL) -> URL {
-    root.appendingPathComponent("build/screenshots", isDirectory: true)
+  func shots(in locale: String, on target: String? = nil) -> [Shot] {
+    shots.filter { $0.locale == locale && (target == nil || $0.target == target) }
   }
 
-  /// Reads what is on disk now. Cheap: names, image headers and, for the
-  /// "changed" flag, a hash of each capture and its previous-version twin.
+  /// The pictures App Store Connect gets, per locale: the framed ones of the first appearance and device.
+  func uploadFiles() -> [String: [URL]] {
+    let appearance = config?.appearances.first ?? .light
+    let framed = shots.filter { $0.final != nil && $0.appearance == appearance }
+    let target = framed.first?.target
+    return Dictionary(grouping: framed.filter { $0.target == target }, by: \.locale)
+      .mapValues { $0.compactMap(\.final) }
+  }
+
+  /// Reads what is on disk now: the config, the manifest and git, so off the main actor.
   static func scan(_ root: URL) -> ScreenshotLibrary {
-    let fm = FileManager.default
-    let releases = root.appendingPathComponent("build/release", isDirectory: true)
-    let versions = ((try? fm.contentsOfDirectory(at: releases, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [])
-      .filter { fm.fileExists(atPath: $0.appendingPathComponent("screenshots").path) }
-      .sorted { modified($0) > modified($1) }
-    guard let latest = versions.first else {
-      return ScreenshotLibrary(root: root, version: nil, capturedAt: nil, locales: [], shots: [])
+    let config: ScreenshotConfig?
+    var configError: String?
+    do {
+      config = try ScreenshotConfig.load(in: root)
+    } catch {
+      config = nil
+      configError = "\(ScreenshotConfig.path) doesn't read: \(error.localizedDescription)"
     }
-    let previous = versions.dropFirst().first
-    let folder = latest.appendingPathComponent("screenshots", isDirectory: true)
-    let locales = ((try? fm.contentsOfDirectory(atPath: folder.path)) ?? [])
-      .filter { !$0.hasPrefix(".") }.sorted { lhs, rhs in
-        // The development language first, then alphabetical.
-        if lhs.hasPrefix("en") != rhs.hasPrefix("en") { return lhs.hasPrefix("en") }
-        return lhs < rhs
-      }
+    guard let config else {
+      return ScreenshotLibrary(
+        root: root, config: nil, configError: configError, status: nil, locales: [], targets: [], shots: [])
+    }
+    let fm = FileManager.default
+    let output = config.outputURL(in: root)
+    let manifest = ScreenshotManifest.load(in: output) ?? ScreenshotManifest()
+    let status = ScreenshotStatus.check(config: config, manifest: manifest, root: root)
+    let states = Dictionary(status.scenes.map { ($0.id, $0.state) }) { first, _ in first }
+    let order = Dictionary(config.scenes.enumerated().map { ($1.id, $0) }) { first, _ in first }
+
+    let framing = config.framing ?? config.framedPlatform.map(ScreenshotConfig.Framing.starter(for:))
     var shots: [Shot] = []
-    for locale in locales {
-      let current = Self.captures(in: folder.appendingPathComponent(locale))
-      let earlier = previous.map { Self.captures(in: $0.appendingPathComponent("screenshots/\(locale)")) } ?? [:]
-      for (name, url) in current.sorted(by: { $0.key < $1.key }) {
-        let size = pixelSize(url)
-        let final = finalFolder(in: root).appendingPathComponent("\(locale)/\(name).png")
-        var changed = false
-        if let before = earlier[name] { changed = digest(url) != digest(before) }
-        shots.append(Shot(
-          name: name, locale: locale, captured: url,
-          final: fm.fileExists(atPath: final.path) ? final : nil,
-          pixelWidth: size.0, pixelHeight: size.1, changed: changed))
-      }
+    // The manifest's pictures of the config's scenes, in its order; removed scenes and deleted files drop out.
+    for shot in manifest.shots where order[shot.scene] != nil {
+      let captured = output.appendingPathComponent(shot.file)
+      guard fm.fileExists(atPath: captured.path) else { continue }
+      let framed = config.framedURL(of: shot.file, in: root)
+      let rendered = modified(framed).map { $0 >= (modified(captured) ?? .distantPast) } ?? false
+      shots.append(Shot(
+        name: shot.scene, locale: shot.locale, platform: shot.platform, device: shot.device,
+        appearance: shot.appearance, file: shot.file, captured: captured, final: rendered ? framed : nil,
+        pixelWidth: shot.width, pixelHeight: shot.height, framedWidth: framing?.width ?? 0,
+        framedHeight: framing?.height ?? 0, taken: shot.taken, state: states[shot.scene] ?? .missing))
     }
+    let targetOrder = ["Mac"] + (config.ios?.devices ?? [])
+    func rank<T: Equatable>(_ value: T, in list: [T]) -> Int { list.firstIndex(of: value) ?? list.count }
+    shots.sort {
+      ($0.locale, rank($0.target, in: targetOrder), order[$0.name] ?? 0, $0.appearance == .dark ? 1 : 0)
+        < ($1.locale, rank($1.target, in: targetOrder), order[$1.name] ?? 0, $1.appearance == .dark ? 1 : 0)
+    }
+    let present = Set(shots.map(\.locale))
+    // The config's locales first, in its order (the development language leads), then any older ones.
+    let locales = config.locales.filter(present.contains) + present.subtracting(config.locales).sorted()
+    let targets = targetOrder.filter { target in shots.contains { $0.target == target } }
     return ScreenshotLibrary(
-      root: root, version: latest.lastPathComponent, capturedAt: modified(folder),
-      locales: locales, shots: shots)
-  }
-
-  /// The PNGs xcresulttool exported, by scene name. Its manifest maps the
-  /// exported files to the names the test gave them; without one, file names.
-  static func captures(in folder: URL) -> [String: URL] {
-    let fm = FileManager.default
-    var out: [String: URL] = [:]
-    if let data = try? Data(contentsOf: folder.appendingPathComponent("manifest.json")),
-       let json = try? JSONSerialization.jsonObject(with: data) {
-      collect(json) { exported, suggested in
-        let url = folder.appendingPathComponent(exported)
-        guard fm.fileExists(atPath: url.path) else { return }
-        out[sceneName(suggested)] = url
-      }
-    }
-    if out.isEmpty {
-      for name in (try? fm.contentsOfDirectory(atPath: folder.path)) ?? [] where name.lowercased().hasSuffix(".png") {
-        out[sceneName(name)] = folder.appendingPathComponent(name)
-      }
-    }
-    return out
-  }
-
-  private static func collect(_ json: Any, _ found: (String, String) -> Void) {
-    if let dict = json as? [String: Any] {
-      if let exported = dict["exportedFileName"] as? String {
-        found(exported, dict["suggestedHumanReadableName"] as? String ?? exported)
-      }
-      dict.values.forEach { collect($0, found) }
-    } else if let array = json as? [Any] {
-      array.forEach { collect($0, found) }
-    }
-  }
-
-  /// `01-localization_0_5E0C….png` → `01-localization`.
-  static func sceneName(_ fileName: String) -> String {
-    var name = (fileName as NSString).deletingPathExtension
-    if let match = name.firstMatch(of: #/_\d+_[0-9A-Fa-f-]{8,}$/#) {
-      name = String(name[..<match.range.lowerBound])
-    }
-    return name
+      root: root, config: config, configError: nil, status: status, locales: locales, targets: targets, shots: shots)
   }
 
   static func pixelSize(_ url: URL) -> (Int, Int) {
@@ -131,32 +136,40 @@ nonisolated struct ScreenshotLibrary: Sendable {
     return (props[kCGImagePropertyPixelWidth] as? Int ?? 0, props[kCGImagePropertyPixelHeight] as? Int ?? 0)
   }
 
-  private static func digest(_ url: URL) -> String? {
-    guard let data = try? Data(contentsOf: url) else { return nil }
-    return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+  private static func modified(_ url: URL) -> Date? {
+    (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
   }
+}
 
-  private static func modified(_ url: URL) -> Date {
-    (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+extension ScreenshotStatus.State {
+  /// Why the scene needs a new capture, for a tooltip; nil when it doesn't.
+  var reason: String? {
+    switch self {
+    case .current: nil
+    case .missing: "Not captured yet"
+    case .incomplete(let missing): "\(missing) of its pictures are missing"
+    case .changed: "Its arguments or the capture settings changed since"
+    case .outdated(let commits?): commits == 1 ? "1 commit since its capture" : "\(commits) commits since its capture"
+    case .outdated(nil): "Taken at a commit that is gone"
+    }
   }
 }
 
 // MARK: - Processor
 
-/// Renders the App Store pictures: the background, the translated caption on
-/// top, the capture scaled with rounded corners and a shadow. Pure Core
-/// Graphics, so it runs off the main actor and in the MCP server alike.
+/// Renders the App Store pictures with the config's `framing`: the background, the scene's caption translated on top,
+/// the capture scaled with rounded corners and a shadow. Pure Core Graphics, so it runs off the main actor and in the
+/// MCP server alike.
 nonisolated enum ScreenshotProcessor {
   struct Report: Sendable {
     var succeeded = true
     var lines: [String] = []
-    /// Captions that need more lines than the recipe allows: locale/scene.
+    /// Captions that need more lines than the framing allows: the pictures' manifest paths.
     var overflowing: [String] = []
     var rendered = 0
   }
 
-  /// Processes the latest captures with the project's recipe. Without a recipe
-  /// it writes a starter one first, so the result is always a full set.
+  /// Frames the latest captures. Without a `framing` section it frames with a starter one, without writing it.
   static func processLatest(in root: URL) async -> Report {
     await Task.detached(priority: .userInitiated) { process(root) }.value
   }
@@ -164,37 +177,43 @@ nonisolated enum ScreenshotProcessor {
   static func process(_ root: URL) -> Report {
     var report = Report()
     let library = ScreenshotLibrary.scan(root)
-    guard !library.shots.isEmpty else {
+    guard let config = library.config else {
       report.succeeded = false
-      report.lines.append("No captured screenshots: run the Screenshots step first.")
+      report.lines.append(library.configError ?? "No \(ScreenshotConfig.path): describe the scenes there first.")
       return report
     }
-    let platform = ReleaseConfig.load(from: root)?["PLATFORM"] ?? "macos"
-    var recipe = ScreenshotRecipe.load(in: root)
-      ?? ScreenshotRecipe.starter(for: Array(Set(library.shots.map(\.name))).sorted(), platform: platform)
-    if ScreenshotRecipe.load(in: root) == nil {
-      try? recipe.save(in: root, by: "Dev")
-      recipe = ScreenshotRecipe.load(in: root) ?? recipe
+    guard let platform = config.framedPlatform else {
+      report.succeeded = false
+      report.lines.append("The config captures on no platform to frame.")
+      return report
     }
-    let catalog = CaptionCatalog.load(root.appendingPathComponent(recipe.caption.catalog))
-    let out = ScreenshotLibrary.finalFolder(in: root)
-    for shot in library.shots {
-      let scene = recipe.scene(named: shot.name)
-      let caption = scene?.caption.map { CaptionCatalog.caption($0, locale: shot.locale, in: catalog) }
-      let target = out.appendingPathComponent("\(shot.locale)/\(shot.name).png")
+    let shots = library.shots.filter { $0.platform == platform }
+    guard !shots.isEmpty else {
+      report.succeeded = false
+      report.lines.append("No captured \(platform.rawValue) screenshots: capture first.")
+      return report
+    }
+    let framing = config.framing ?? .starter(for: platform)
+    let catalog = CaptionCatalog.load(root.appendingPathComponent(framing.caption.catalog))
+    let captions = Dictionary(config.scenes.map { ($0.id, $0.caption) }) { first, _ in first }
+    for shot in shots {
+      let caption = (captions[shot.name] ?? nil).map { CaptionCatalog.caption($0, locale: shot.locale, in: catalog) }
       do {
-        let lines = try render(shot.captured, caption: caption, background: scene?.background ?? recipe.background,
-                               recipe: recipe, to: target)
-        if lines > recipe.caption.maxLines { report.overflowing.append("\(shot.locale)/\(shot.name)") }
+        let lines = try render(
+          shot.captured, caption: caption, background: framing.background(of: shot.name), framing: framing,
+          to: config.framedURL(of: shot.file, in: root))
+        if lines > framing.caption.maxLines { report.overflowing.append(shot.file) }
         report.rendered += 1
       } catch {
         report.succeeded = false
-        report.lines.append("\(shot.locale)/\(shot.name): \(error.localizedDescription)")
+        report.lines.append("\(shot.file): \(error.localizedDescription)")
       }
     }
-    report.lines.append("Rendered \(report.rendered) pictures at \(recipe.width) × \(recipe.height) into build/screenshots")
+    report.lines.append(
+      "Rendered \(report.rendered) pictures at \(framing.width) × \(framing.height) into "
+        + "\(config.output)/\(ScreenshotConfig.Framing.folder)")
     for item in report.overflowing { report.lines.append("Caption too long: \(item)") }
-    saveReport(report, in: root)
+    saveReport(report, in: config.framedURL(of: "", in: root))
     return report
   }
 
@@ -206,12 +225,12 @@ nonisolated enum ScreenshotProcessor {
   /// Draws one picture and answers how many lines its caption took.
   @discardableResult
   static func render(
-    _ capture: URL, caption: String?, background: String, recipe: ScreenshotRecipe, to target: URL
+    _ capture: URL, caption: String?, background: String, framing: ScreenshotConfig.Framing, to target: URL
   ) throws -> Int {
     guard let source = CGImageSourceCreateWithURL(capture as CFURL, nil),
           let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
     else { throw RenderError(message: "cannot read the capture") }
-    let width = recipe.width, height = recipe.height
+    let width = framing.width, height = framing.height
     guard let context = CGContext(
       data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
       space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
@@ -221,18 +240,18 @@ nonisolated enum ScreenshotProcessor {
     context.fill(CGRect(x: 0, y: 0, width: width, height: height))
 
     // The caption, centred near the top.
-    var captionBottom = CGFloat(height) * (1 - CGFloat(recipe.caption.top))
+    var captionBottom = CGFloat(height) * (1 - CGFloat(framing.caption.top))
     var lineCount = 0
     if let caption, !caption.isEmpty {
-      let system = CTFontCreateUIFontForLanguage(.system, recipe.caption.fontSize, nil)
-        ?? CTFontCreateWithName("Helvetica" as CFString, recipe.caption.fontSize, nil)
-      let font = recipe.caption.bold
+      let system = CTFontCreateUIFontForLanguage(.system, framing.caption.fontSize, nil)
+        ?? CTFontCreateWithName("Helvetica" as CFString, framing.caption.fontSize, nil)
+      let font = framing.caption.bold
         ? (CTFontCreateCopyWithSymbolicTraits(system, 0, nil, .traitBold, .traitBold) ?? system) : system
       let paragraph = NSMutableParagraphStyle()
       paragraph.alignment = .center
       paragraph.lineBreakMode = .byWordWrapping
       let text = NSAttributedString(string: caption, attributes: [
-        .font: font as NSFont, .foregroundColor: NSColor(cgColor: cgColor(recipe.caption.color)) ?? .white,
+        .font: font as NSFont, .foregroundColor: NSColor(cgColor: cgColor(framing.caption.color)) ?? .white,
         .paragraphStyle: paragraph,
       ])
       let framesetter = CTFramesetterCreateWithAttributedString(text)
@@ -240,7 +259,7 @@ nonisolated enum ScreenshotProcessor {
       let fit = CTFramesetterSuggestFrameSizeWithConstraints(
         framesetter, CFRange(location: 0, length: 0), nil,
         CGSize(width: maxWidth, height: .greatestFiniteMagnitude), nil)
-      let top = CGFloat(height) * (1 - CGFloat(recipe.caption.top))
+      let top = CGFloat(height) * (1 - CGFloat(framing.caption.top))
       let rect = CGRect(x: (CGFloat(width) - maxWidth) / 2, y: top - fit.height, width: maxWidth, height: fit.height)
       let frame = CTFramesetterCreateFrame(framesetter, CFRange(location: 0, length: 0), CGPath(rect: rect, transform: nil), nil)
       lineCount = (CTFrameGetLines(frame) as? [CTLine])?.count ?? 0
@@ -248,22 +267,22 @@ nonisolated enum ScreenshotProcessor {
       captionBottom = rect.minY
     }
 
-    // The window: scaled to the recipe's width, under the caption.
-    let scale = CGFloat(recipe.window.scale) * CGFloat(width) / CGFloat(image.width)
+    // The window: scaled to the framing's width, under the caption.
+    let scale = CGFloat(framing.window.scale) * CGFloat(width) / CGFloat(image.width)
     let drawWidth = CGFloat(image.width) * scale
     let drawHeight = CGFloat(image.height) * scale
     let gap = CGFloat(height) * 0.04
     var y: CGFloat
-    if recipe.window.align == "center" {
+    if framing.window.align == .center {
       y = (captionBottom - gap - drawHeight) / 2
     } else {
       y = captionBottom - gap - drawHeight
     }
     y = min(y, captionBottom - gap - drawHeight)
     let rect = CGRect(x: (CGFloat(width) - drawWidth) / 2, y: y, width: drawWidth, height: drawHeight)
-    let radius = CGFloat(recipe.window.cornerRadius) * scale * 2
+    let radius = CGFloat(framing.window.cornerRadius) * scale * 2
     let path = CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil)
-    if recipe.window.shadow {
+    if framing.window.shadow {
       context.saveGState()
       context.setShadow(offset: CGSize(width: 0, height: -CGFloat(height) * 0.01),
                         blur: CGFloat(height) * 0.03, color: CGColor(gray: 0, alpha: 0.45))
@@ -302,7 +321,7 @@ nonisolated enum ScreenshotProcessor {
 
   // MARK: - report
 
-  /// The last processing's findings, read by the Screenshots tab's checks.
+  /// The last framing's findings, read by the Screenshots tab's checks.
   struct SavedReport: Codable, Sendable {
     var date: Date
     var rendered: Int
@@ -310,20 +329,19 @@ nonisolated enum ScreenshotProcessor {
     var errors: [String]
   }
 
-  static func reportURL(in root: URL) -> URL {
-    ScreenshotLibrary.finalFolder(in: root).appendingPathComponent("report.json")
-  }
-
-  private static func saveReport(_ report: Report, in root: URL) {
+  private static func saveReport(_ report: Report, in folder: URL) {
     let saved = SavedReport(date: Date(), rendered: report.rendered, overflowing: report.overflowing,
                             errors: report.succeeded ? [] : report.lines)
     let encoder = JSONEncoder()
     encoder.dateEncodingStrategy = .iso8601
-    try? encoder.encode(saved).write(to: reportURL(in: root), options: .atomic)
+    try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    try? encoder.encode(saved).write(to: folder.appendingPathComponent("report.json"), options: .atomic)
   }
 
   static func loadReport(in root: URL) -> SavedReport? {
-    guard let data = try? Data(contentsOf: reportURL(in: root)) else { return nil }
+    guard let config = try? ScreenshotConfig.load(in: root),
+          let data = try? Data(contentsOf: config.framedURL(of: "report.json", in: root))
+    else { return nil }
     let decoder = JSONDecoder()
     decoder.dateDecodingStrategy = .iso8601
     return try? decoder.decode(SavedReport.self, from: data)

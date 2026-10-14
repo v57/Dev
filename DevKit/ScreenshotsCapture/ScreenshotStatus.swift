@@ -97,7 +97,7 @@
       var targets: [(ScreenshotConfig.Platform, String?)] = []
       if config.mac != nil, scene.runs(on: .mac) { targets.append((.mac, nil)) }
       for device in config.ios?.devices ?? [] {
-        let platform = DeviceFamily.platform(ofName: device)
+        let platform = ScreenshotConfig.platform(ofDevice: device)
         if scene.runs(on: platform) { targets.append((platform, device)) }
       }
       var keys = Set<String>()
@@ -109,13 +109,6 @@
         }
       }
       return keys
-    }
-  }
-
-  enum DeviceFamily {
-    /// From a simulator's name; a UDID counts as an iPhone.
-    static func platform(ofName name: String) -> ScreenshotConfig.Platform {
-      name.localizedCaseInsensitiveContains("ipad") ? .ipad : .iphone
     }
   }
 #endif

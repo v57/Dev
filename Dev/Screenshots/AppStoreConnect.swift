@@ -276,10 +276,7 @@ struct AppStoreUploadSheet: View {
   }
 
   private func finalFiles() -> [String: [URL]] {
-    guard let library else { return [:] }
-    var out: [String: [URL]] = [:]
-    for shot in library.shots { if let final = shot.final { out[shot.locale, default: []].append(final) } }
-    return out
+    library?.uploadFiles() ?? [:]
   }
 
   private func upload(_ files: [String: [URL]]) async {

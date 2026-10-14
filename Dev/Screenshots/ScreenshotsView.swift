@@ -4,20 +4,24 @@
 //
 
 import AppKit
+import DevScreenshots
+import DevScreenshotsCapture
 import SwiftUI
 
-/// The Screenshots tab: capture (the project's screenshot UI test, through
-/// release.sh), post-process (the recipe in `.dev/screenshots.json`), review
-/// and upload. The recipe is edited on the right; an agent can edit the same
-/// file over MCP, and the card at the top says when one did.
+/// The Screenshots tab: capture (the scenes in `.dev/screenshots.json`, through Dev's own
+/// `dev-screenshots`), frame (the file's `framing` section), review and upload. The framing and
+/// the captions are edited on the right; an agent can edit the same file over MCP, and the card at
+/// the top says when one did.
 struct ScreenshotsView: View {
   let root: URL
   let projectName: String
 
   @Environment(ScreenshotsStore.self) private var store
   @State private var locale: String?
+  @State private var target: String?
   @State private var showsFinal = true
-  @State private var draft: ScreenshotRecipe?
+  /// The config as the reader is editing it; only its framing and captions are saved.
+  @State private var draft: ScreenshotConfig?
   @State private var showsLog = false
   @State private var selectedScene: String?
   @State private var uploading = false
@@ -41,21 +45,21 @@ struct ScreenshotsView: View {
           Button(role: .destructive) { store.cancelCapture(root) } label: { Label("Stop", systemImage: "stop.fill") }
         } else {
           Button { store.capture(root) } label: { Label("Capture", systemImage: "camera") }
-            .help("Run the screenshot UI test for every locale, then post-process")
-            .disabled(store.phase(root) != .idle)
+            .help("Take the scenes in .dev/screenshots.json, then frame them")
+            .disabled(store.phase(root) != .idle || library?.config == nil)
         }
         Button { uploading = true } label: { Label("Upload…", systemImage: "icloud.and.arrow.up") }
-          .help("Upload the final screenshots to App Store Connect")
+          .help("Upload the framed screenshots to App Store Connect")
           .disabled(library?.shots.contains { $0.final != nil } != true)
       }
     }
     .task(id: root) {
       await store.refresh(root)
-      draft = store.recipe(root)
+      draft = store.config(root)
     }
-    .onChange(of: store.recipe(root)) { _, recipe in
-      // A recipe written elsewhere (an agent, a render) replaces the draft.
-      draft = recipe
+    .onChange(of: store.config(root)) { _, config in
+      // A file written elsewhere (an agent, a save) replaces the draft.
+      draft = config
     }
     .sheet(isPresented: $showsLog) { logSheet }
     .sheet(isPresented: $uploading) {
@@ -69,17 +73,17 @@ struct ScreenshotsView: View {
     let phase = store.phase(root)
     let captured = !(library?.shots.isEmpty ?? true)
     let processed = library?.shots.contains { $0.final != nil } ?? false
-    let changed = library?.shots.filter(\.changed).count ?? 0
+    let outdated = library?.outdated.count ?? 0
     return HStack(spacing: 10) {
-      stage(1, "Capture", phase == .capturing ? "Running the UI test…" :
-              (library?.capturedAt.map { "Captured \($0.formatted(.relative(presentation: .named)))" } ?? "Not captured yet"),
-            done: captured && phase != .capturing, current: phase == .capturing || !captured)
+      stage(1, "Capture", phase == .capturing ? "Taking the scenes…" : captureDetail(library),
+            done: captured && phase != .capturing && outdated == 0, current: phase == .capturing || !captured,
+            warning: captured && phase != .capturing && outdated > 0)
       connector(captured)
-      stage(2, "Post-Process", phase == .processing ? "Applying the recipe…" :
-              (store.reports[root].map { "\($0.rendered) pictures" } ?? "Recipe not applied"),
+      stage(2, "Frame", phase == .processing ? "Framing…" :
+              (store.reports[root].map { "\($0.rendered) pictures" } ?? "Not framed yet"),
             done: processed && phase != .processing, current: phase == .processing)
       connector(processed)
-      stage(3, "Review", changed > 0 ? "\(changed) changed since the last version" : "Nothing changed",
+      stage(3, "Review", library?.status?.summary ?? "Nothing to review",
             done: false, current: processed && phase == .idle)
       connector(false)
       stage(4, "Upload", "App Store Connect", done: false, current: false)
@@ -93,13 +97,24 @@ struct ScreenshotsView: View {
     .background(.background.secondary)
   }
 
-  private func stage(_ number: Int, _ title: String, _ detail: String, done: Bool, current: Bool) -> some View {
+  private func captureDetail(_ library: ScreenshotLibrary?) -> String {
+    guard let library, let date = library.capturedAt else { return "Not captured yet" }
+    let when = "Captured \(date.formatted(.relative(presentation: .named)))"
+    let outdated = library.outdated.count
+    return outdated == 0 ? when : "\(outdated) of \(library.status?.scenes.count ?? 0) scenes outdated"
+  }
+
+  private func stage(
+    _ number: Int, _ title: String, _ detail: String, done: Bool, current: Bool, warning: Bool = false
+  ) -> some View {
     HStack(spacing: 8) {
       ZStack {
-        Circle().fill(done ? Color.green : (current ? Color.accentColor : Color.clear))
-        if !done && !current { Circle().strokeBorder(.tertiary, lineWidth: 1.5) }
+        Circle().fill(done ? Color.green : (warning ? Color.orange : (current ? Color.accentColor : Color.clear)))
+        if !done && !current && !warning { Circle().strokeBorder(.tertiary, lineWidth: 1.5) }
         if done {
           Image(systemName: "checkmark").font(.caption.weight(.bold)).foregroundStyle(.white)
+        } else if warning {
+          Image(systemName: "exclamationmark").font(.caption.weight(.bold)).foregroundStyle(.white)
         } else {
           Text("\(number)").font(.caption.weight(.bold)).foregroundStyle(current ? .white : .secondary)
         }
@@ -107,7 +122,7 @@ struct ScreenshotsView: View {
       .frame(width: 22, height: 22)
       VStack(alignment: .leading, spacing: 1) {
         Text(title).fontWeight(.semibold)
-        Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+        Text(detail).font(.caption).foregroundStyle(warning ? .orange : .secondary).lineLimit(1)
       }
     }
   }
@@ -124,6 +139,7 @@ struct ScreenshotsView: View {
   private func grid(_ library: ScreenshotLibrary?) -> some View {
     if let library, !library.shots.isEmpty {
       let current = currentLocale(library)
+      let device = currentTarget(library)
       let overflowing = Set(store.reports[root]?.overflowing ?? [])
       VStack(spacing: 0) {
         HStack {
@@ -134,10 +150,17 @@ struct ScreenshotsView: View {
           }
           .labelsHidden()
           .fixedSize()
+          if library.targets.count > 1 {
+            Picker("Device", selection: Binding(get: { device }, set: { target = $0 })) {
+              ForEach(library.targets, id: \.self) { Text($0).tag($0) }
+            }
+            .labelsHidden()
+            .fixedSize()
+          }
           Spacer()
           Picker("Show", selection: $showsFinal) {
             Text("Captured").tag(false)
-            Text("Final").tag(true)
+            Text("Framed").tag(true)
           }
           .pickerStyle(.segmented)
           .labelsHidden()
@@ -146,13 +169,13 @@ struct ScreenshotsView: View {
         .padding(16)
         ScrollView {
           LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 16)], spacing: 18) {
-            ForEach(library.shots(in: current)) { shot in
+            ForEach(library.shots(in: current, on: device)) { shot in
               Button {
                 selectedScene = shot.name
               } label: {
                 ScreenshotThumbnail(
                   shot: shot, preferFinal: showsFinal,
-                  flag: overflowing.contains("\(shot.locale)/\(shot.name)") ? "Caption too long" : nil)
+                  flag: overflowing.contains(shot.file) ? "Caption too long" : nil)
                   .padding(4)
                   .background(
                     RoundedRectangle(cornerRadius: 10)
@@ -165,16 +188,23 @@ struct ScreenshotsView: View {
           .padding(.bottom, 16)
         }
       }
-    } else {
+    } else if let config = library?.config {
       ContentUnavailableView {
         Label("No screenshots yet", systemImage: "photo.on.rectangle")
       } description: {
-        Text(ReleaseConfig.load(from: root)?["SCREENSHOT_TEST"].isEmpty == false
-             ? "Capture runs the project's screenshot UI test for every locale in release.env."
-             : "Set SCREENSHOT_TEST in the project's release.env (Workflows ▸ Release Settings…) to the UI test that takes the pictures, then capture.")
+        Text("Capture takes the \(config.scenes.count) scenes in .dev/screenshots.json: Dev builds the app, opens each scene from its launch arguments and saves the pictures in \(config.output).")
       } actions: {
         Button("Capture") { store.capture(root) }
           .disabled(store.phase(root) != .idle)
+      }
+    } else {
+      ContentUnavailableView {
+        Label("No screenshot scenes", systemImage: "photo.on.rectangle")
+      } description: {
+        Text(library?.configError
+             ?? "Describe the app's screens in .dev/screenshots.json: each scene is the launch arguments that open it. Dev captures them, frames them for the App Store and uploads them.")
+      } actions: {
+        Button("Show Project in Finder") { NSWorkspace.shared.activateFileViewerSelecting([root]) }
       }
     }
   }
@@ -184,14 +214,21 @@ struct ScreenshotsView: View {
     return library.locales.first ?? ""
   }
 
-  // MARK: - Inspector: the recipe
+  private func currentTarget(_ library: ScreenshotLibrary) -> String? {
+    if let target, library.targets.contains(target) { return target }
+    // The framed device first, so the Framed pictures are what shows.
+    if library.config?.framedPlatform == .mac, library.targets.contains("Mac") { return "Mac" }
+    return library.shots.first { $0.platform == library.config?.framedPlatform }?.target ?? library.targets.first
+  }
+
+  // MARK: - Inspector: the framing
 
   @ViewBuilder
   private func inspector(_ library: ScreenshotLibrary?) -> some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 16) {
-        if let recipe = store.recipe(root), let author = recipe.updatedBy, author.contains("MCP") {
-          agentCard(recipe, author: author)
+        if let framing = store.config(root)?.framing, let author = framing.updatedBy, author.contains("MCP") {
+          agentCard(framing, author: author)
         }
         if let error = store.errors[root] {
           Label(error, systemImage: "exclamationmark.triangle.fill")
@@ -199,17 +236,18 @@ struct ScreenshotsView: View {
             .foregroundStyle(.orange)
             .textSelection(.enabled)
         }
-        if draft != nil {
-          recipeEditor(library)
-        } else {
-          VStack(alignment: .leading, spacing: 8) {
-            Text("Post-Processing Recipe").font(.headline)
-            Text("A recipe puts each capture on a background with a translated caption, at an App Store size. Dev writes a starter one the first time it processes.")
-              .font(.callout)
-              .foregroundStyle(.secondary)
-            Button("Create Recipe") {
-              let names = Array(Set(library?.shots.map(\.name) ?? [])).sorted()
-              draft = ScreenshotRecipe.starter(for: names, platform: ReleaseConfig.load(from: root)?["PLATFORM"] ?? "macos")
+        if let config = draft {
+          if config.framing != nil {
+            framingEditor(library)
+          } else {
+            VStack(alignment: .leading, spacing: 8) {
+              Text("Framing").font(.headline)
+              Text("Framing puts each capture on a background under its translated caption, at an App Store size. Until it is set up, Dev frames with the defaults.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+              Button("Set Up Framing") {
+                draft?.framing = .starter(for: config.framedPlatform ?? .mac)
+              }
             }
           }
         }
@@ -220,21 +258,21 @@ struct ScreenshotsView: View {
     .background(.background.secondary)
   }
 
-  private func agentCard(_ recipe: ScreenshotRecipe, author: String) -> some View {
+  private func agentCard(_ framing: ScreenshotConfig.Framing, author: String) -> some View {
     VStack(alignment: .leading, spacing: 8) {
       HStack {
         Image(systemName: "powerplug").foregroundStyle(Color.accentColor)
         Text("Set up by an agent").fontWeight(.semibold)
         Spacer()
-        if let date = recipe.updatedAt {
+        if let date = framing.updatedAt {
           Text(date, format: .relative(presentation: .named)).font(.caption).foregroundStyle(.secondary)
         }
       }
-      Text("\(author) changed the recipe. Review the pictures, or edit the recipe below.")
+      Text("\(author) changed the framing. Review the pictures, or edit it below.")
         .font(.callout)
         .foregroundStyle(.secondary)
-      Button("Show Recipe File") {
-        NSWorkspace.shared.activateFileViewerSelecting([ScreenshotRecipe.url(in: root)])
+      Button("Show Screenshots File") {
+        NSWorkspace.shared.activateFileViewerSelecting([ScreenshotConfig.url(in: root)])
       }
       .buttonStyle(.link)
     }
@@ -244,11 +282,12 @@ struct ScreenshotsView: View {
   }
 
   @ViewBuilder
-  private func recipeEditor(_ library: ScreenshotLibrary?) -> some View {
-    let binding = Binding(get: { draft ?? ScreenshotRecipe() }, set: { draft = $0 })
+  private func framingEditor(_ library: ScreenshotLibrary?) -> some View {
+    let framing = Binding(
+      get: { draft?.framing ?? ScreenshotConfig.Framing() }, set: { draft?.framing = $0 })
     VStack(alignment: .leading, spacing: 12) {
       HStack {
-        Text("Post-Processing Recipe").font(.headline)
+        Text("Framing").font(.headline)
         Spacer()
         Text(".dev/screenshots.json")
           .font(.system(.caption, design: .monospaced))
@@ -256,58 +295,51 @@ struct ScreenshotsView: View {
       }
       LabeledContent("Size") {
         Picker("Size", selection: Binding(
-          get: { "\(binding.wrappedValue.width)x\(binding.wrappedValue.height)" },
-          set: { value in
-            let parts = value.split(separator: "x").compactMap { Int($0) }
-            if parts.count == 2 { draft?.width = parts[0]; draft?.height = parts[1] }
-          })
+          get: { [framing.wrappedValue.width, framing.wrappedValue.height] },
+          set: { size in framing.wrappedValue.width = size[0]; framing.wrappedValue.height = size[1] })
         ) {
-          ForEach(sizeOptions(binding.wrappedValue), id: \.self) { Text($0.replacingOccurrences(of: "x", with: " × ")).tag($0) }
+          ForEach(sizeOptions(framing.wrappedValue), id: \.self) { Text("\($0[0]) × \($0[1])").tag($0) }
         }
         .labelsHidden()
       }
       LabeledContent("Background") {
-        ColorPicker("", selection: hexBinding(binding, \.background), supportsOpacity: false).labelsHidden()
+        ColorPicker("", selection: hexBinding(framing.background), supportsOpacity: false).labelsHidden()
       }
       LabeledContent("Caption size") {
-        Stepper("\(Int(binding.wrappedValue.caption.fontSize)) pt", value: binding.caption.fontSize, in: 40...240, step: 5)
+        Stepper("\(Int(framing.wrappedValue.caption.fontSize)) pt", value: framing.caption.fontSize, in: 40...240, step: 5)
       }
       LabeledContent("Caption color") {
-        ColorPicker("", selection: hexBinding(binding, \.caption.color), supportsOpacity: false).labelsHidden()
+        ColorPicker("", selection: hexBinding(framing.caption.color), supportsOpacity: false).labelsHidden()
       }
-      Toggle("Bold caption", isOn: binding.caption.bold)
+      Toggle("Bold caption", isOn: framing.caption.bold)
       LabeledContent("Window") {
         HStack {
-          Slider(value: binding.window.scale, in: 0.5...1)
-          Text(binding.wrappedValue.window.scale, format: .percent.precision(.fractionLength(0)))
+          Slider(value: framing.window.scale, in: 0.5...1)
+          Text(framing.wrappedValue.window.scale, format: .percent.precision(.fractionLength(0)))
             .monospacedDigit().frame(width: 40)
         }
       }
-      Picker("Window position", selection: binding.window.align) {
-        Text("Bottom edge").tag("bottom")
-        Text("Floating").tag("center")
+      Picker("Window position", selection: framing.window.align) {
+        Text("Bottom edge").tag(ScreenshotConfig.Framing.Align.bottom)
+        Text("Floating").tag(ScreenshotConfig.Framing.Align.center)
       }
-      Toggle("Window shadow", isOn: binding.window.shadow)
+      Toggle("Window shadow", isOn: framing.window.shadow)
 
       Divider()
       Text("Scenes").font(.headline)
-      Text("Captions are keys in \(binding.wrappedValue.caption.catalog): translate them in Localization.")
+      Text("Captions are keys in \(framing.wrappedValue.caption.catalog): translate them in Localization.")
         .font(.caption)
         .foregroundStyle(.secondary)
-      ForEach(sceneNames(library, binding.wrappedValue), id: \.self) { name in
-        sceneEditor(name, binding)
+      ForEach(Array((draft?.scenes ?? []).enumerated()), id: \.element.id) { index, scene in
+        sceneEditor(index, scene, framing)
       }
       HStack {
-        Button("Revert") { draft = store.recipe(root) }
-          .disabled(draft == store.recipe(root))
+        Button("Revert") { draft = store.config(root) }
+          .disabled(draft == store.config(root))
         Spacer()
         Button("Save & Render") {
-          guard let recipe = draft else { return }
-          Task {
-            let keys = recipe.scenes.compactMap(\.caption).filter { !$0.isEmpty }
-            try? CaptionCatalog.addMissingKeys(keys, to: root.appendingPathComponent(recipe.caption.catalog))
-            await store.save(recipe, in: root)
-          }
+          guard let draft else { return }
+          Task { await store.save(draft, in: root) }
         }
         .buttonStyle(.borderedProminent)
         .disabled(store.phase(root) != .idle || draft == nil)
@@ -315,77 +347,75 @@ struct ScreenshotsView: View {
     }
   }
 
-  private func sceneEditor(_ name: String, _ binding: Binding<ScreenshotRecipe>) -> some View {
-    let index = binding.wrappedValue.scenes.firstIndex { $0.match == name }
-    let scene = index.map { binding.wrappedValue.scenes[$0] } ?? ScreenshotRecipe.Scene(match: name)
-    let update: ((inout ScreenshotRecipe.Scene) -> Void) -> Void = { change in
-      var edited = scene
-      change(&edited)
-      if let index { draft?.scenes[index] = edited } else { draft?.scenes.append(edited) }
-    }
-    return VStack(alignment: .leading, spacing: 6) {
+  private func sceneEditor(
+    _ index: Int, _ scene: ScreenshotConfig.Scene, _ framing: Binding<ScreenshotConfig.Framing>
+  ) -> some View {
+    VStack(alignment: .leading, spacing: 6) {
       HStack {
-        Text(name).font(.callout.weight(.semibold))
+        Text(scene.id).font(.callout.weight(.semibold))
         Spacer()
         ColorPicker("", selection: Binding(
-          get: { Color(cgColor: ScreenshotProcessor.cgColor(scene.background ?? binding.wrappedValue.background)) },
-          set: { color in update { $0.background = color.hexString } }), supportsOpacity: false)
+          get: { Color(cgColor: ScreenshotProcessor.cgColor(framing.wrappedValue.background(of: scene.id))) },
+          set: { color in framing.wrappedValue.backgrounds[scene.id] = color.hexString }), supportsOpacity: false)
           .labelsHidden()
       }
       TextField("Caption", text: Binding(
-        get: { scene.caption ?? "" }, set: { text in update { $0.caption = text.isEmpty ? nil : text } }),
+        get: { scene.caption ?? "" },
+        set: { text in
+          guard let draft, draft.scenes.indices.contains(index) else { return }
+          self.draft?.scenes[index].caption = text.isEmpty ? nil : text
+        }),
         prompt: Text("Caption"), axis: .vertical)
         .textFieldStyle(.roundedBorder)
     }
     .padding(10)
-    .background(selectedScene == name ? Color.accentColor.opacity(0.08) : Color.clear, in: RoundedRectangle(cornerRadius: 10))
+    .background(selectedScene == scene.id ? Color.accentColor.opacity(0.08) : Color.clear, in: RoundedRectangle(cornerRadius: 10))
   }
 
-  private func sceneNames(_ library: ScreenshotLibrary?, _ recipe: ScreenshotRecipe) -> [String] {
-    var names = recipe.scenes.map(\.match)
-    for name in Set(library?.shots.map(\.name) ?? []).sorted() where !names.contains(where: { name.hasPrefix($0) }) {
-      names.append(name)
-    }
-    return names
-  }
-
-  private func sizeOptions(_ recipe: ScreenshotRecipe) -> [String] {
-    let platform = ReleaseConfig.load(from: root)?["PLATFORM"] ?? "macos"
-    let sizes = platform == "ios" ? ScreenshotRecipe.iPhoneSizes + ScreenshotRecipe.iPadSizes : ScreenshotRecipe.macSizes
-    var options = sizes.map { "\($0.0)x\($0.1)" }
-    let current = "\(recipe.width)x\(recipe.height)"
+  private func sizeOptions(_ framing: ScreenshotConfig.Framing) -> [[Int]] {
+    let platform = draft?.framedPlatform ?? .mac
+    var options = ScreenshotConfig.Framing.appStoreSizes[platform] ?? []
+    let current = [framing.width, framing.height]
     if !options.contains(current) { options.insert(current, at: 0) }
     return options
   }
 
-  private func hexBinding(_ recipe: Binding<ScreenshotRecipe>, _ path: WritableKeyPath<ScreenshotRecipe, String>) -> Binding<Color> {
+  private func hexBinding(_ hex: Binding<String>) -> Binding<Color> {
     Binding(
-      get: { Color(cgColor: ScreenshotProcessor.cgColor(recipe.wrappedValue[keyPath: path])) },
-      set: { color in draft?[keyPath: path] = color.hexString })
+      get: { Color(cgColor: ScreenshotProcessor.cgColor(hex.wrappedValue)) },
+      set: { color in hex.wrappedValue = color.hexString })
   }
 
   // MARK: - Checks
 
   private func checks(_ library: ScreenshotLibrary?) -> some View {
-    let recipe = store.recipe(root)
+    let config = store.config(root)
+    let framing = config?.framing
     let report = store.reports[root]
     var items: [(String, Color)] = []
-    if let recipe {
-      items.append(ScreenshotRecipe.isAppStoreSize(width: recipe.width, height: recipe.height)
-        ? ("\(recipe.width) × \(recipe.height) is an App Store Connect size", .green)
-        : ("\(recipe.width) × \(recipe.height) is not an App Store Connect size", .red))
+    for problem in config?.problems() ?? [] { items.append((problem, .red)) }
+    if let framing {
+      if ScreenshotConfig.Framing.isAppStoreSize(width: framing.width, height: framing.height) {
+        items.append(("\(framing.width) × \(framing.height) is an App Store Connect size", .green))
+      }
+      for problem in framing.problems() { items.append((problem, .red)) }
+    }
+    for scene in library?.outdated ?? [] {
+      items.append(("\(scene.id): \(scene.state.reason ?? "")", .orange))
     }
     if let report {
       if report.overflowing.isEmpty {
-        items.append(("Every caption fits in \(recipe?.caption.maxLines ?? 2) lines", .green))
+        items.append(("Every caption fits in \(framing?.caption.maxLines ?? 2) lines", .green))
       } else {
         for item in report.overflowing { items.append(("Caption too long: \(item)", .red)) }
       }
       for error in report.errors { items.append((error, .red)) }
     }
-    if let library {
-      let missing = library.locales.filter { locale in library.shots(in: locale).contains { $0.final == nil } }
-      if !missing.isEmpty { items.append(("Not rendered yet: \(missing.joined(separator: ", "))", .orange)) }
+    if let library, let platform = library.config?.framedPlatform {
+      let missing = library.locales.filter { locale in
+        library.shots(in: locale).contains { $0.platform == platform && $0.final == nil }
+      }
+      if !missing.isEmpty { items.append(("Not framed yet: \(missing.joined(separator: ", "))", .orange)) }
     }
     return VStack(alignment: .leading, spacing: 7) {
       Text("Checks").font(.headline)
