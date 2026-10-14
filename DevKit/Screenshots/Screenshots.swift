@@ -150,7 +150,7 @@ public enum ScreenshotSignal {
     return (parts[0], parts[1])
   }
 
-  static var delay: Double { environment(delayKey).flatMap(Double.init) ?? 2 }
+  static var delay: Double { environment(delayKey).flatMap(Double.init) ?? 1 }
 
   static var activates: Bool { environment(activateKey) == "1" }
 

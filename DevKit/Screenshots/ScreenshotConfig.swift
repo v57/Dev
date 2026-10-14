@@ -132,7 +132,7 @@ public struct ScreenshotConfig: Codable, Hashable, Sendable {
 
     public init(
       id: String, arguments: [String] = [], environment: [String: String] = [:], platforms: [Platform]? = nil,
-      delay: Double = 2, caption: String? = nil, relaunch: Bool = false
+      delay: Double = 1, caption: String? = nil, relaunch: Bool = false
     ) {
       self.id = id
       self.arguments = arguments
@@ -269,7 +269,7 @@ extension ScreenshotConfig.Scene {
       arguments: try c.decodeIfPresent([String].self, forKey: .arguments) ?? [],
       environment: try c.decodeIfPresent([String: String].self, forKey: .environment) ?? [:],
       platforms: try c.decodeIfPresent([ScreenshotConfig.Platform].self, forKey: .platforms),
-      delay: try c.decodeIfPresent(Double.self, forKey: .delay) ?? 2,
+      delay: try c.decodeIfPresent(Double.self, forKey: .delay) ?? 1,
       caption: try c.decodeIfPresent(String.self, forKey: .caption),
       relaunch: try c.decodeIfPresent(Bool.self, forKey: .relaunch) ?? false)
   }
@@ -280,7 +280,7 @@ extension ScreenshotConfig.Scene {
     if !arguments.isEmpty { try c.encode(arguments, forKey: .arguments) }
     if !environment.isEmpty { try c.encode(environment, forKey: .environment) }
     try c.encodeIfPresent(platforms, forKey: .platforms)
-    if delay != 2 { try c.encode(delay, forKey: .delay) }
+    if delay != 1 { try c.encode(delay, forKey: .delay) }
     try c.encodeIfPresent(caption, forKey: .caption)
     if relaunch { try c.encode(relaunch, forKey: .relaunch) }
   }

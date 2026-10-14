@@ -8,7 +8,6 @@
       "id": "01-localization",
       "arguments": ["-DevScreenshotMode", "-DevTool", "localization"],
       "environment": { "DEV_DEMO_PROJECTS": "$DEMO" },
-      "delay": 3,
       "caption": "Translate every string in one run"
     },
     {

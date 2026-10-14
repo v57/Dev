@@ -13,7 +13,7 @@ struct ScreenshotConfigTests {
     #expect(config.appearances == [.light])
     #expect(config.mac == ScreenshotConfig.Mac(window: [1440, 900]))
     #expect(config.ios == nil)
-    #expect(config.scenes == [ScreenshotConfig.Scene(id: "01-main", delay: 2)])
+    #expect(config.scenes == [ScreenshotConfig.Scene(id: "01-main", delay: 1)])
     #expect(config.problems().isEmpty)
   }
 

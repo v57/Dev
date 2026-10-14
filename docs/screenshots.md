@@ -48,7 +48,7 @@ The package is `DevKit/` in this repo (`Package.swift` at the root):
 | scene `id` | required | the file name; no spaces or slashes |
 | scene `arguments`, `environment` | none | the app's own launch arguments for this screen |
 | scene `platforms` | all | `mac`, `iphone`, `ipad` |
-| scene `delay` | 2 | seconds to settle before the picture |
+| scene `delay` | 1 | seconds to settle before the picture; an app with the kit waits for its scene to load first, so it rarely needs more |
 | scene `caption` | none | the caption key in the development language, for `framing` and the App Store |
 | scene `relaunch` | false | a fresh launch even when the app takes scenes in one launch |
 
