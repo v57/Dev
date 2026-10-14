@@ -8,7 +8,8 @@
 
 /* Begin PBXBuildFile section */
 		D5C0DE000000000000000003 /* UpdateKit in Frameworks */ = {isa = PBXBuildFile; productRef = D5C0DE000000000000000002 /* UpdateKit */; };
-		DA7AB45E0000000000000003 /* SQLite in Frameworks */ = {isa = PBXBuildFile; productRef = DA7AB45E0000000000000002 /* SQLite */; };
+		DA7AB45E0000000000000003 /* SQLiteKit in Frameworks */ = {isa = PBXBuildFile; productRef = DA7AB45E0000000000000002 /* SQLiteKit */; };
+		DA7AB45E0000000000000005 /* WireKit in Frameworks */ = {isa = PBXBuildFile; productRef = DA7AB45E0000000000000004 /* WireKit */; };
 		4906C9282497EB178F132060 /* VaultKit in Frameworks */ = {isa = PBXBuildFile; productRef = F325E5137AFD249B69F073D5 /* VaultKit */; };
 		0E31D847659438A515BB01E6 /* GitHubKit in Frameworks */ = {isa = PBXBuildFile; productRef = 7C6D4739B153B8EFB362C33A /* GitHubKit */; };
 /* End PBXBuildFile section */
@@ -45,7 +46,8 @@
 		000000000000000130000000 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			files = (
-				DA7AB45E0000000000000003 /* SQLite in Frameworks */,
+				DA7AB45E0000000000000003 /* SQLiteKit in Frameworks */,
+				DA7AB45E0000000000000005 /* WireKit in Frameworks */,
 				D5C0DE000000000000000003 /* UpdateKit in Frameworks */,
 				4906C9282497EB178F132060 /* VaultKit in Frameworks */,
 				0E31D847659438A515BB01E6 /* GitHubKit in Frameworks */,
@@ -96,7 +98,8 @@
 			name = Dev;
 			packageProductDependencies = (
 				D5C0DE000000000000000002 /* UpdateKit */,
-				DA7AB45E0000000000000002 /* SQLite */,
+				DA7AB45E0000000000000002 /* SQLiteKit */,
+				DA7AB45E0000000000000004 /* WireKit */,
 				F325E5137AFD249B69F073D5 /* VaultKit */,
 				7C6D4739B153B8EFB362C33A /* GitHubKit */,
 			);
@@ -488,10 +491,15 @@
 			isa = XCSwiftPackageProductDependency;
 			productName = UpdateKit;
 		};
-		DA7AB45E0000000000000002 /* SQLite */ = {
+		DA7AB45E0000000000000002 /* SQLiteKit */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = DA7AB45E0000000000000001 /* XCLocalSwiftPackageReference "../Database" */;
-			productName = SQLite;
+			productName = SQLiteKit;
+		};
+		DA7AB45E0000000000000004 /* WireKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = DA7AB45E0000000000000001 /* XCLocalSwiftPackageReference "../Database" */;
+			productName = WireKit;
 		};
 		F325E5137AFD249B69F073D5 /* VaultKit */ = {
 			isa = XCSwiftPackageProductDependency;

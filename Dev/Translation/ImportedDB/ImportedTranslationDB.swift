@@ -8,8 +8,9 @@
 import AppKit
 import Foundation
 import Observation
-import SQLite
+import SQLiteKit
 import UniformTypeIdentifiers
+import WireKit
 
 // MARK: - ImportedDBStats
 
@@ -80,13 +81,13 @@ final class ImportedTranslationDB {
   /// True when the remembered file exists on disk (false = stale path).
   private(set) var fileExists = false
 
-  private var connection: SQLiteConnection?
+  private var connection: SQLiteFile?
   private var scanGeneration = 0
 
   // MARK: - derived state
 
   var isImported: Bool { fileURL != nil }
-  var isConnected: Bool { connection?.isConnected == true }
+  var isConnected: Bool { connection != nil }
   var fileSize: Int64? {
     guard let fileURL,
           let attrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path)
@@ -115,44 +116,36 @@ final class ImportedTranslationDB {
   /// pipeline before the resolve stage and by the UI before info reads.
   func ensureOpen() async throws {
     guard let fileURL else { return }
-    if connection?.isConnected == true { return }
-    let config = SQLiteConnectionConfig(
-      name: fileURL.lastPathComponent,
-      filePath: fileURL.path)
-    let opened = SQLiteConnection(config: config)
+    if connection != nil { return }
+    let opened = try Self.open(fileURL.path)
     do {
-      try await opened.connect()
       try await Self.validateSchema(opened)
       connection = opened
     } catch {
-      await opened.disconnect()
+      await opened.close()
       throw error
     }
   }
 
   /// Validates the file carries the expected translations table. Throws a
   /// UI-readable error otherwise.
-  private static func validateSchema(_ connection: SQLiteConnection) async throws {
-    let rows = try await connection.select(
-      sql: "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'translations'",
-      limit: 1)
+  private static func validateSchema(_ connection: SQLiteFile) async throws {
+    let rows = try await connection.execute(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'translations' LIMIT 1"
+    ).records
     guard !rows.isEmpty else {
-      throw SQLiteError.notADatabase(
+      throw ImportedDBError.notADatabase(
         "Not a translation database — missing the 'translations' table")
     }
-    // Read the `name` column BY KEY. SQLiteRowData keeps cells in an
-    // UNORDERED dictionary, so scanning `.values` for the first string could
-    // return the column's TYPE ("TEXT") instead of its name depending on the
-    // process's hash seed — the check then rejected a valid file on roughly
-    // half of all launches (and on restore after relaunch), so the remembered
-    // import looked lost. Key lookup is deterministic.
-    let columns = try await connection.select(sql: "PRAGMA table_info(translations)")
+    // Read the `name` column BY KEY, not the row's first string: that could be
+    // the column's TYPE ("TEXT"), and the check would reject a valid file.
+    let columns = try await connection.execute("PRAGMA table_info(translations)").records
     let names = Set(columns.compactMap { row -> String? in
-      guard case .string(let name)? = row["name"] else { return nil }
+      guard case .text(let name)? = row["name"] else { return nil }
       return name
     })
     guard names.isSuperset(of: ["language", "source", "target", "app"]) else {
-      throw SQLiteError.notADatabase(
+      throw ImportedDBError.notADatabase(
         "Not a translation database — the 'translations' table must have language, source, target and app columns")
     }
   }
@@ -184,11 +177,9 @@ final class ImportedTranslationDB {
     let standardized = url.standardizedFileURL
     // Probe BEFORE adopting anything: a bad file must leave the current
     // import untouched.
-    let probe = SQLiteConnection(
-      config: SQLiteConnectionConfig(name: standardized.lastPathComponent, filePath: standardized.path))
-    try await probe.connect()
+    let probe = try Self.open(standardized.path)
+    defer { Task { await probe.close() } }
     try await Self.validateSchema(probe)
-    await probe.disconnect()
 
     errorMessage = nil
     fileURL = standardized
@@ -207,7 +198,7 @@ final class ImportedTranslationDB {
   func remove() {
     scanGeneration += 1
     if let connection {
-      Task { await connection.disconnect() }
+      Task { await connection.close() }
     }
     connection = nil
     stats = nil
@@ -260,13 +251,12 @@ final class ImportedTranslationDB {
   /// fewer than the 11M rows they summarize. `nonisolated` so the work runs
   /// on the detached executor, not the main actor.
   private nonisolated static func scanStats(path: String) async throws -> ImportedDBStats {
-    let connection = SQLiteConnection(
-      config: SQLiteConnectionConfig(name: "scan", filePath: path))
     do {
-      try await connection.connect()
-      let rows = try await connection.select(
-        sql: "SELECT language, app, COUNT(*) AS n FROM translations GROUP BY language, app")
-      await connection.disconnect()
+      let connection = try open(path)
+      let rows = try await connection.execute(
+        "SELECT language, app, COUNT(*) AS n FROM translations GROUP BY language, app"
+      ).records
+      await connection.close()
 
       var languages: [String: Int64] = [:]
       var apps: [String: Int64] = [:]
@@ -275,10 +265,10 @@ final class ImportedTranslationDB {
         var language = ""
         var app = ""
         var count: Int64 = 0
-        for (key, value) in row.values {
+        for (key, value) in row {
           switch (key, value) {
-          case ("language", .string(let s)): language = s
-          case ("app", .string(let s)): app = s
+          case ("language", .text(let s)): language = s
+          case ("app", .text(let s)): app = s
           case ("n", .int(let n)): count = n
           default: break
           }
@@ -293,9 +283,8 @@ final class ImportedTranslationDB {
         apps: apps,
         scannedAt: .now)
     } catch {
-      await connection.disconnect()
       let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-      throw SQLiteError.server(message)
+      throw ImportedDBError.server(message)
     }
   }
 
@@ -313,18 +302,19 @@ final class ImportedTranslationDB {
   func rows(forSource source: String) async throws -> [ImportedDBRow] {
     try await ensureOpen()
     guard let connection else { return [] }
-    let rows = try await connection.select(
-      sql: "SELECT language, target, app FROM translations WHERE source = ?1 LIMIT 20000",
-      binds: [source])
+    let rows = try await connection.execute(
+      "SELECT language, target, app FROM translations WHERE source = ?1 LIMIT 20000",
+      binds: [.text(source)]
+    ).records
     return rows.compactMap { row -> ImportedDBRow? in
       var language = ""
       var target = ""
       var app = ""
-      for (key, value) in row.values {
+      for (key, value) in row {
         switch (key, value) {
-        case ("language", .string(let s)): language = s
-        case ("target", .string(let s)): target = s
-        case ("app", .string(let s)): app = s
+        case ("language", .text(let s)): language = s
+        case ("target", .text(let s)): target = s
+        case ("app", .text(let s)): app = s
         default: break
         }
       }
@@ -341,5 +331,28 @@ final class ImportedTranslationDB {
       in: rows,
       forCatalogLanguage: language,
       appRowCounts: stats?.apps ?? [:])
+  }
+}
+
+extension ImportedTranslationDB {
+  /// Opens an existing file read-only (never creates one).
+  fileprivate nonisolated static func open(_ path: String) throws -> SQLiteFile {
+    guard FileManager.default.fileExists(atPath: path) else { throw ImportedDBError.fileNotFound(path) }
+    do {
+      return try SQLiteFile(path: path, readOnly: true, create: false)
+    } catch {
+      throw ImportedDBError.server((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
+    }
+  }
+}
+
+extension DBResult {
+  /// Each row as column name → value.
+  fileprivate var records: [[String: DBValue]] {
+    rows.map { row in
+      var record: [String: DBValue] = [:]
+      for (column, value) in zip(columns, row) { record[column.name] = value }
+      return record
+    }
   }
 }

@@ -17,7 +17,6 @@
 //
 
 import Foundation
-import SQLite
 import SQLite3
 
 extension Translation {
@@ -97,7 +96,7 @@ extension Translation {
       /// reads: the importable format is a `translations` table with `language`,
       /// `source`, `target` and `app`.
       init(path: String) throws {
-        guard let stamp = Stamp.read(path) else { throw SQLiteError.fileNotFound(path) }
+        guard let stamp = Stamp.read(path) else { throw ImportedDBError.fileNotFound(path) }
         self.path = path
         self.stamp = stamp
 
@@ -106,14 +105,14 @@ extension Translation {
         guard rc == SQLITE_OK, let opened = handle else {
           let message = handle.map { String(cString: sqlite3_errmsg($0)) }
           if let handle { sqlite3_close(handle) }
-          throw SQLiteError.server(message ?? "unable to open database file (\(rc))")
+          throw ImportedDBError.server(message ?? "unable to open database file (\(rc))")
         }
         // A scanner rebuilding the file must not turn a read into "database is
         // locked" (the facade sets the same timeout).
         sqlite3_exec(opened, "PRAGMA busy_timeout = 5000", nil, nil, nil)
         guard Self.hasTranslationsTable(opened) else {
           sqlite3_close(opened)
-          throw SQLiteError.notADatabase(path)
+          throw ImportedDBError.notADatabase(path)
         }
         self.handle = opened
       }
@@ -145,7 +144,7 @@ extension Translation {
         sqlite3_clear_bindings(statement)
         let bound = source.withCString { sqlite3_bind_text(statement, 1, $0, -1, Self.transient) }
         guard bound == SQLITE_OK else {
-          throw SQLiteError.invalidQuery(self.message ?? "failed to bind the source text")
+          throw ImportedDBError.invalidQuery(self.message ?? "failed to bind the source text")
         }
         var rows: [ImportedDBRow] = []
         var rc = sqlite3_step(statement)
@@ -165,7 +164,7 @@ extension Translation {
         // A capped run stops on SQLITE_ROW, which is a complete answer here: the
         // cap IS the answer. Anything else is an error worth reporting.
         guard rc == SQLITE_DONE || rows.count >= Self.rowLimit else {
-          throw SQLiteError.server(self.message ?? "unknown SQLite error")
+          throw ImportedDBError.server(self.message ?? "unknown SQLite error")
         }
         if memo.count >= Self.memoLimit { memo.removeAll(keepingCapacity: false) }
         memo[source] = rows
@@ -176,13 +175,13 @@ extension Translation {
 
       private func lookupStatement() throws -> OpaquePointer {
         if let lookup { return lookup }
-        guard let handle else { throw SQLiteError.notConnected }
+        guard let handle else { throw ImportedDBError.notConnected }
         var statement: OpaquePointer?
         let sql = "SELECT language, target, app FROM translations WHERE source = ?1 LIMIT \(Self.rowLimit)"
         guard sqlite3_prepare_v2(handle, sql, -1, &statement, nil) == SQLITE_OK,
           let statement
         else {
-          throw SQLiteError.invalidQuery(self.message ?? "unknown SQLite error")
+          throw ImportedDBError.invalidQuery(self.message ?? "unknown SQLite error")
         }
         lookup = statement
         return statement
