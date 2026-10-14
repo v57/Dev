@@ -7,13 +7,15 @@ import Foundation
 
 // MARK: - Category
 
-/// The sidebar's collapsible groups of categories. Categories outside any
-/// section (virtual machines, databases, media, system) stand on their own.
+/// The Storage tool's groups of categories, in the order of its list:
+/// Development, AI, Applications (what you installed, the uninstallers and the
+/// leftovers of deleted apps), Other, and CI (the virtual machines workflows run on).
 nonisolated enum StorageSection: String, CaseIterable, Identifiable, Codable, Sendable {
   case development
   case ai
   case installed
   case other
+  case ci
 
   var id: String { rawValue }
 
@@ -21,8 +23,9 @@ nonisolated enum StorageSection: String, CaseIterable, Identifiable, Codable, Se
     switch self {
     case .development: "Development"
     case .ai: "AI"
-    case .installed: "Installed"
+    case .installed: "Applications"
     case .other: "Other"
+    case .ci: "CI"
     }
   }
 
@@ -32,6 +35,7 @@ nonisolated enum StorageSection: String, CaseIterable, Identifiable, Codable, Se
     case .ai: "brain"
     case .installed: "shippingbox"
     case .other: "archivebox"
+    case .ci: "server.rack"
     }
   }
 }
@@ -47,9 +51,7 @@ nonisolated enum StorageSidebarEntry: Hashable, Identifiable, Sendable {
   case category(StorageCategory)
 
   static let all: [StorageSidebarEntry] = [
-    .section(.development), .section(.ai), .section(.installed),
-    .category(.virtualMachines), .category(.databases), .category(.media), .category(.system),
-    .section(.other),
+    .section(.development), .section(.ai), .section(.installed), .section(.other), .section(.ci),
   ]
 
   var id: String {
@@ -81,12 +83,12 @@ nonisolated enum StorageCategory: String, CaseIterable, Identifiable, Codable, S
   case xcode, android, web, javascript, python, languages
   // AI
   case aiModels, claude, hermes, codex, appleIntelligence, aiTools
-  // Installed: what you installed, and what installing it left behind.
-  case applications, systemApps, homebrew, jsGlobal, pythonTools, toolchains, games
-  // On their own
-  case virtualMachines, databases, media, system
+  // Applications: what you installed, and what installing it left behind.
+  case applications, leftovers, systemApps, homebrew, jsGlobal, pythonTools, toolchains, games
   // Other
-  case caches, appData, installers, files, trash
+  case caches, appData, installers, files, trash, databases, media, system
+  // CI
+  case virtualMachines
 
   var id: String { rawValue }
 
@@ -94,9 +96,9 @@ nonisolated enum StorageCategory: String, CaseIterable, Identifiable, Codable, S
     switch self {
     case .xcode, .android, .web, .javascript, .python, .languages: .development
     case .aiModels, .claude, .hermes, .codex, .appleIntelligence, .aiTools: .ai
-    case .applications, .systemApps, .homebrew, .jsGlobal, .pythonTools, .toolchains, .games: .installed
-    case .caches, .appData, .installers, .files, .trash: .other
-    case .virtualMachines, .databases, .media, .system: nil
+    case .applications, .leftovers, .systemApps, .homebrew, .jsGlobal, .pythonTools, .toolchains, .games: .installed
+    case .caches, .appData, .installers, .files, .trash, .databases, .media, .system: .other
+    case .virtualMachines: .ci
     }
   }
 
@@ -114,7 +116,8 @@ nonisolated enum StorageCategory: String, CaseIterable, Identifiable, Codable, S
     case .codex: "Codex"
     case .appleIntelligence: "Apple Intelligence"
     case .aiTools: "Other AI Tools"
-    case .applications: "Applications"
+    case .applications: "Uninstaller"
+    case .leftovers: "Leftovers"
     case .systemApps: "System Applications"
     case .homebrew: "Homebrew"
     case .jsGlobal: "JS Globals"
@@ -147,7 +150,8 @@ nonisolated enum StorageCategory: String, CaseIterable, Identifiable, Codable, S
     case .codex: "Codex CLI and app data"
     case .appleIntelligence: "Siri, Translation, Dictation and Apple Intelligence models macOS downloaded"
     case .aiTools: "Cursor, Gemini CLI and other assistants"
-    case .applications: "Apps with the support data they keep in your Library"
+    case .applications: "Apps with everything they keep in your Library: support files, caches, preferences, logs"
+    case .leftovers: "Files of apps you already deleted. Nothing uses them any more."
     case .systemApps: "Apple's apps in /Applications, Xcode included"
     case .homebrew: "Formulae, casks and Homebrew's download cache"
     case .jsGlobal: "Global npm and Bun packages, npx, Node versions"
@@ -181,6 +185,7 @@ nonisolated enum StorageCategory: String, CaseIterable, Identifiable, Codable, S
     case .appleIntelligence: "apple.intelligence"
     case .aiTools: "wand.and.stars"
     case .applications: "app.badge"
+    case .leftovers: "archivebox"
     case .systemApps: "apple.logo"
     case .homebrew: "mug"
     case .jsGlobal: "shippingbox"
@@ -297,6 +302,11 @@ nonisolated struct StorageItem: Identifiable, Codable, Sendable, Hashable {
   /// Paths under `paths` that another item owns: skipped while measuring so
   /// the same bytes are never counted twice.
   var excluded: [String] = []
+  /// Why the item cannot be picked right now (a VM a workflow runs on, a
+  /// runtime the installed Xcode uses), or nil. Optional so older scans load.
+  var lockReason: String?
+
+  var isLocked: Bool { lockReason != nil }
 
   var urls: [URL] { paths.map { URL(fileURLWithPath: $0) } }
 

@@ -5,15 +5,97 @@
 
 import SwiftUI
 
-/// The app's Settings window (⌘,).
+/// The app's Settings window (⌘,): General, Translation, Agents (the MCP
+/// server) and Advanced (the imported translation database and clearing the
+/// translation store).
 struct SettingsView: View {
+  @AppStorage("settings.tab") private var tab = "translation"
+
   var body: some View {
-    TabView {
+    TabView(selection: $tab) {
+      GeneralSettingsView()
+        .tabItem { Label("General", systemImage: "gearshape") }
+        .tag("general")
       TranslationSettingsView()
         .tabItem { Label("Translation", systemImage: "globe") }
+        .tag("translation")
+      AgentsSettingsView()
+        .tabItem { Label("Agents", systemImage: "powerplug") }
+        .tag("agents")
+      AdvancedSettingsView()
+        .tabItem { Label("Advanced", systemImage: "slider.horizontal.3") }
+        .tag("advanced")
     }
-    .frame(width: 560)
+    .frame(width: 600)
   }
+}
+
+/// Where projects open and what the sidebar shows.
+struct GeneralSettingsView: View {
+  @AppStorage(ProjectOpener.key) private var openIn = ProjectOpener.Target.xcode.rawValue
+  @AppStorage(SidebarPreferences.showReviewBadge) private var showsReviewBadge = true
+  @AppStorage(SidebarPreferences.offerNonGitFolders) private var offersFolders = true
+
+  var body: some View {
+    Form {
+      Picker("Open projects in", selection: $openIn) {
+        ForEach(ProjectOpener.Target.allCases) { Text($0.title).tag($0.rawValue) }
+      }
+      Toggle("Show strings to review in the sidebar", isOn: $showsReviewBadge)
+      Toggle(isOn: $offersFolders) {
+        Text("Offer folders without git when adding a folder of repos")
+        Text("Folders that look like projects are ticked for you.")
+      }
+    }
+    .formStyle(.grouped)
+    .frame(minHeight: 220)
+  }
+}
+
+/// The imported translation database and the translation store.
+struct AdvancedSettingsView: View {
+  var body: some View {
+    let db = ImportedTranslationDB.shared
+    Form {
+      Section("Imported Translation Database") {
+        HStack {
+          if let url = db.fileURL {
+            VStack(alignment: .leading, spacing: 2) {
+              Text(url.lastPathComponent)
+              Text(url.deletingLastPathComponent().path(percentEncoded: false)
+                .replacingOccurrences(of: NSHomeDirectory(), with: "~"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+          } else {
+            Text("None").foregroundStyle(.secondary)
+          }
+          Spacer()
+          Button(db.isImported ? "Replace…" : "Choose…") { Task { await db.importViaPanel() } }
+            .disabled(AppContext.shared.shell?.isRunning == true)
+          if db.isImported {
+            Button("Remove", role: .destructive) { db.remove() }
+              .disabled(AppContext.shared.shell?.isRunning == true)
+          }
+        }
+        Text("Translations a database already holds are used before a model is asked.")
+          .font(.callout)
+          .foregroundStyle(.secondary)
+      }
+      Section("Translation Store") {
+        ClearTranslationStoreSection()
+      }
+    }
+    .formStyle(.grouped)
+    .frame(minHeight: 320)
+    .task { db.restoreIfNeeded() }
+  }
+}
+
+/// The keys the General tab writes and the sidebar reads.
+enum SidebarPreferences {
+  static let showReviewBadge = "general.showReviewBadge"
+  static let offerNonGitFolders = "general.offerNonGitFolders"
 }
 
 /// Which model translation runs on. Users bring their own key: pick a provider,

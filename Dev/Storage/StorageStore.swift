@@ -117,17 +117,112 @@ final class StorageStore {
   }
 
   var selectedItems: [StorageItem] {
-    items.filter { selection.contains($0.id) && $0.cleanup.isCleanable }
+    items.filter { selection.contains($0.id) && $0.cleanup.isCleanable && !$0.isLocked }
+      .map { item in
+        // An app picked file by file: only those paths go (Reset keeps the app).
+        guard let paths = partialPaths[item.id], !paths.isEmpty else { return item }
+        var part = item
+        part.paths = item.paths.filter(paths.contains)
+        part.bytes = part.paths.reduce(0) { $0 + (pathSizes[$1] ?? 0) }
+        if !part.paths.contains(item.primaryPath) { part.title = item.title + " data" }
+        return part
+      }
   }
 
   var selectedBytes: Int64 { selectedItems.reduce(0) { $0 + $1.bytes } }
+
+  // MARK: Per-file picks (the Uninstaller)
+
+  /// Items picked by some of their paths only: item id → the paths that go.
+  /// An item absent here, but selected, goes whole.
+  var partialPaths: [String: Set<String>] = [:]
+  /// Sizes of single paths inside items, measured when an app is opened.
+  private(set) var pathSizes: [String: Int64] = [:]
+
+  func isPathSelected(_ path: String, in item: StorageItem) -> Bool {
+    guard selection.contains(item.id) else { return false }
+    return partialPaths[item.id]?.contains(path) ?? true
+  }
+
+  /// Picks or drops one path of an item: the item stays selected while any
+  /// of its paths is, and goes whole when all are.
+  func setPath(_ path: String, of item: StorageItem, selected: Bool) {
+    var paths = selection.contains(item.id) ? (partialPaths[item.id] ?? Set(item.paths)) : []
+    if selected { paths.insert(path) } else { paths.remove(path) }
+    if paths.isEmpty {
+      selection.remove(item.id)
+      partialPaths[item.id] = nil
+    } else {
+      selection.insert(item.id)
+      partialPaths[item.id] = paths.count == item.paths.count ? nil : paths
+    }
+  }
+
+  /// Measures each path of an item once, off the main actor.
+  func measurePaths(of item: StorageItem) async {
+    let missing = item.paths.filter { pathSizes[$0] == nil }
+    guard !missing.isEmpty else { return }
+    let sizes = await Task.detached(priority: .userInitiated) {
+      missing.map { ($0, DiskUsage.measure([$0]).bytes) }
+    }.value
+    for (path, bytes) in sizes { pathSizes[path] = bytes }
+  }
+
+  func pathSize(_ path: String) -> Int64? { pathSizes[path] }
+
+  // MARK: Locks
+
+  /// Marks the virtual machines a workflow runs on: deleting one would break
+  /// that project's CI.
+  func applyLocks(runnerNames: Set<String>) {
+    func lock(_ item: inout StorageItem) {
+      // Machines only: compaction and pruning carry their own locks from the scan.
+      guard item.category == .virtualMachines, item.group != "Free Space Inside Disks",
+            item.id != "docker:prune" else { return }
+      let name = (item.title as NSString).deletingPathExtension
+      item.lockReason = runnerNames.contains(name) ? "Workflows use it as a CI runner" : nil
+    }
+    for index in userItems.indices { lock(&userItems[index]) }
+    for index in systemItems.indices { lock(&systemItems[index]) }
+    selection.subtract(items.filter(\.isLocked).map(\.id))
+  }
+
+  /// The UTM machine names any known project's workflows run steps on.
+  nonisolated static func workflowRunnerNames() -> Set<String> {
+    var names = Set<String>()
+    for entry in KnownProjects.read() {
+      for workflow in Workflow.load(in: URL(fileURLWithPath: entry.root)) {
+        for step in workflow.steps { if let name = step.vmName { names.insert(name) } }
+      }
+    }
+    return names
+  }
+
+  /// Picks what Smart Scan recommends, once per scan: a fresh scan starts with
+  /// the safe items ticked, and the reader's changes are kept after that.
+  func selectRecommendedIfNew() {
+    guard let lastScan, autoSelectedScan != lastScan else { return }
+    autoSelectedScan = lastScan
+    selection.formUnion(recommendedItems.map(\.id))
+  }
+
+  @ObservationIgnored private var autoSelectedScan: Date?
+
+  /// What Smart Scan picks: every cleanable cache and rebuildable item. Your
+  /// own data is never in it.
+  var recommendedItems: [StorageItem] {
+    items.filter { $0.safety != .data && $0.cleanup.isCleanable && !$0.isLocked }
+  }
+
+  var recommendedBytes: Int64 { recommendedItems.reduce(0) { $0 + $1.bytes } }
 
   // MARK: Selecting
 
   func isSelected(_ item: StorageItem) -> Bool { selection.contains(item.id) }
 
   func setSelected(_ selected: Bool, _ items: [StorageItem]) {
-    let ids = items.filter(\.cleanup.isCleanable).map(\.id)
+    let ids = items.filter { $0.cleanup.isCleanable && !$0.isLocked }.map(\.id)
+    for id in ids { partialPaths[id] = nil }
     if selected { selection.formUnion(ids) } else { selection.subtract(ids) }
   }
 
@@ -252,9 +347,19 @@ final class StorageStore {
       StorageCleaner.clean(targets, deleteImmediately: deleteImmediately)
     }.value
     let cleaned = Set(report.cleanedIDs)
-    userItems.removeAll { cleaned.contains($0.id) }
-    systemItems.removeAll { cleaned.contains($0.id) }
+    // An item cleaned path by path keeps the paths that stayed.
+    let partial = partialPaths
+    func keep(_ item: inout StorageItem) -> Bool {
+      guard cleaned.contains(item.id) else { return true }
+      guard let gone = partial[item.id] else { return false }
+      item.paths.removeAll(where: gone.contains)
+      item.bytes = max(0, item.bytes - gone.reduce(0) { $0 + (pathSizes[$1] ?? 0) })
+      return !item.paths.isEmpty
+    }
+    userItems = userItems.compactMap { var item = $0; return keep(&item) ? item : nil }
+    systemItems = systemItems.compactMap { var item = $0; return keep(&item) ? item : nil }
     selection.subtract(cleaned)
+    for id in cleaned { partialPaths[id] = nil }
     refreshVolume()
     if let snapshot { save(snapshot) }
     phase = .idle
@@ -322,7 +427,8 @@ final class StorageStore {
   }
 
   private func save(_ snapshot: StorageSnapshot) {
-    guard let url = Self.snapshotURL else { return }
+    // A screenshot or test launch never replaces the reader's saved scan.
+    guard !LaunchOptions.isScreenshotMode, let url = Self.snapshotURL else { return }
     Task.detached(priority: .background) {
       try? FileManager.default.createDirectory(
         at: url.deletingLastPathComponent(), withIntermediateDirectories: true)

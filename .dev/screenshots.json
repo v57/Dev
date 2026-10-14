@@ -18,8 +18,8 @@
       "caption": "Make the app icon"
     },
     {
-      "id": "03-release",
-      "arguments": ["-DevScreenshotMode", "-DevTool", "release"],
+      "id": "03-workflows",
+      "arguments": ["-DevScreenshotMode", "-DevTool", "workflows"],
       "environment": { "DEV_DEMO_PROJECTS": "$DEMO" },
       "caption": "Build, notarize and publish in one place"
     },

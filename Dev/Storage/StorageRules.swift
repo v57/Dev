@@ -242,6 +242,90 @@ nonisolated extension StorageDiscovery {
     eachChild(.virtualMachines, "Tart", of: ".tart/vms", .data, detail: "Tart virtual machine")
     folder(.virtualMachines, "Tart", "Tart image cache", ".tart/cache", .cache)
     eachChild(.virtualMachines, "Vagrant", of: ".vagrant.d/boxes", .rebuildable, detail: "Vagrant box")
+    addDockerPrune()
+    addDiskCompaction()
+  }
+
+  /// What `docker system prune -af` would free: stopped containers, unused
+  /// images and the build cache (never volumes). Only while Docker answers.
+  private mutating func addDockerPrune() {
+    let docker = ["/opt/homebrew/bin/docker", "/usr/local/bin/docker"].first { fileManager.isExecutableFile(atPath: $0) }
+    guard let docker else { return }
+    let result = ScanShell.run(docker, arguments: ["system", "df", "--format", "{{json .}}"], currentDirectory: nil, timeout: 20)
+    guard result.succeeded else { return }
+    var bytes: Int64 = 0
+    for line in result.stdout.split(separator: "\n") {
+      guard let data = line.data(using: .utf8),
+            let row = try? JSONSerialization.jsonObject(with: data) as? [String: String],
+            row["Type"] != "Local Volumes",
+            let reclaimable = row["Reclaimable"]?.split(separator: " ").first
+      else { continue }
+      bytes += Self.dockerBytes(String(reclaimable))
+    }
+    guard bytes > 50_000_000 else { return }
+    add(StorageItem(
+      id: "docker:prune", category: .virtualMachines, group: "Containers",
+      title: "Unused Docker images and build cache",
+      detail: "Images pull and layers build again; volumes stay", paths: [],
+      safety: .rebuildable,
+      cleanup: .command(executable: docker, arguments: ["system", "prune", "-af"], verb: "Prune"),
+      bytes: bytes, reportedSize: true))
+  }
+
+  /// `1.626GB`, `180.2kB`, `0B` → bytes (Docker's decimal units).
+  static func dockerBytes(_ text: String) -> Int64 {
+    let units: [(String, Double)] = [("TB", 1e12), ("GB", 1e9), ("MB", 1e6), ("kB", 1e3), ("KB", 1e3), ("B", 1)]
+    for (unit, scale) in units where text.hasSuffix(unit) {
+      return Int64((Double(text.dropLast(unit.count)) ?? 0) * scale)
+    }
+    return 0
+  }
+
+  /// Space a UTM disk holds for blocks the guest already deleted: the image's
+  /// size on disk minus what `qemu-img measure` says a rewritten copy needs.
+  /// Compacting rewrites the image, so a running machine is locked.
+  private mutating func addDiskCompaction() {
+    let qemuImg = ["/opt/homebrew/bin/qemu-img", "/usr/local/bin/qemu-img"]
+      .first { fileManager.isExecutableFile(atPath: $0) }
+    guard let qemuImg else { return }
+    var running = Set<String>()
+    if let utmctl = VMStore.utmctlPaths.first(where: { fileManager.isExecutableFile(atPath: $0) }) {
+      let list = ScanShell.run(utmctl, arguments: ["list"], currentDirectory: nil, timeout: 20)
+      for vm in VMStore.parseList(list.stdout) where vm.status != .stopped { running.insert(vm.name) }
+    }
+    // UTM keeps machines in its container, or anywhere the reader saved them:
+    // Spotlight knows both.
+    let found = ScanShell.run("/usr/bin/mdfind", arguments: ["kMDItemFSName == '*.utm'"], currentDirectory: nil, timeout: 20)
+    let bundles = Set(children(of: h("Library/Containers/com.utmapp.UTM/Data/Documents"))
+      + found.stdout.split(separator: "\n").map(String.init)).filter { $0.hasSuffix(".utm") }
+    for bundle in bundles.sorted() {
+      let name = ((bundle as NSString).lastPathComponent as NSString).deletingPathExtension
+      for image in children(of: bundle + "/Data") where image.hasSuffix(".qcow2") {
+        // -U reads without the write lock, so a running machine is measured too
+        // (and shown locked).
+        let measured = ScanShell.run(qemuImg, arguments: ["measure", "-U", "--output=json", "-O", "qcow2", image],
+                                     currentDirectory: nil, timeout: 60)
+        guard measured.succeeded, let data = measured.stdout.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let required = (json["required"] as? NSNumber)?.int64Value,
+              let actual = (try? URL(fileURLWithPath: image).resourceValues(forKeys: [.totalFileAllocatedSizeKey]))?
+                .totalFileAllocatedSize
+        else { continue }
+        let reclaimable = Int64(actual) - required
+        guard reclaimable > 500_000_000 else { continue }
+        let temporary = image + ".compacting"
+        // A failed rewrite leaves the image as it was and removes the partial copy.
+        let script = "\"$0\" convert -O qcow2 \"$1\" \"$2\" || { rm -f \"$2\"; exit 1; }; mv -f \"$2\" \"$1\""
+        var item = StorageItem(
+          id: "compact:" + image, category: .virtualMachines, group: "Free Space Inside Disks",
+          title: "Compact \(name)", detail: "Gives back space the guest already deleted", paths: [],
+          safety: .cache,
+          cleanup: .command(executable: "/bin/bash", arguments: ["-c", script, qemuImg, image, temporary], verb: "Compact"),
+          bytes: reclaimable, reportedSize: true)
+        if running.contains(name) { item.lockReason = "Running: stop the machine first" }
+        add(item)
+      }
+    }
   }
 
   // MARK: AI

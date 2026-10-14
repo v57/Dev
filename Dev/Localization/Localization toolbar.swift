@@ -48,17 +48,6 @@ struct ControlsBar: ToolbarContent {
       }
       .disabled(!store.isLoaded)
     }
-    ToolbarItemGroup(placement: .principal) {
-      Picker(
-        selection: Binding(get: { store.filter }, set: { store.filter = $0 }),
-        label: EmptyView()) {
-        ForEach(RowFilter.allCases) { rowFilter in
-          Label(rowFilter.title, systemImage: rowFilter.icon).tag(rowFilter)
-        }
-      }
-      .pickerStyle(.segmented)
-      .fixedSize()
-    }
     ToolbarItemGroup(placement: .primaryAction) {
       Toggle(isOn: Binding(
         get: { store.includeNonTranslatable },

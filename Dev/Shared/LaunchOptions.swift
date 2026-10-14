@@ -5,7 +5,7 @@
 
 import Foundation
 
-/// How this launch was asked to behave. The screenshot UI tests launch Dev with
+/// How this launch was asked to behave. Screenshots (`.dev/screenshots.json`) launch Dev with
 /// `-DevScreenshotMode` and a demo project, so the pictures never show the
 /// user's own projects, servers or translation memory.
 nonisolated enum LaunchOptions {
@@ -16,5 +16,18 @@ nonisolated enum LaunchOptions {
   static var demoProjects: [URL] {
     (ProcessInfo.processInfo.environment["DEV_DEMO_PROJECTS"] ?? "")
       .split(separator: ":").map { URL(fileURLWithPath: String($0)) }
+  }
+
+  /// `-DevOpen storage|vms`: a tool to open instead of a project (ContentView reads it per scene);
+  /// `-DevOpen releaseSettings` (with `-DevTool workflows`) opens Release Settings.
+  static var open: String? { value(after: "-DevOpen") }
+
+  /// `-DevStoragePage smartScan|languages|<category>`: Storage's first page.
+  static var storagePage: String? { value(after: "-DevStoragePage") }
+
+  private static func value(after flag: String) -> String? {
+    let arguments = ProcessInfo.processInfo.arguments
+    guard let index = arguments.firstIndex(of: flag), index + 1 < arguments.count else { return nil }
+    return arguments[index + 1]
   }
 }

@@ -249,27 +249,24 @@ struct VMsSidebarRow: View {
 
   var body: some View {
     HStack(spacing: 8) {
-      Image(systemName: "desktopcomputer")
-        .font(.system(size: 15))
-        .foregroundStyle(.tertiary)
-        .frame(width: 24, height: 24)
-      VStack(alignment: .leading, spacing: 1) {
-        Text("Virtual Machines")
-          .lineLimit(1)
-        Text(status)
+      Label("Virtual Machines", systemImage: "desktopcomputer")
+      Spacer(minLength: 4)
+      if running > 0 {
+        Circle().fill(.green).frame(width: 7, height: 7)
+        Text("\(running) on")
           .font(.caption)
           .foregroundStyle(.secondary)
-          .lineLimit(1)
       }
-      Spacer(minLength: 0)
     }
     .task { await store.refresh() }
+    .help(status)
   }
 
+  private var running: Int { store.machines.filter(\.status.isRunning).count }
+
   private var status: String {
-    if VMStore.utmctl == nil { return "UTM not installed" }
-    let running = store.machines.filter(\.status.isRunning).count
-    if store.machines.isEmpty { return "No VMs" }
+    if VMStore.utmctl == nil { return "UTM is not installed" }
+    if store.machines.isEmpty { return "No virtual machines" }
     return running == 0 ? "\(store.machines.count) stopped" : "\(running) running"
   }
 }

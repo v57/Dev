@@ -8,38 +8,40 @@
 import AppKit
 import Foundation
 import SwiftData
+import UniformTypeIdentifiers
 
 // MARK: - Sidebar destinations
 
-/// The app's two tools. They are the SAME tool whether opened projectless
-/// (bottom sidebar bar) or bound to a selected project (toolbar picker);
-/// only the target differs. The single toolbar picker and the projectless
-/// bottom bar both speak this enum.
+/// The tools a project opens in, in the order of the toolbar's tab control.
+/// App Icon also opens without a project (File ▸ New Icon), where it exports
+/// into a folder the reader picks.
 enum DevTool: String, Hashable, CaseIterable, Identifiable {
-  case icon
+  case overview
   case localization
-  /// Project-bound only: a release needs a project to build.
-  case release
-
-  /// The tools the sidebar's bottom bar offers without a project. Localization is
-  /// not one: a catalog is always a project's (a dropped .xcstrings becomes one).
-  static let projectless: [DevTool] = [.icon]
+  case icon
+  case screenshots
+  /// The project's CI: workflows built from release.sh's steps and the VMs.
+  case workflows
 
   var id: String { rawValue }
 
   var title: String {
     switch self {
-    case .icon: return "App Icon"
+    case .overview: return "Overview"
     case .localization: return "Localization"
-    case .release: return "Release"
+    case .icon: return "App Icon"
+    case .screenshots: return "Screenshots"
+    case .workflows: return "Workflows"
     }
   }
 
   var systemImage: String {
     switch self {
-    case .icon: return "hammer.fill"
+    case .overview: return "square.grid.2x2"
     case .localization: return "globe"
-    case .release: return "shippingbox"
+    case .icon: return "app.badge"
+    case .screenshots: return "photo.on.rectangle"
+    case .workflows: return "shippingbox"
     }
   }
 }
@@ -48,7 +50,7 @@ enum DevTool: String, Hashable, CaseIterable, Identifiable {
 /// 'which project is selected' — the projectless bottom bar and the
 /// project-bound tools read and write exactly this.
 enum SidebarSelection: Hashable {
-  /// A projectless ad-hoc tool (bottom sidebar bar).
+  /// A tool opened without a project (File ▸ New Icon).
   case tool(DevTool)
   /// A directory/catalog project from the Projects section.
   case project(PersistentIdentifier)
@@ -79,11 +81,35 @@ struct SidebarProjectRow: Identifiable {
   let name: String
   let rootURL: URL?
   let catalogURL: URL
+  /// The project's AppIcon.appiconset, when it has one.
+  let iconURL: URL?
   let iconImage: NSImage?
   /// Distinct translatable keys present in the project's reconciled records.
   let keyCount: Int
   let catalogExists: Bool
   let hasRecords: Bool
+  /// Records a model wrote that no one has reviewed yet: the sidebar's badge.
+  let needsReview: Int
+  /// Per target language, from the reconciled records, largest first.
+  let languages: [LanguageProgress]
+}
+
+/// How far one language of a project's catalog is translated.
+struct LanguageProgress: Identifiable, Hashable, Sendable {
+  let code: String
+  let total: Int
+  /// Records with a value (reviewed or not).
+  let translated: Int
+  let needsReview: Int
+
+  var id: String { code }
+  var fraction: Double { total == 0 ? 0 : Double(translated) / Double(total) }
+  var missing: Int { total - translated }
+
+  /// "German" for "de", the code itself when the system has no name for it.
+  var name: String {
+    Locale.current.localizedString(forIdentifier: code) ?? code
+  }
 }
 
 // MARK: - View model
@@ -100,25 +126,30 @@ final class SidebarViewModel {
   var selection: SidebarSelection? = nil {
     didSet {
       guard selection != oldValue else { return }
-      // Opening a project always starts with NO tool chosen: the toolbar
-      // picker is deselected by default and the pane prompts for a pick.
-      if case .project = selection { projectTool = nil }
+      // A project opens on the tab it was last left on, Overview the first time.
+      if case .project(let id) = selection { projectTool = lastTool[id] ?? .overview }
     }
   }
 
-  /// The tool shown for the SELECTED project, or nil while none is chosen.
-  /// Drives the single toolbar picker (which only exists for a project).
-  var projectTool: DevTool?
+  /// The tab shown for the SELECTED project. Drives the toolbar's tab control,
+  /// which only exists for a project.
+  var projectTool: DevTool = .overview {
+    didSet {
+      if case .project(let id) = selection { lastTool[id] = projectTool }
+    }
+  }
 
-  /// True while a project is the selection — the toolbar picker is visible
-  /// only then (projectless tools live in the sidebar's bottom bar).
+  /// The tab each project was last left on, while the app runs.
+  @ObservationIgnored private var lastTool: [PersistentIdentifier: DevTool] = [:]
+
+  /// True while a project is the selection: the toolbar's tab control is
+  /// visible only then.
   var hasSelectedProject: Bool {
     if case .project = selection { return true }
     return false
   }
 
-  /// The projectless tool currently open, or nil when none is selected
-  /// (or a project is). Drives the bottom bar's highlighted row.
+  /// The tool open without a project, or nil.
   var currentTool: DevTool? {
     get {
       if case .tool(let tool) = selection { return tool }
@@ -199,11 +230,18 @@ final class SidebarViewModel {
           name: project.displayName,
           rootURL: project.rootURL,
           catalogURL: project.catalogURL,
+          iconURL: project.iconURL,
           iconImage: project.iconThumbnail,
           keyCount: badge.keys,
           catalogExists: fm.fileExists(atPath: project.catalogURL.path),
-          hasRecords: badge.records > 0)
+          hasRecords: badge.records > 0,
+          needsReview: badge.needsReview,
+          languages: badge.languages.values.sorted { $0.total == $1.total ? $0.code < $1.code : $0.total > $1.total })
       }
+    // The MCP process reads the project list from here (never the demo's).
+    if !LaunchOptions.isScreenshotMode { KnownProjects.write(projects.compactMap { row in
+      row.rootURL.map { KnownProjects.Entry(name: row.name, root: $0.path) }
+    }) }
   }
 
   /// Per-project badge counts: the DISTINCT keys a project's records cover,
@@ -211,6 +249,8 @@ final class SidebarViewModel {
   private struct BadgeCounts: Sendable {
     var keys = 0
     var records = 0
+    var needsReview = 0
+    var languages: [String: LanguageProgress] = [:]
   }
 
   /// The last counts, by project.
@@ -255,19 +295,34 @@ final class SidebarViewModel {
     var descriptor = FetchDescriptor<TranslationRecord>()
     // Only the two fields the badges read, so the fetch builds no object graph
     // and no relationship fault per record.
-    descriptor.propertiesToFetch = [\.key, \.project]
+    descriptor.propertiesToFetch = [\.key, \.project, \.language, \.state]
     let rows = (try? context.fetch(descriptor)) ?? []
     var keys: [PersistentIdentifier: Set<String>] = [:]
     var counts: [PersistentIdentifier: Int] = [:]
+    var review: [PersistentIdentifier: Int] = [:]
+    // (total, translated, needs review) per project and language.
+    var perLanguage: [PersistentIdentifier: [String: (Int, Int, Int)]] = [:]
     for record in rows {
       guard let project = record.project else { continue }
       let id = project.persistentModelID
       counts[id, default: 0] += 1
       keys[id, default: []].insert(record.key)
+      let pending = record.state == .needs_review
+      if pending { review[id, default: 0] += 1 }
+      var stat = perLanguage[id, default: [:]][record.language] ?? (0, 0, 0)
+      stat.0 += 1
+      if record.state != .empty { stat.1 += 1 }
+      if pending { stat.2 += 1 }
+      perLanguage[id, default: [:]][record.language] = stat
     }
     var out: [PersistentIdentifier: BadgeCounts] = [:]
     for (id, count) in counts {
-      out[id] = BadgeCounts(keys: keys[id]?.count ?? 0, records: count)
+      let languages = (perLanguage[id] ?? [:]).reduce(into: [String: LanguageProgress]()) { result, entry in
+        result[entry.key] = LanguageProgress(
+          code: entry.key, total: entry.value.0, translated: entry.value.1, needsReview: entry.value.2)
+      }
+      out[id] = BadgeCounts(
+        keys: keys[id]?.count ?? 0, records: count, needsReview: review[id] ?? 0, languages: languages)
     }
     return out
   }
@@ -425,8 +480,26 @@ final class SidebarViewModel {
     // keep suggesting the directories the reader added from its last drop.
     let known = Set(projects.compactMap(\.rootURL))
     let fresh = skipped.filter { !known.contains($0.url) }
-    if !fresh.isEmpty { importSuggestions = fresh }
+    let offers = UserDefaults.standard.object(forKey: SidebarPreferences.offerNonGitFolders) as? Bool ?? true
+    if offers, !fresh.isEmpty { importSuggestions = fresh }
     return firstID
+  }
+
+  /// "Add Project…": the same import as a drop, from an Open panel, so adding a
+  /// project never depends on dragging. Selects the first project added.
+  func addProjectsFromPanel() {
+    let panel = NSOpenPanel()
+    panel.canChooseDirectories = true
+    panel.canChooseFiles = true
+    panel.allowedContentTypes = [.folder, .init(filenameExtension: "xcstrings") ?? .data]
+    panel.allowsMultipleSelection = true
+    panel.prompt = "Add"
+    panel.message = "Choose a project folder, a folder of repos, or a String Catalog."
+    guard panel.runModal() == .OK else { return }
+    let urls = panel.urls
+    Task {
+      if let first = await importDroppedURLs(urls) { selection = .project(first) }
+    }
   }
 
   /// Adds the suggested directories the reader picked, each as one project

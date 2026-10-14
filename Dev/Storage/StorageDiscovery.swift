@@ -24,6 +24,10 @@ nonisolated struct StorageDiscovery {
   /// True when the app has Full Disk Access: protected folders are scanned
   /// and apps' containers count as their support data.
   var fullDiskAccess = false
+  /// What `addApps` found installed, so the Library sweep can tell a deleted
+  /// app's leftovers from an installed app's data.
+  var installedIdentifiers: Set<String> = []
+  var installedNames: Set<String> = []
 
   init(home: String = NSHomeDirectory()) {
     self.home = home

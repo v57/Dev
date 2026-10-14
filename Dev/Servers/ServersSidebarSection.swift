@@ -36,7 +36,7 @@ struct ServersSidebarSection: View {
   @State private var pendingRemoval: ServerRow?
 
   var body: some View {
-    Section("Servers") {
+    Section("Localization Servers") {
       if let problem = store.alert {
         Label(problem, systemImage: "exclamationmark.triangle.fill")
           .font(.caption)

@@ -32,6 +32,8 @@ struct CreateIconView: View {
   @Environment(CreateIcon.self) var create
   @State private var isExporting = false
   @State private var alertMessage: String?
+  /// Which macOS 26 icon appearance the preview shows.
+  @State private var appearance: IconAppearance = .default
 
   /// Non-nil binds this instance to a selected sidebar project (P40): the
   /// export target defaults to the project's root directory, so Export
@@ -140,42 +142,93 @@ struct CreateIconView: View {
 
   var previewPane: some View {
     GeometryReader { view in
-      let side = min(view.size.width, view.size.height) * 0.8
-      VStack(spacing: 12) {
-        Spacer()
-        if create.settings.preview, let result = create.result {
+      let side = min(view.size.width * 0.7, view.size.height * 0.55)
+      VStack(spacing: 16) {
+        Picker("Appearance", selection: $appearance) {
+          ForEach(IconAppearance.allCases) { Text($0.title).tag($0) }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .fixedSize()
+        .padding(.top, 16)
+        Spacer(minLength: 0)
+        if create.settings.preview, appearance == .default, let result = create.result {
           Image(nsImage: result)
             .resizable().interpolation(.high)
             .frame(width: side, height: side)
             .clipShape(RoundedRectangle(cornerRadius: side * 0.22))
+            .shadow(color: .black.opacity(0.25), radius: 20, y: 10)
         } else {
           liveIcon.frame(width: side, height: side)
+            .shadow(color: .black.opacity(0.25), radius: 20, y: 10)
         }
-        HStack {
-          liveIcon.frame(width: 80, height: 80)
-          liveIcon.frame(width: 64, height: 64)
-          liveIcon.frame(width: 48, height: 48)
+        Spacer(minLength: 0)
+        HStack(alignment: .bottom, spacing: 22) {
+          ForEach([128, 64, 32, 16], id: \.self) { size in
+            VStack(spacing: 6) {
+              liveIcon.frame(width: CGFloat(size), height: CGFloat(size))
+              Text("\(size) pt").font(.caption).foregroundStyle(appearance.captionStyle)
+            }
+          }
         }
+        // The icon among others in a Dock.
+        HStack(spacing: 10) {
+          ForEach([Color.blue, Color.white, Color.mint], id: \.self) { color in
+            RoundedRectangle(cornerRadius: 10).fill(color).frame(width: 44, height: 44)
+          }
+          liveIcon.frame(width: 44, height: 44)
+          RoundedRectangle(cornerRadius: 10).fill(Color.orange).frame(width: 44, height: 44)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22))
+        .accessibilityLabel("Dock preview")
         Text(create.settings.preview ? "Rendered PNG" : "Live preview")
-          .font(.caption).foregroundStyle(.secondary)
-        Spacer()
+          .font(.caption).foregroundStyle(appearance.captionStyle)
+          .padding(.bottom, 16)
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .background(appearance.stage)
     }
   }
 
   var liveIcon: some View {
     GeometryReader { view in
-      background.overlay {
+      ZStack {
+        appearanceBackground
         Image(systemName: create.settings.symbol)
           .font(.system(size: view.size.width * 0.5 * create.settings.scale))
-          .foregroundStyle(create.settings.glyph.opacity(0.8))
-          .shadow(radius: 16)
+          .foregroundStyle(glyphStyle)
+          .shadow(radius: view.size.width > 100 ? 16 : 2)
       }
-      .clipShape(RoundedRectangle(cornerRadius: view.size.width * 0.25))
-      .compatInteractiveGlass(in: RoundedRectangle(cornerRadius: view.size.width * 0.25))
+      .clipShape(RoundedRectangle(cornerRadius: view.size.width * 0.225))
+      .overlay(
+        RoundedRectangle(cornerRadius: view.size.width * 0.225)
+          .strokeBorder(appearance == .clear ? Color.white.opacity(0.6) : .clear, lineWidth: 1.5))
+      .compatInteractiveGlass(in: RoundedRectangle(cornerRadius: view.size.width * 0.225))
     }
     .aspectRatio(1, contentMode: .fit)
+  }
+
+  /// The background for the appearance the preview shows: the icon's own in
+  /// Default, near black in Dark, frosted in Clear, a dark tint in Tinted.
+  @ViewBuilder
+  var appearanceBackground: some View {
+    switch appearance {
+    case .default: background
+    case .dark: Rectangle().fill(Color(white: 0.11))
+    case .clear: Rectangle().fill(.white.opacity(0.22))
+    case .tinted: Rectangle().fill(Color(red: 0.12, green: 0.16, blue: 0.25))
+    }
+  }
+
+  var glyphStyle: Color {
+    switch appearance {
+    case .default: create.settings.glyph.opacity(0.8)
+    case .dark: create.settings.primary
+    case .clear: .white
+    case .tinted: Color(red: 0.66, green: 0.76, blue: 0.95)
+    }
   }
 
   @ViewBuilder
@@ -257,4 +310,31 @@ struct CreateIconView: View {
 #Preview {
   CreateIconView().environment(CreateIcon())
     .frame(maxWidth: .infinity, maxHeight: .infinity)
+}
+
+/// The appearances macOS 26 draws an app icon in, for the preview.
+enum IconAppearance: String, CaseIterable, Identifiable {
+  case `default`, dark, clear, tinted
+
+  var id: String { rawValue }
+
+  var title: String {
+    switch self {
+    case .default: "Default"
+    case .dark: "Dark"
+    case .clear: "Clear"
+    case .tinted: "Tinted"
+    }
+  }
+
+  /// The ground behind the preview: what a Dock or a Finder window would show.
+  var stage: Color {
+    switch self {
+    case .default: .clear
+    case .dark, .tinted: Color(white: 0.16)
+    case .clear: Color(red: 0.37, green: 0.5, blue: 0.66)
+    }
+  }
+
+  var captionStyle: Color { self == .default ? .secondary : .white.opacity(0.8) }
 }

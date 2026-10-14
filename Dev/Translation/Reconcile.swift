@@ -1591,11 +1591,12 @@ nonisolated enum Reconcile {
     key: String,
     state: TranslationState,
     project: Project,
-    context: ModelContext
+    context: ModelContext,
+    language: String? = nil
   ) -> Int {
     let userName = ProcessInfo.processInfo.fullUserName
     var touched = 0
-    for record in records(ofKey: key, in: project) {
+    for record in records(ofKey: key, in: project) where language == nil || record.language == language {
       guard let value = record.value,
             !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
         continue
