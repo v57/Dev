@@ -284,7 +284,10 @@
       return [
         "-AppleLanguages", "(\(locale), \(language))", "-AppleLocale", locale.replacingOccurrences(of: "-", with: "_"),
         "-ApplePersistenceIgnoreState", "YES",
-      ] + (appearance == .dark ? ["-AppleInterfaceStyle", "Dark"] : ["-NSRequiresAquaSystemAppearance", "YES"])
+        // `Light`, not `NSRequiresAquaSystemAppearance`: that opts the app out of dark mode for the whole launch, so
+        // a later scene switched to dark in place keeps light text views.
+        "-AppleInterfaceStyle", appearance == .dark ? "Dark" : "Light",
+      ]
     }
 
     /// The process `open -n` started: an instance of this bundle launched after `date`.
