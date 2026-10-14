@@ -393,7 +393,6 @@ final class SidebarViewModel {
     let catalogByRoot = await Self.discoverCatalogs(in: scans.flatMap(\.repos))
 
     let context = TranslationStore.shared.context
-    var firstID: PersistentIdentifier?
     var resolved: [Project] = []
     for item in dropped {
       let projects: [Project]
@@ -406,7 +405,6 @@ final class SidebarViewModel {
       case .catalog(let fileURL):
         projects = [resolveCatalogFileDrop(fileURL, in: context)]
       }
-      if firstID == nil { firstID = projects.first?.persistentModelID }
       resolved += projects
     }
     do {
@@ -417,6 +415,9 @@ final class SidebarViewModel {
         message: "Couldn't save the imported project: \(error.localizedDescription)")
       return nil
     }
+    // Read after the save: a new project's ID before it is temporary, and the
+    // rows never match it.
+    let firstID = resolved.first?.persistentModelID
     refresh()
     // The other v57 apps list the folder too.
     VaultProjects.shared.publish(resolved.compactMap(\.rootURL))
