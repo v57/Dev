@@ -4,6 +4,7 @@
 //
 
 import AppKit
+import ComponentKit
 import SwiftUI
 
 /// The VMs tool: the UTM virtual machines on this Mac, started and stopped from
@@ -248,14 +249,12 @@ struct VMsSidebarRow: View {
   @Environment(VMStore.self) private var store
 
   var body: some View {
-    HStack(spacing: 8) {
-      Label("Virtual Machines", systemImage: "desktopcomputer")
-      Spacer(minLength: 4)
+    SidebarRow(value: SidebarSelection.vms, "Virtual Machines", systemImage: "desktopcomputer") {
       if running > 0 {
-        Circle().fill(.green).frame(width: 7, height: 7)
-        Text("\(running) on")
-          .font(.caption)
-          .foregroundStyle(.secondary)
+        HStack(spacing: 4) {
+          StatusDot(hue: .green)
+          Text("\(running) on").foregroundStyle(.kitSecondary)
+        }
       }
     }
     .task { await store.refresh() }

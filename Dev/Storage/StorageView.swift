@@ -4,6 +4,7 @@
 //
 
 import AppKit
+import ComponentKit
 import SwiftUI
 
 // MARK: - Full Disk Access
@@ -217,29 +218,35 @@ struct StorageSidebarRow: View {
   @Environment(StorageStore.self) private var store
 
   var body: some View {
-    HStack(spacing: 8) {
-      Label("Storage", systemImage: "internaldrive")
-      Spacer(minLength: 4)
-      Text(status)
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .monospacedDigit()
-        .lineLimit(1)
+    SidebarRow(value: SidebarSelection.storage, "Storage") {
+      LiveIcon(systemImage: "internaldrive", hue: .gray, status: store.workStatus, size: 18)
+    } trailing: {
+      Text(store.sidebarStatus).foregroundStyle(.kitSecondary).lineLimit(1)
     }
-    .accessibilityElement(children: .combine)
     .accessibilityIdentifier("sidebar.storage")
   }
+}
 
-  private var status: String {
-    switch store.phase {
+extension StorageStore {
+  /// One line for the sidebar: what the scan found to free, or what the volume has free.
+  var sidebarStatus: String {
+    switch phase {
     case .scanning:
       return "Scanning…"
     case .cleaning:
       return "Cleaning…"
     case .idle:
-      let safe = store.recommendedBytes
-      if store.hasResults, safe > 0 { return "\(safe.byteString) to free" }
-      return "\(store.volumeAvailable.byteString) free"
+      let safe = recommendedBytes
+      if hasResults, safe > 0 { return "\(safe.byteString) to free" }
+      return "\(volumeAvailable.byteString) free"
+    }
+  }
+
+  /// A scan or a clean in flight: the row's icon carries it.
+  var workStatus: WorkStatus {
+    switch phase {
+    case .scanning, .cleaning: .working
+    case .idle: .idle
     }
   }
 }
