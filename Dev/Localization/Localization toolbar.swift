@@ -46,49 +46,31 @@ struct ControlsBar: ToolbarContent {
           .help("Read the catalog file again")
         }
         ToolGroup(iconOnly: true) {
-          Toggle(isOn: Binding(
-            get: { store.includeNonTranslatable },
-            set: { store.includeNonTranslatable = $0 })) {
-              Label("Non-translatable Keys", systemImage: "eye")
-            }
-            .help("Include the \(store.nonTranslatableCount) keys marked shouldTranslate = false (hidden by default)")
-          Toggle(isOn: Binding(
-            get: { store.showComments },
-            set: { store.setShowComments($0) })) {
-              Label("Comments", systemImage: "text.bubble")
-            }
-            .help("Show comment text under each source value")
-          Toggle(isOn: Binding(
-            get: { store.showLongest },
-            set: { store.setShowLongest($0) })) {
-              Label("Longest", systemImage: "ruler")
-            }
-            .help("Show the Longest column (longest value across all languages)")
+          Button("Non-translatable Keys", systemImage: "eye") {
+            withKitAnimation { store.includeNonTranslatable.toggle() }
+          }
+          .kitToolOn(store.includeNonTranslatable)
+          .accessibilityAddTraits(store.includeNonTranslatable ? .isSelected : [])
+          .help("Include the \(store.nonTranslatableCount) keys marked shouldTranslate = false (hidden by default)")
+          Button("Comments", systemImage: "text.bubble") {
+            withKitAnimation { store.setShowComments(!store.showComments) }
+          }
+          .kitToolOn(store.showComments)
+          .accessibilityAddTraits(store.showComments ? .isSelected : [])
+          .help("Show comment text under each source value")
+          Button("Longest", systemImage: "ruler") {
+            withKitAnimation { store.setShowLongest(!store.showLongest) }
+          }
+          .kitToolOn(store.showLongest)
+          .accessibilityAddTraits(store.showLongest ? .isSelected : [])
+          .help("Show the Longest column (longest value across all languages)")
           Button("Context Rules", systemImage: "text.book.closed") {
             store.openContextDocs()
           }
           .disabled(!store.isLoaded)
           .help("Edit the project context rules the translator follows — one rule per line, and deleting a line retracts it")
         }
-        .toggleStyle(ToolToggleStyle())
       }
-    }
-  }
-
-  /// A toggle as one of the group's tools: the accent glyph while on, the quiet slashed one while off.
-  struct ToolToggleStyle: ToggleStyle {
-    func makeBody(configuration: Configuration) -> some View {
-      Button {
-        withAnimation(.kit) {
-          configuration.isOn.toggle()
-        }
-      } label: {
-        configuration.label
-          .foregroundStyle(configuration.isOn ? AnyShapeStyle(Hue.accent.text) : AnyShapeStyle(.kitSecondary))
-          .symbolVariant(configuration.isOn ? .fill : .none.slash)
-          .contentTransition(.symbolEffect)
-      }
-      .accessibilityAddTraits(configuration.isOn ? .isSelected : [])
     }
   }
 }
