@@ -171,7 +171,6 @@ struct ContentView: View {
             selection: $model.projectTool,
             segments: DevTool.allCases.map { KitSegment($0.title, value: $0) }
           )
-          .kitSegmentedStyle(.capsule)
           .help("Switch between this project's tools (⌘1–⌘5)")
         }
       }
