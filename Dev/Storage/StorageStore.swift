@@ -6,6 +6,7 @@
 import AppKit
 import Foundation
 import Observation
+import UniformTypeIdentifiers
 
 /// The Storage tool's state: the last scan's items, a scan in flight, the
 /// selection, and cleaning. Owned once by ContentView so the sidebar row and
@@ -364,6 +365,73 @@ final class StorageStore {
     if let snapshot { save(snapshot) }
     phase = .idle
     self.report = report
+  }
+
+  // MARK: Export
+
+  /// The selection as Markdown, to review what Smart Scan picks: what is
+  /// picked by category with its tag, action and path, then what is not and
+  /// why (your data, locked, shown only, or simply unticked).
+  func selectionReport() -> String {
+    func cell(_ text: String) -> String {
+      text.replacingOccurrences(of: "|", with: "\\|").replacingOccurrences(of: "\n", with: " ")
+    }
+    func path(_ item: StorageItem) -> String {
+      guard !item.paths.isEmpty else { return "" }
+      let more = item.paths.count > 1 ? " +\(item.paths.count - 1) more" : ""
+      return "`\(cell(item.primaryPath.abbreviatingHome))`\(more)"
+    }
+    func table(_ items: [StorageItem], last: String, _ value: (StorageItem) -> String) -> [String] {
+      var lines: [String] = []
+      for category in StorageCategory.allCases {
+        let inCategory = items.filter { $0.category == category }.sorted { $0.bytes > $1.bytes }
+        guard !inCategory.isEmpty else { continue }
+        lines += ["", "### \(category.title) · \(inCategory.reduce(0) { $0 + $1.bytes }.byteString)", "",
+          "| Size | Item | Group | Tag | \(last) | Path |", "|---:|---|---|---|---|---|"]
+        lines += inCategory.map { item in
+          let title = cell(item.title) + (item.detail.map { " — " + cell($0) } ?? "")
+          return "| \(item.bytes.byteString) | \(title) | \(cell(item.group)) | \(item.safety.title) | \(cell(value(item))) | \(path(item)) |"
+        }
+      }
+      return lines
+    }
+
+    let picked = selectedItems
+    let pickedIDs = Set(picked.map(\.id))
+    let rest = items.filter { !pickedIDs.contains($0.id) }
+    let recommended = recommendedItems
+    var lines = ["# Storage selection", ""]
+    if let lastScan {
+      lines.append("Scanned \(lastScan.formatted(date: .abbreviated, time: .shortened))"
+        + " · Full Disk Access \(scannedWithFullDiskAccess ? "on" : "off")"
+        + " · \(volumeAvailable.byteString) free of \(volumeTotal.byteString)  ")
+    }
+    lines.append("Picked: \(picked.count) items · \(selectedBytes.byteString)"
+      + " · Smart Scan recommends \(recommended.count) items · \(recommendedBytes.byteString)")
+    lines += ["", "## Picked"] + table(picked, last: "Action") { $0.cleanup.verb }
+    lines += ["", "## Not picked"] + table(rest, last: "Why not") { item in
+      if let reason = item.lockReason { return "Locked: " + reason }
+      if case .revealOnly(let reason) = item.cleanup { return "Shown only: " + reason }
+      if item.safety == .data { return "Your data" }
+      return "Unticked"
+    }
+    return lines.joined(separator: "\n") + "\n"
+  }
+
+  /// Asks where to save the selection report and writes it there.
+  func exportSelection() {
+    let panel = NSSavePanel()
+    panel.title = "Export Selection"
+    panel.nameFieldStringValue = "Storage selection \(Date().formatted(.iso8601.year().month().day())).md"
+    panel.allowedContentTypes = [.init(filenameExtension: "md") ?? .plainText]
+    panel.directoryURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+    guard panel.runModal() == .OK, let url = panel.url else { return }
+    do {
+      try selectionReport().write(to: url, atomically: true, encoding: .utf8)
+      NSWorkspace.shared.activateFileViewerSelecting([url])
+    } catch {
+      NSAlert(error: error).runModal()
+    }
   }
 
   // MARK: Finder

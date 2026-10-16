@@ -161,6 +161,12 @@ private struct StorageToolbar: ToolbarContent {
       case .idle:
         if store.hasResults {
           Button {
+            store.exportSelection()
+          } label: {
+            Label("Export Selection…", systemImage: "square.and.arrow.up")
+          }
+          .help("Saves what is picked, and what is not and why, as a Markdown report")
+          Button {
             store.scanSystem()
           } label: {
             Label("Scan System Folders…", systemImage: "lock.shield")
