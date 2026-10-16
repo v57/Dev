@@ -3,6 +3,7 @@
 //  Dev
 //
 
+import ComponentKit
 import SwiftUI
 
 /// The first screen, while there are no projects: one large drop area with
@@ -13,32 +14,17 @@ struct WelcomeView: View {
 
   var body: some View {
     VStack(spacing: 28) {
-      VStack(spacing: 14) {
-        Image(systemName: "folder.badge.plus")
-          .font(.system(size: 52, weight: .regular))
-          .foregroundStyle(Color.accentColor)
-        Text("Add Your Projects")
-          .font(.largeTitle.weight(.bold))
-        Text("Drop a project folder here. Drop a folder of repos, like ~/Developer, and Dev adds each git repository inside it.")
-          .font(.title3)
-          .foregroundStyle(.secondary)
-          .multilineTextAlignment(.center)
-          .frame(maxWidth: 440)
+      EmptyState(
+        systemImage: "folder.badge.plus", title: "Add Your Projects",
+        message: "Drop a project folder here. Drop a folder of repos, like ~/Developer, and Dev adds each git repository inside it."
+      ) {
         Button("Choose Folder…") { model.addProjectsFromPanel() }
-          .buttonStyle(.borderedProminent)
-          .controlSize(.large)
-          .padding(.top, 6)
+          .buttonStyle(.kitPrimary)
       }
-      .padding(.horizontal, 40)
-      .padding(.vertical, 40)
+      .fixedSize(horizontal: false, vertical: true)
       .frame(width: 600)
-      .background(
-        RoundedRectangle(cornerRadius: 28)
-          .fill(isTargeted ? Color.accentColor.opacity(0.06) : Color.clear))
-      .overlay(
-        RoundedRectangle(cornerRadius: 28)
-          .strokeBorder(isTargeted ? Color.accentColor : Color.secondary.opacity(0.3),
-                        style: StrokeStyle(lineWidth: 2, dash: [8])))
+      .background(.kitField, in: RoundedRectangle(cornerRadius: KitMetrics.radiusOverlay, style: .continuous))
+      .kitDropTarget(isTargeted, cornerRadius: KitMetrics.radiusOverlay)
       .dropDestination(for: URL.self) { urls, _ in
         Task {
           if let first = await model.importDroppedURLs(urls) { model.selection = .project(first) }
@@ -48,33 +34,31 @@ struct WelcomeView: View {
         isTargeted = $0
       }
 
-      HStack(alignment: .top, spacing: 14) {
-        tile("Localization", "globe", "Translate the String Catalog with the model you choose, then review.")
-        tile("App Icon", "app.badge", "Make an icon from an SF Symbol and export every size, plus a Liquid Glass file.")
-        tile("Workflows", "shippingbox", "Build, test, capture screenshots, notarize and publish, on this Mac and its VMs.")
+      HStack(alignment: .top, spacing: KitMetrics.gutter) {
+        tile("Localization", "globe", .teal, "Translate the String Catalog with the model you choose, then review.")
+        tile("App Icon", "app.badge", .pink, "Make an icon from an SF Symbol and export every size, plus a Liquid Glass file.")
+        tile("Workflows", "shippingbox", .indigo, "Build, test, capture screenshots, notarize and publish, on this Mac and its VMs.")
       }
       .frame(width: 600)
 
       Text("Storage and Virtual Machines work without a project. Find them in the sidebar.")
-        .font(.callout)
-        .foregroundStyle(.secondary)
+        .kitFont(.callout)
+        .foregroundStyle(.kitSecondary)
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .kitPane()
   }
 
-  private func tile(_ title: String, _ symbol: String, _ text: String) -> some View {
+  private func tile(_ title: String, _ symbol: String, _ hue: Hue, _ text: String) -> some View {
     VStack(alignment: .leading, spacing: 6) {
-      Image(systemName: symbol)
-        .font(.title2)
-        .foregroundStyle(Color.accentColor)
-      Text(title).font(.headline)
+      RichHeader(title, systemImage: symbol, hue: hue)
       Text(text)
-        .font(.callout)
-        .foregroundStyle(.secondary)
+        .kitFont(.callout)
+        .foregroundStyle(.kitSecondary)
         .fixedSize(horizontal: false, vertical: true)
+        .padding([.horizontal, .bottom], 6)
     }
-    .padding(16)
     .frame(maxWidth: .infinity, alignment: .topLeading)
-    .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 16))
+    .kitCard()
   }
 }

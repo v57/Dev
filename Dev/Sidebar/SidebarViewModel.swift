@@ -15,7 +15,7 @@ import UniformTypeIdentifiers
 /// The tools a project opens in, in the order of the toolbar's tab control.
 /// App Icon also opens without a project (File ▸ New Icon), where it exports
 /// into a folder the reader picks.
-enum DevTool: String, Hashable, CaseIterable, Identifiable {
+nonisolated enum DevTool: String, Hashable, CaseIterable, Identifiable, Sendable {
   case overview
   case localization
   case icon
@@ -49,7 +49,7 @@ enum DevTool: String, Hashable, CaseIterable, Identifiable {
 /// What the sidebar selection points at. THE single source of truth for
 /// 'which project is selected' — the projectless bottom bar and the
 /// project-bound tools read and write exactly this.
-enum SidebarSelection: Hashable {
+nonisolated enum SidebarSelection: Hashable, Sendable {
   /// A tool opened without a project (File ▸ New Icon).
   case tool(DevTool)
   /// A directory/catalog project from the Projects section.

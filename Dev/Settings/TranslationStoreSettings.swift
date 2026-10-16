@@ -3,6 +3,7 @@
 //  Dev
 //
 
+import ComponentKit
 import SwiftUI
 
 // MARK: - Settings ▸ Advanced: Translation Store
@@ -22,23 +23,17 @@ struct ClearTranslationStoreSection: View {
 
   var body: some View {
     let context = AppContext.shared
-    VStack(alignment: .leading, spacing: 8) {
-      HStack {
-        Text("Everything Dev learned from your reviews")
-          .fontWeight(.medium)
-        Spacer()
-        Button("Clear Translation Store…", role: .destructive) { prompt = .confirm }
-          .disabled(blocker != nil || context.localization == nil)
-      }
-      Text(blocker ?? "Clearing deletes the edit journal, context documents, translation memory and saved run positions for every project. Your project list and every .xcstrings file stay.")
-        .font(.callout)
-        .foregroundStyle(blocker == nil ? Color.secondary : Color.orange)
-        .fixedSize(horizontal: false, vertical: true)
-      if context.localization == nil {
-        Text("Open the main window to clear the store.")
-          .font(.callout)
-          .foregroundStyle(.secondary)
-      }
+    FormRow(
+      "Everything Dev learned from your reviews",
+      help: context.localization == nil
+        ? "Open the main window to clear the store."
+        : "Clearing deletes the edit journal, context documents, translation memory and saved run positions for every project. Your project list and every .xcstrings file stay.",
+      systemImage: "brain", hue: .purple, error: blocker
+    ) {
+      Button("Clear…", role: .destructive) { prompt = .confirm }
+        .buttonStyle(.kit)
+        .disabled(blocker != nil || context.localization == nil)
+        .help("Clear Translation Store…")
     }
     .onAppear { refreshBlocker() }
     .alert(

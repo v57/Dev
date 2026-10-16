@@ -6,6 +6,7 @@
 //
 
 import AppKit
+import ComponentKit
 import SwiftUI
 
 struct IconSettings: Hashable {
@@ -43,12 +44,15 @@ struct CreateIconView: View {
   var exportRootURL: URL?
 
   var body: some View {
-    @Bindable var create = create
     HStack(spacing: 0) {
-      controls.padding(20).frame(width: 300, alignment: .leading)
+      ScrollView {
+        controls.padding(KitMetrics.gutter * 2)
+      }
+      .frame(width: 300)
       Divider()
       previewPane.frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+    .kitPane()
     .task(id: create.settings) {
       guard create.settings.preview else { return }
       await generateImage()
@@ -65,140 +69,188 @@ struct CreateIconView: View {
 
   var controls: some View {
     @Bindable var create = create
-    return Form {
-      Section("Symbol") {
-        TextField("SF Symbol", text: $create.settings.symbol)
+    return VStack(alignment: .leading, spacing: 18) {
+      FormCard("Symbol") {
+        FormRow("SF Symbol", systemImage: "square.grid.2x2", hue: .indigo,
+                field: TextField("SF Symbol", text: $create.settings.symbol))
         Menu("Suggestions") {
           ForEach(["hammer.fill", "cylinder.split.1x2", "star.fill",
                    "drop.fill", "bolt.fill", "book.fill", "hexagon.fill"], id: \.self) { s in
             Button(s) { create.settings.symbol = s }
           }
         }
+        .buttonStyle(.kit)
+        .fixedSize()
+        .padding(12)
       }
 
-      Section("Scale") {
-        Slider(value: $create.settings.scale, in: 0.5...2.0, step: 0.25) {
-          Text("Scale")
-        } minimumValueLabel: {
-          Text("50%")
-        } maximumValueLabel: {
-          Text("200%")
+      FormCard("Scale") {
+        FormRow("Scale", help: "\(Int(create.settings.scale * 100))%",
+                systemImage: "arrow.up.left.and.arrow.down.right", hue: .gray) {
+          KitSlider("Scale", value: $create.settings.scale, in: 0.5...2.0, step: 0.25) { "\(Int($0 * 100))%" }
+            .frame(width: 120)
         }
-        Text("\(Int(create.settings.scale * 100))%")
       }
 
-      Section("Background") {
-        Toggle("Gradient", isOn: $create.settings.gradient)
-        ColorPicker("Top", selection: $create.settings.primary)
-        ColorPicker("Bottom", selection: $create.settings.secondary)
-          .disabled(!create.settings.gradient)
+      FormCard("Background") {
+        FormRow("Gradient", systemImage: "drop.fill", hue: .pink) {
+          Toggle("Gradient", isOn: $create.settings.gradient).labelsHidden().toggleStyle(.kitSwitch)
+        }
+        FormRow("Top", systemImage: "drop.fill", hue: .pink) {
+          ColorPicker("Top", selection: $create.settings.primary).labelsHidden()
+        }
+        FormRow("Bottom", systemImage: "drop.fill", hue: .pink) {
+          ColorPicker("Bottom", selection: $create.settings.secondary).labelsHidden()
+        }
+        .disabled(!create.settings.gradient)
       }
 
-      Section("Glyph") {
-        ColorPicker("Color", selection: $create.settings.glyph)
+      FormCard("Glyph") {
+        FormRow("Color", systemImage: "drop.fill", hue: .pink) {
+          ColorPicker("Color", selection: $create.settings.glyph).labelsHidden()
+        }
       }
 
-      Section("Quantize") {
-        Picker("Palette", selection: $create.settings.palette) {
-          ForEach([2, 4, 8, 16], id: \.self) { n in
-            Text("\(n) colors").tag(n)
+      FormCard("Quantize") {
+        FormRow("Palette", systemImage: "square.grid.2x2", hue: .purple) {
+          Picker("Palette", selection: $create.settings.palette) {
+            ForEach([2, 4, 8, 16], id: \.self) { n in
+              Text("\(n) colors").tag(n)
+            }
           }
-        }
-        .pickerStyle(.menu)
-      }
-
-      Section("Preview") {
-        Toggle("Generated PNG", isOn: $create.settings.preview)
-        if create.settings.preview && create.resultSize > 0 {
-          Text("\(create.resultSize) bytes").font(.caption).foregroundStyle(.secondary)
+          .pickerStyle(.menu)
+          .labelsHidden()
+          .fixedSize()
         }
       }
 
-      Section {
+      FormCard("Preview") {
+        FormRow(
+          "Generated PNG",
+          help: create.settings.preview && create.resultSize > 0
+            ? "\(create.resultSize) bytes" : "Shows the quantized PNG instead of the live view",
+          systemImage: "photo", hue: .blue
+        ) {
+          Toggle("Generated PNG", isOn: $create.settings.preview).labelsHidden().toggleStyle(.kitSwitch)
+        }
+      }
+
+      VStack(alignment: .leading, spacing: 6) {
         Button {
           Task { await exportIconSet() }
         } label: {
-          if isExporting {
-            ProgressView().controlSize(.small)
-          } else {
-            Text(exportRootURL == nil ? "Export AppIcon.appiconset…" : "Export to Project")
-          }
+          Label(
+            exportRootURL == nil ? "Export AppIcon.appiconset…" : "Export to Project",
+            systemImage: "square.and.arrow.up")
         }
+        .buttonStyle(.kitPrimary)
+        .status(isExporting ? .working : .idle)
         .disabled(isExporting)
         if let root = exportRootURL {
           Text("Writes \(root.lastPathComponent)/Assets.xcassets/AppIcon.appiconset")
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            .kitFont(.caption)
             .lineLimit(2)
             .truncationMode(.middle)
             .help(root.appendingPathComponent("Assets.xcassets").appendingPathComponent("AppIcon.appiconset").path)
         }
       }
+      .padding(.horizontal, 12)
     }
-    .formStyle(.grouped)
   }
 
   // MARK: - preview
 
   var previewPane: some View {
-    GeometryReader { view in
-      let side = min(view.size.width * 0.7, view.size.height * 0.55)
-      VStack(spacing: 16) {
-        Picker("Appearance", selection: $appearance) {
-          ForEach(IconAppearance.allCases) { Text($0.title).tag($0) }
-        }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .fixedSize()
-        .padding(.top, 16)
-        Spacer(minLength: 0)
-        if create.settings.preview, appearance == .default, let result = create.result {
-          Image(nsImage: result)
-            .resizable().interpolation(.high)
-            .frame(width: side, height: side)
-            .clipShape(RoundedRectangle(cornerRadius: side * 0.22))
-            .shadow(color: .black.opacity(0.25), radius: 20, y: 10)
-        } else {
-          liveIcon.frame(width: side, height: side)
-            .shadow(color: .black.opacity(0.25), radius: 20, y: 10)
-        }
-        Spacer(minLength: 0)
+    ScrollView {
+      VStack(spacing: 24) {
         HStack(alignment: .bottom, spacing: 22) {
+          Group {
+            if create.settings.preview, appearance == .default, let result = create.result {
+              Image(nsImage: result)
+                .resizable().interpolation(.high)
+                .frame(width: 232, height: 232)
+                .clipShape(RoundedRectangle(cornerRadius: 232 * 0.22))
+            } else {
+              liveIcon(appearance).frame(width: 232, height: 232)
+            }
+          }
+          .shadow(color: .black.opacity(0.25), radius: 20, y: 10)
+          .padding(.trailing, 14)
           ForEach([128, 64, 32, 16], id: \.self) { size in
             VStack(spacing: 6) {
-              liveIcon.frame(width: CGFloat(size), height: CGFloat(size))
-              Text("\(size) pt").font(.caption).foregroundStyle(appearance.captionStyle)
+              liveIcon(appearance).frame(width: CGFloat(size), height: CGFloat(size))
+              Text("\(size) pt").kitFont(.caption)
             }
           }
         }
-        // The icon among others in a Dock.
-        HStack(spacing: 10) {
-          ForEach([Color.blue, Color.white, Color.mint], id: \.self) { color in
-            RoundedRectangle(cornerRadius: 10).fill(color).frame(width: 44, height: 44)
-          }
-          liveIcon.frame(width: 44, height: 44)
-          RoundedRectangle(cornerRadius: 10).fill(Color.orange).frame(width: 44, height: 44)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22))
-        .accessibilityLabel("Dock preview")
-        Text(create.settings.preview ? "Rendered PNG" : "Live preview")
-          .font(.caption).foregroundStyle(appearance.captionStyle)
-          .padding(.bottom, 16)
+        .padding(.top, 36)
+        .frame(maxWidth: .infinity)
+        appearances
       }
-      .frame(maxWidth: .infinity, maxHeight: .infinity)
-      .background(appearance.stage)
+      .padding(KitMetrics.gutter * 3)
     }
   }
 
-  var liveIcon: some View {
+  /// The four appearances as cards on one field track, each showing the icon in its Dock; the one the big
+  /// preview shows is raised.
+  private var appearances: some View {
+    LazyVGrid(columns: [GridItem(.flexible(), spacing: 4), GridItem(.flexible(), spacing: 4)], spacing: 4) {
+      ForEach(IconAppearance.allCases) { item in
+        Button {
+          withKitAnimation { appearance = item }
+        } label: {
+          VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+              Tile(systemImage: item.systemImage, hue: item == appearance ? .accent : .gray, size: 18, style: .solid)
+              VStack(alignment: .leading, spacing: 0) {
+                Text(item.title).kitFont(.headline)
+                Text(item.subtitle).kitFont(.caption)
+              }
+            }
+            .padding(.horizontal, 2)
+            dockScene(item)
+          }
+          .padding(6)
+          .contentShape(Rectangle())
+          .background {
+            if item == appearance { Color.clear.kitSurface(.raised, cornerRadius: KitMetrics.radiusLarge) }
+          }
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(item == appearance ? .isSelected : [])
+      }
+    }
+    .padding(4)
+    .kitSurface(.field, cornerRadius: KitMetrics.radiusXL)
+    .frame(maxWidth: 680)
+  }
+
+  /// The icon among others in a Dock, on the ground the appearance stands on.
+  private func dockScene(_ item: IconAppearance) -> some View {
+    HStack(spacing: 8) {
+      ForEach([Color.blue, Color.white], id: \.self) { color in
+        RoundedRectangle(cornerRadius: 8).fill(color).frame(width: 36, height: 36)
+      }
+      liveIcon(item).frame(width: 36, height: 36)
+      ForEach([Color.mint, Color.orange], id: \.self) { color in
+        RoundedRectangle(cornerRadius: 8).fill(color).frame(width: 36, height: 36)
+      }
+    }
+    .padding(6)
+    .background(item.dock, in: RoundedRectangle(cornerRadius: 14))
+    .padding(.bottom, 10)
+    .frame(maxWidth: .infinity, minHeight: 128, alignment: .bottom)
+    .background(item.stage, in: RoundedRectangle(cornerRadius: KitMetrics.radius, style: .continuous))
+    .accessibilityLabel("\(item.title) Dock preview")
+  }
+
+  func liveIcon(_ appearance: IconAppearance) -> some View {
     GeometryReader { view in
       ZStack {
-        appearanceBackground
+        appearanceBackground(appearance)
         Image(systemName: create.settings.symbol)
           .font(.system(size: view.size.width * 0.5 * create.settings.scale))
-          .foregroundStyle(glyphStyle)
+          .foregroundStyle(glyphStyle(appearance))
           .shadow(radius: view.size.width > 100 ? 16 : 2)
       }
       .clipShape(RoundedRectangle(cornerRadius: view.size.width * 0.225))
@@ -213,7 +265,7 @@ struct CreateIconView: View {
   /// The background for the appearance the preview shows: the icon's own in
   /// Default, near black in Dark, frosted in Clear, a dark tint in Tinted.
   @ViewBuilder
-  var appearanceBackground: some View {
+  func appearanceBackground(_ appearance: IconAppearance) -> some View {
     switch appearance {
     case .default: background
     case .dark: Rectangle().fill(Color(white: 0.11))
@@ -222,7 +274,7 @@ struct CreateIconView: View {
     }
   }
 
-  var glyphStyle: Color {
+  func glyphStyle(_ appearance: IconAppearance) -> Color {
     switch appearance {
     case .default: create.settings.glyph.opacity(0.8)
     case .dark: create.settings.primary
@@ -327,14 +379,43 @@ enum IconAppearance: String, CaseIterable, Identifiable {
     }
   }
 
-  /// The ground behind the preview: what a Dock or a Finder window would show.
-  var stage: Color {
+  /// The line under the title on its card.
+  var subtitle: String {
     switch self {
-    case .default: .clear
-    case .dark, .tinted: Color(white: 0.16)
-    case .clear: Color(red: 0.37, green: 0.5, blue: 0.66)
+    case .default: "Light Dock"
+    case .dark: "Dark Dock"
+    case .clear: "Glass on a photo"
+    case .tinted: "Monochrome"
     }
   }
 
-  var captionStyle: Color { self == .default ? .secondary : .white.opacity(0.8) }
+  var systemImage: String {
+    switch self {
+    case .default: "sun.max"
+    case .dark: "moon"
+    case .clear: "eye"
+    case .tinted: "circle.lefthalf.filled"
+    }
+  }
+
+  /// The ground behind the Dock: a desktop in that appearance.
+  var stage: LinearGradient {
+    let colors: [Color] =
+      switch self {
+      case .default: [Color(red: 0.82, green: 0.87, blue: 0.95), Color(red: 0.95, green: 0.9, blue: 0.85)]
+      case .dark: [Color(red: 0.13, green: 0.15, blue: 0.27), Color(red: 0.25, green: 0.18, blue: 0.3)]
+      case .clear: [Color(red: 0.4, green: 0.52, blue: 0.78), Color(red: 0.78, green: 0.55, blue: 0.72)]
+      case .tinted: [Color(white: 0.2), Color(white: 0.3)]
+      }
+    return LinearGradient(colors: colors, startPoint: .top, endPoint: .bottom)
+  }
+
+  /// The Dock's own glass in that appearance.
+  var dock: Color {
+    switch self {
+    case .default: .white.opacity(0.7)
+    case .clear: .white.opacity(0.3)
+    case .dark, .tinted: .black.opacity(0.45)
+    }
+  }
 }

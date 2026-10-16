@@ -5,6 +5,7 @@
 
 import Foundation
 import Observation
+import ComponentKit
 import SwiftUI
 
 /// The app's end of the MCP server: it answers the requests the `Dev --mcp`
@@ -113,19 +114,18 @@ struct AgentsSettingsView: View {
   }
 
   var body: some View {
-    Form {
-      Section("MCP Server") {
-        Toggle(isOn: $enabled) {
-          Text("Let agents use Dev")
-          Text("Agents can set up screenshot framing and workflows, and run them.")
+    VStack(alignment: .leading, spacing: 18) {
+      FormCard("MCP Server") {
+        FormRow(
+          "Let agents use Dev", help: "Agents can set up screenshot framing and workflows, and run them.",
+          systemImage: "powerplug", hue: .indigo
+        ) {
+          Toggle("Let agents use Dev", isOn: $enabled).labelsHidden().toggleStyle(.kitSwitch)
         }
-        HStack(spacing: 8) {
-          Circle().fill(statusColor).frame(width: 8, height: 8)
-          Text(status)
-        }
-        HStack {
+        FormRow("Status", help: status, systemImage: "dot.radiowaves.left.and.right", hue: statusHue)
+        FormRow("Add Dev to Claude Code", systemImage: "terminal", hue: .gray, field: HStack {
           Text(command)
-            .font(.system(.callout, design: .monospaced))
+            .kitFont(.mono)
             .textSelection(.enabled)
             .lineLimit(2)
           Spacer()
@@ -134,36 +134,38 @@ struct AgentsSettingsView: View {
             NSPasteboard.general.setString(command, forType: .string)
             copied = true
           }
-        }
+          .buttonStyle(.kitPlain)
+        })
       }
-      Section("What Agents May Do") {
+      FormCard(
+        "What Agents May Do",
+        footer: "Every change an agent makes shows on the screen it changed. Publishing steps always stop and ask unless set to Allow."
+      ) {
         ForEach(AgentPermissions.Action.allCases) { action in
-          Picker(action.title, selection: Binding(
-            get: { levels[action] ?? AgentPermissions.level(action) },
-            set: { level in
-              levels[action] = level
-              UserDefaults.standard.set(level.rawValue, forKey: action.key)
-            })
-          ) {
-            ForEach(AgentPermissions.Level.allCases) { Text($0.title).tag($0) }
+          FormRow(action.title, systemImage: "checkmark.shield", hue: .gray) {
+            Picker(action.title, selection: Binding(
+              get: { levels[action] ?? AgentPermissions.level(action) },
+              set: { level in
+                levels[action] = level
+                UserDefaults.standard.set(level.rawValue, forKey: action.key)
+              })
+            ) {
+              ForEach(AgentPermissions.Level.allCases) { Text($0.title).tag($0) }
+            }
+            .labelsHidden()
+            .fixedSize()
           }
         }
-        Text("Every change an agent makes shows on the screen it changed. Publishing steps always stop and ask unless set to Allow.")
-          .font(.callout)
-          .foregroundStyle(.secondary)
       }
-      Section("Recent Agent Activity") {
+      FormCard("Recent Agent Activity") {
         if log.isEmpty {
-          Text("Nothing yet").foregroundStyle(.secondary)
+          FormRow("Nothing yet", systemImage: "clock", hue: .gray)
         }
         ForEach(log.prefix(8), id: \.self) { line in
-          Text(line).font(.callout)
+          FormRow(line, systemImage: "clock", hue: .gray)
         }
       }
     }
-    .formStyle(.grouped)
-    .frame(minHeight: 460)
-    .disabled(false)
     .onAppear {
       log = UserDefaults.standard.stringArray(forKey: AgentPermissions.logKey) ?? []
     }
@@ -178,8 +180,8 @@ struct AgentsSettingsView: View {
     return "Ready · \(client) used Dev \(lastSeen.formatted(.relative(presentation: .named)))"
   }
 
-  private var statusColor: Color {
-    guard enabled else { return .secondary }
+  private var statusHue: Hue {
+    guard enabled else { return .gray }
     if let lastSeen, Date().timeIntervalSince(lastSeen) < 600 { return .green }
     return .blue
   }

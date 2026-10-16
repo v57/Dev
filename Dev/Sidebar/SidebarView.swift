@@ -5,6 +5,7 @@
 //  Created by Dmitry on 09.09.26.
 //
 
+import ComponentKit
 import SwiftUI
 
 /// Sidebar column of the split view, in the order the reader uses it:
@@ -12,8 +13,9 @@ import SwiftUI
 ///    with the count of strings waiting for review;
 ///  - Tools: what works without a project (Storage, Virtual Machines);
 ///  - Localization Servers.
-/// The + menu at the foot adds a project or a server, so nothing depends on
-/// dragging. Each row writes the one selection the detail pane routes.
+/// Each section is a kit card; the + in a section's header and the + menu in the bottom bar
+/// add a project or a server, so nothing depends on dragging. Each row writes the one
+/// selection the detail pane routes.
 struct SidebarView: View {
   let model: SidebarViewModel
 
@@ -23,51 +25,36 @@ struct SidebarView: View {
   @Environment(LocalizationStore.self) private var localization
   /// The Localization Servers this app works against, and their last check.
   @Environment(ServerStore.self) private var servers
+  /// The Storage tool's last scan: the Tools section sums it up.
+  @Environment(StorageStore.self) private var storage
   /// Which server the form sheet is adding or editing (nil = no sheet). Owned
   /// here so the + menu, the empty-state row and a row's Edit… all open the
   /// SAME sheet.
   @State private var serverSheet: ServerSheet?
+  /// The bottom bar's search: it narrows the Projects section by name.
+  @State private var search = ""
 
   var body: some View {
     @Bindable var model = model
-    List(selection: $model.selection) {
-      Section("Projects") {
-        if model.projects.isEmpty {
-          dropHintRow
-        } else {
-          ForEach(model.projects) { row in
-            NavigationLink(value: SidebarSelection.project(row.id)) {
-              ProjectRow(row: row)
-            }
-            .contextMenu {
-              if let root = row.rootURL {
-                Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([root]) }
-                Divider()
-              }
-              Button("Remove Project", role: .destructive) {
-                model.removeProject(id: row.id, localization: localization)
-              }
-            }
-          }
-        }
-      }
-      Section("Tools") {
-        NavigationLink(value: SidebarSelection.storage) {
-          StorageSidebarRow()
-        }
-        NavigationLink(value: SidebarSelection.vms) {
-          VMsSidebarRow()
-        }
+    KitSidebar(selection: $model.selection, searchText: $search, searchPrompt: "Search Projects") {
+      projectsSection
+      KitSection("Tools", meta: storage.sidebarStatus, systemImage: "wrench.and.screwdriver", hue: .orange) {
+        StorageSidebarRow()
+        VMsSidebarRow()
       }
       ServersSidebarSection(
         store: servers,
         selection: $model.selection) { sheet in
           serverSheet = sheet
         }
-    }
-    .listStyle(.sidebar)
-    .safeAreaInset(edge: .bottom, spacing: 0) {
-      bottomBar
+    } bottomBar: {
+      Menu {
+        Button("Add Project…") { model.addProjectsFromPanel() }
+        Button("Add Localization Server…") { serverSheet = .add }
+      } label: {
+        Label("Add", systemImage: "plus")
+      }
+      .help("Add a project or a Localization Server")
     }
     .sheet(item: $serverSheet) { sheet in
       switch sheet {
@@ -103,14 +90,7 @@ struct SidebarView: View {
     } isTargeted: {
       model.isDropTargeted = $0
     }
-    .overlay {
-      if model.isDropTargeted {
-        RoundedRectangle(cornerRadius: 8)
-          .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 2, dash: [6]))
-          .padding(6)
-          .allowsHitTesting(false)
-      }
-    }
+    .kitDropTarget(model.isDropTargeted, cornerRadius: KitMetrics.radiusCard)
     .sheet(isPresented: Binding(
       get: { !model.importSuggestions.isEmpty },
       set: { if !$0 { model.importSuggestions = [] } }
@@ -139,41 +119,60 @@ struct SidebarView: View {
     }
   }
 
-  /// The foot of the sidebar: one + menu for everything the sidebar lists.
-  private var bottomBar: some View {
-    HStack(spacing: 4) {
-      Menu {
-        Button("Add Project…") { model.addProjectsFromPanel() }
-        Button("Add Localization Server…") { serverSheet = .add }
-      } label: {
-        Image(systemName: "plus")
+  /// The Projects card: one row per project (narrowed by the search), or the drop hint.
+  private var projectsSection: some View {
+    let shown = search.isEmpty
+      ? model.projects
+      : model.projects.filter { $0.name.localizedCaseInsensitiveContains(search) }
+    return KitSection("Projects", meta: projectsMeta, systemImage: "folder", hue: .blue) {
+      if model.projects.isEmpty {
+        dropHintRow
+      } else {
+        ForEach(shown) { row in
+          ProjectRow(row: row)
+            .contextMenu {
+              if let root = row.rootURL {
+                Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([root]) }
+                Divider()
+              }
+              Button("Remove Project", role: .destructive) {
+                model.removeProject(id: row.id, localization: localization)
+              }
+            }
+        }
       }
-      .menuStyle(.borderlessButton)
-      .menuIndicator(.visible)
-      .fixedSize()
-      .help("Add a project or a Localization Server")
-      Spacer()
+    } accessory: {
+      Button("Add Project…", systemImage: "plus") { model.addProjectsFromPanel() }
+        .buttonStyle(.kitIcon)
+        .help("Add a project folder")
     }
-    .padding(.horizontal, 12)
-    .padding(.vertical, 8)
+  }
+
+  /// "1 project · DemoApp": how many, and which one is open.
+  private var projectsMeta: [String] {
+    let count = model.projects.count
+    guard count > 0 else { return ["Drop a folder here"] }
+    var parts = ["\(count) project\(count == 1 ? "" : "s")"]
+    if case .project(let id) = model.selection, let row = model.projectRow(id: id) { parts.append(row.name) }
+    return parts
   }
 
   /// Empty Projects section: still a drop target, so the hint invites the
-  /// one gesture that fills it, and the + menu offers the panel.
+  /// one gesture that fills it, and the + offers the panel.
   private var dropHintRow: some View {
     VStack(spacing: 6) {
       Image(systemName: "folder.badge.plus")
         .font(.title3)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(.kitSecondary)
       Text("Drop project folders here")
-        .font(.callout)
-        .foregroundStyle(.secondary)
+        .kitFont(.callout)
+        .foregroundStyle(.kitSecondary)
     }
     .frame(maxWidth: .infinity)
     .padding(.vertical, 12)
     .overlay(
-      RoundedRectangle(cornerRadius: 10)
-        .strokeBorder(.quaternary, style: StrokeStyle(lineWidth: 1.5, dash: [5])))
+      RoundedRectangle(cornerRadius: KitMetrics.radius, style: .continuous)
+        .strokeBorder(.kitBorder, style: StrokeStyle(lineWidth: 1.5, dash: [5])))
   }
 }
 
@@ -185,20 +184,11 @@ private struct ProjectRow: View {
   @AppStorage(SidebarPreferences.showReviewBadge) private var showsReviewBadge = true
 
   var body: some View {
-    HStack(spacing: 8) {
+    SidebarRow(value: SidebarSelection.project(row.id), row.name) {
       thumbnail
-        .frame(width: 20, height: 20)
-      Text(row.name)
-        .lineLimit(1)
-      Spacer(minLength: 4)
+    } trailing: {
       if showsReviewBadge, row.needsReview > 0 {
-        Text(row.needsReview, format: .number.notation(.compactName))
-          .font(.caption.weight(.semibold))
-          .monospacedDigit()
-          .padding(.horizontal, 6)
-          .padding(.vertical, 1)
-          .background(Color.orange.opacity(0.18), in: Capsule())
-          .foregroundStyle(Color.orange)
+        Count(row.needsReview.formatted(.number.notation(.compactName)), .attention)
           .help("\(row.needsReview) strings need review")
       }
     }
@@ -211,10 +201,9 @@ private struct ProjectRow: View {
         .resizable()
         .interpolation(.high)
         .aspectRatio(contentMode: .fit)
+        .frame(width: 18, height: 18)
     } else {
-      Image(systemName: "folder")
-        .foregroundStyle(.secondary)
+      RowTile(systemImage: "folder", hue: .blue)
     }
   }
 }
-

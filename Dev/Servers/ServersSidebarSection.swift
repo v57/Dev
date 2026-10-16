@@ -3,6 +3,7 @@
 //  Dev
 //
 
+import ComponentKit
 import SwiftUI
 
 /// What the servers sheet is doing: adding one, or editing an existing row.
@@ -35,35 +36,46 @@ struct ServersSidebarSection: View {
   /// Asks before removing a server that has its own stored key.
   @State private var pendingRemoval: ServerRow?
 
+  /// "2 servers · 1 online", or "None connected".
+  private var meta: [String] {
+    let count = store.servers.count
+    guard count > 0 else { return ["None connected"] }
+    let online = store.servers.filter { store.statuses[$0.id]?.isOnline == true }.count
+    return ["\(count) server\(count == 1 ? "" : "s")", "\(online) online"]
+  }
+
   var body: some View {
-    Section("Localization Servers") {
+    KitSection("Localization Servers", meta: meta, systemImage: "server.rack", hue: .gray) {
       if let problem = store.alert {
         Label(problem, systemImage: "exclamationmark.triangle.fill")
-          .font(.caption)
-          .foregroundStyle(.orange)
+          .kitFont(.caption)
+          .foregroundStyle(Hue.orange.text)
+          .padding(.horizontal, 6)
       }
       if store.servers.isEmpty {
         Button {
           onEdit(.add)
         } label: {
-          Label("Add Connection", systemImage: "plus.circle")
+          SidebarRow("Add Connection", systemImage: "plus.circle")
+            .foregroundStyle(.kitSecondary)
         }
         .buttonStyle(.plain)
-        .foregroundStyle(.secondary)
         .help("Connect a server that serves its strings through the Localization Server API")
       } else {
         ForEach(store.servers) { row in
-          NavigationLink(value: SidebarSelection.server(row.id)) {
-            ServerSidebarRow(row: row, status: store.statuses[row.id] ?? .unknown)
-          }
-          .contextMenu {
-            Button("Check Now") { Task { await store.check(id: row.id) } }
-            Button("Edit…") { onEdit(.edit(row.id)) }
-            Divider()
-            Button("Remove", role: .destructive) { pendingRemoval = row }
-          }
+          ServerSidebarRow(row: row, status: store.statuses[row.id] ?? .unknown)
+            .contextMenu {
+              Button("Check Now") { Task { await store.check(id: row.id) } }
+              Button("Edit…") { onEdit(.edit(row.id)) }
+              Divider()
+              Button("Remove", role: .destructive) { pendingRemoval = row }
+            }
         }
       }
+    } accessory: {
+      Button("Add Localization Server…", systemImage: "plus") { onEdit(.add) }
+        .buttonStyle(.kitIcon)
+        .help("Add a Localization Server")
     }
     .confirmationDialog(
       "Remove \(pendingRemoval?.name ?? "")?",
@@ -95,33 +107,19 @@ struct ServerSidebarRow: View {
   let status: ServerStatus
 
   var body: some View {
-    HStack(spacing: 8) {
-      Image(systemName: "server.rack")
-        .foregroundStyle(.secondary)
-        .frame(width: 16)
-      VStack(alignment: .leading, spacing: 1) {
-        Text(row.name)
-          .lineLimit(1)
-        Text(row.hostLabel)
-          .font(.caption)
-          .foregroundStyle(.secondary)
-          .lineLimit(1)
-      }
-      Spacer(minLength: 4)
-      Circle()
-        .fill(dotColor)
-        .frame(width: 7, height: 7)
+    SidebarRow(value: SidebarSelection.server(row.id), row.name, subtitle: row.hostLabel, systemImage: "server.rack") {
+      StatusDot(hue: dotHue, isHollow: status == .checking || status == .unknown)
         .help(status.short)
     }
     .help("\(row.endpoint)\n\(row.keySource.label)\n\(status.short)")
   }
 
-  private var dotColor: Color {
+  private var dotHue: Hue {
     switch status {
     case .online: return .green
     case .offline: return .red
     case .notConfigured: return .orange
-    case .checking, .unknown: return .secondary.opacity(0.5)
+    case .checking, .unknown: return .gray
     }
   }
 }

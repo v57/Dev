@@ -5,6 +5,7 @@
 //  Created by Dmitry on 10.09.26.
 //
 
+import ComponentKit
 import SwiftUI
 
 // MARK: - TranslationDBControl
@@ -25,7 +26,7 @@ struct TranslationDBControl: View {
       showingInfo = true
     } label: {
       Label("Translation DB", systemImage: "cylinder.split.1x2")
-        .foregroundStyle(db.isImported ? Color.green : Color.secondary)
+        .foregroundStyle(db.isImported ? AnyShapeStyle(Hue.green.text) : AnyShapeStyle(.kitLabel))
         .symbolVariant(db.isImported ? .fill : .none)
     }
     .help(db.isImported

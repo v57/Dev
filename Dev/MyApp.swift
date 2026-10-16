@@ -1,4 +1,5 @@
 import AppKit
+import ComponentKit
 import DevScreenshotsCapture
 import SwiftUI
 import UpdateKit
@@ -34,8 +35,9 @@ struct MyApp: App {
     }
 
     var body: some Scene {
+        // Dev keeps the system accent: the kit's controls take it, like the system's did.
         WindowGroup {
-            ContentView()
+            ContentView().componentKit()
         }
         .defaultSize(width: 1280, height: 800)
         .commands {
@@ -51,8 +53,10 @@ struct MyApp: App {
             }
         }
         Settings {
-            SettingsView()
+            SettingsView().componentKit()
         }
+        // KitSettings' sidebar runs up under the traffic lights.
+        .windowStyle(.hiddenTitleBar)
     }
 }
 

@@ -1,4 +1,5 @@
 import AppKit
+import ComponentKit
 import DevScreenshots
 import SwiftData
 import SwiftUI
@@ -45,7 +46,11 @@ struct ContentView: View {
   var body: some View {
     @Bindable var model = model
     NavigationSplitView {
+      // The kit sidebar's own bottom bar has the toggle.
       SidebarView(model: model)
+        .frame(minWidth: 220)
+        .navigationSplitViewColumnWidth(min: 220, ideal: 240, max: 360)
+        .toolbar(removing: .sidebarToggle)
     } detail: {
       detailPane
     }
@@ -59,6 +64,8 @@ struct ContentView: View {
     .environment(workflows)
     .navigationTitle(windowTitle)
     .navigationSubtitle(windowSubtitle)
+    // The kit's rich title stands in for the window's.
+    .toolbar(removing: .title)
     .onAppear {
       AppContext.shared.localization = localizationStore
       AppContext.shared.shell = translation
@@ -155,16 +162,17 @@ struct ContentView: View {
     }
     .onChange(of: settingsRequests) { openSettings() }
     .toolbar {
+      KitToolbarItem(placement: .navigation) {
+        windowTitleView.padding(.leading, 6)
+      }
       // The project's tabs: only while a project is open.
       if model.hasSelectedProject {
-        ToolbarItem(placement: .principal) {
-          Picker("Tool", selection: $model.projectTool) {
-            ForEach(DevTool.allCases) { tool in
-              Text(tool.title).tag(tool)
-            }
-          }
-          .pickerStyle(.segmented)
-          .labelsHidden()
+        KitToolbarItem(placement: .principal) {
+          KitSegmented(
+            selection: $model.projectTool,
+            segments: DevTool.allCases.map { KitSegment($0.title, value: $0) }
+          )
+          .kitSegmentedStyle(.capsule)
           .help("Switch between this project's tools (⌘1–⌘5)")
         }
       }
@@ -174,20 +182,22 @@ struct ContentView: View {
       // a run is in flight: such a run is paused or cancelled from its own pages,
       // and pressing Translate again resumes it.
       if let catalogURL = paneCatalogURL {
-        ToolbarItem(placement: .primaryAction) {
-          Menu {
-            Button("Translate Without Learning") {
-              Task { await translation.startSkippingLearning(catalogURL) }
+        KitToolbarItem(placement: .primaryAction) {
+          ToolGroup {
+            Menu {
+              Button("Translate Without Learning") {
+                Task { await translation.startSkippingLearning(catalogURL) }
+              }
+              .help(translation.skipLearningHelp(catalogURL))
+            } label: {
+              Label("Translate", systemImage: "play.fill")
+            } primaryAction: {
+              Task { await translation.start(catalogURL) }
             }
-            .help(translation.skipLearningHelp(catalogURL))
-          } label: {
-            Label("Translate", systemImage: "play.fill")
-              .labelStyle(.titleAndIcon)
-          } primaryAction: {
-            Task { await translation.start(catalogURL) }
+            .menuIndicator(.visible)
+            .disabled(!translation.canStart(catalogURL))
+            .help(translation.startHelp(catalogURL))
           }
-          .disabled(!translation.canStart(catalogURL))
-          .help(translation.startHelp(catalogURL))
         }
       }
     }
@@ -200,6 +210,38 @@ struct ContentView: View {
             .hidden()
         }
       }
+    }
+  }
+
+  /// The toolbar's rich title: the open project (its icon, name and folder), or the tool.
+  @ViewBuilder
+  private var windowTitleView: some View {
+    if case .project(let id) = model.selection, let row = model.projectRow(id: id) {
+      RichHeader(Text(row.name), size: .title) {
+        if let icon = row.iconImage {
+          Image(nsImage: icon).resizable().interpolation(.high).frame(width: 28, height: 28)
+        } else {
+          Tile(systemImage: "app.dashed", hue: .blue, size: 28)
+        }
+      } meta: {
+        Text(windowSubtitle).truncationMode(.middle)
+      } accessory: {
+        EmptyView()
+      }
+      .frame(maxWidth: 200)
+    } else {
+      KitTitle(windowTitle, systemImage: windowSymbol, hue: .gray)
+    }
+  }
+
+  /// The symbol of what the window shows when it isn't a project.
+  private var windowSymbol: String {
+    switch model.selection {
+    case .tool(.icon): "app.badge"
+    case .storage: "internaldrive"
+    case .vms: "desktopcomputer"
+    case .server: "server.rack"
+    default: "hammer"
     }
   }
 
@@ -271,12 +313,12 @@ struct ContentView: View {
     case .tool(.icon):
       CreateIconView()
     case .tool:
-      ContentUnavailableView("Select a project", systemImage: "sidebar.left")
+      EmptyState(systemImage: "sidebar.left", title: "Select a Project").kitPane()
     case .project(let id):
       if let row = model.projectRow(id: id) {
         ProjectDetailView(model: model, row: row)
       } else {
-        ContentUnavailableView("Project not found", systemImage: "folder.badge.questionmark")
+        EmptyState(systemImage: "folder.badge.questionmark", title: "Project Not Found").kitPane()
       }
     case .server(let id):
       ServerDetailView(serverID: id, store: servers)
@@ -288,9 +330,31 @@ struct ContentView: View {
       if model.projects.isEmpty {
         WelcomeView(model: model)
       } else {
-        ContentUnavailableView("Select a project", systemImage: "sidebar.left",
-          description: Text("Pick a project in the sidebar, or open Storage or Virtual Machines."))
+        EmptyState(
+          systemImage: "sidebar.left", title: "Select a Project",
+          message: "Pick a project in the sidebar, or open Storage or Virtual Machines."
+        ).kitPane()
       }
+    }
+  }
+}
+
+/// A toolbar item that holds kit cards: on macOS 26 it drops the shared glass behind it, since the kit
+/// draws its own cards (`ToolGroup`, the segmented capsule).
+struct KitToolbarItem<Content: View>: ToolbarContent {
+  var placement: ToolbarItemPlacement
+  @ViewBuilder var content: () -> Content
+
+  init(placement: ToolbarItemPlacement, @ViewBuilder content: @escaping () -> Content) {
+    self.placement = placement
+    self.content = content
+  }
+
+  var body: some ToolbarContent {
+    if #available(macOS 26, *) {
+      ToolbarItem(placement: placement) { content() }.sharedBackgroundVisibility(.hidden)
+    } else {
+      ToolbarItem(placement: placement) { content() }
     }
   }
 }

@@ -6,6 +6,7 @@
 //
 
 import SwiftData
+import ComponentKit
 import SwiftUI
 
 /// Detail pane for a SELECTED sidebar project: the tab the toolbar picked
@@ -80,8 +81,7 @@ struct ProjectDetailView: View {
   }
 
   private func noFolder(_ message: String) -> some View {
-    ContentUnavailableView(
-      "No project folder", systemImage: "folder.badge.questionmark", description: Text(message))
+    EmptyState(systemImage: "folder.badge.questionmark", title: "No Project Folder", message: message).kitPane()
   }
 
   /// Opens the bound catalog — only for the Localization tool, and only when

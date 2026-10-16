@@ -5,6 +5,7 @@
 //  Created by Dmitry on 08.09.26.
 //
 
+import ComponentKit
 import SwiftUI
 
 // MARK: - TranslationState (colors)
@@ -31,9 +32,7 @@ struct CellStatusAccessory: View {
 
   var body: some View {
     if let state = record?.state, state != .empty {
-      Circle()
-        .fill(state.dotColor)
-        .frame(width: 6, height: 6)
+      StatusDot(hue: state == .reviewed ? .green : .orange, size: 6)
         .help(state.displayName)
     }
   }
@@ -67,12 +66,7 @@ struct AutoReviewedBadge: View {
 
   var body: some View {
     Button(action: confirm) {
-      Text("auto")
-        .font(.system(size: 8, weight: .semibold))
-        .padding(.horizontal, 4)
-        .padding(.vertical, 1)
-        .background(Color.green.opacity(0.14), in: Capsule())
-        .foregroundStyle(.green)
+      Chip("auto", hue: .green).controlSize(.small)
     }
     .buttonStyle(.plain)
     .help("Imported translation DB — automatically reviewed. Click to confirm as human-reviewed.")

@@ -4,6 +4,7 @@
 //
 
 import AppKit
+import ComponentKit
 import SwiftUI
 
 // MARK: - Storage
@@ -54,13 +55,12 @@ struct StorageView: View {
           }
         }
       } else {
-        ContentUnavailableView {
-          Label("See what fills this Mac", systemImage: "internaldrive")
-        } description: {
-          Text("Scan sorts the disk into Xcode, Android, virtual machines, AI models, Node, apps, language versions and more. Nothing is removed until you pick it and confirm.")
-        } actions: {
+        EmptyState(
+          systemImage: "internaldrive", title: "See What Fills This Mac",
+          message: "Scan sorts the disk into Xcode, Android, virtual machines, AI models, Node, apps, language versions and more. Nothing is removed until you pick it and confirm."
+        ) {
           Button("Scan") { store.scan() }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.kitPrimary)
         }
       }
     }
@@ -655,10 +655,10 @@ private struct GroupsPage: View {
           .frame(maxWidth: .infinity, maxHeight: .infinity)
           .background(.background.secondary)
       } else {
-        ContentUnavailableView(
-          store.isScanning ? "Measuring…" : "Nothing here",
+        EmptyState(
           systemImage: store.isScanning ? "hourglass" : "checkmark.circle",
-          description: Text(store.isScanning ? "Items appear as their sizes land." : "Nothing of this kind takes space on this Mac."))
+          title: store.isScanning ? "Measuring…" : "Nothing Here",
+          message: store.isScanning ? "Items appear as their sizes land." : "Nothing of this kind takes space on this Mac.")
           .frame(maxWidth: .infinity, maxHeight: .infinity)
       }
     }
@@ -889,7 +889,7 @@ private struct UninstallerPage: View {
           .frame(maxWidth: .infinity, maxHeight: .infinity)
           .background(.background.secondary)
       } else {
-        ContentUnavailableView("No apps", systemImage: "app.dashed")
+        EmptyState(systemImage: "app.dashed", title: "No Apps")
           .frame(maxWidth: .infinity, maxHeight: .infinity)
       }
     }
@@ -1132,7 +1132,7 @@ private struct LanguagesPage: View {
           .frame(maxWidth: .infinity, maxHeight: .infinity)
           .background(.background.secondary)
       } else {
-        ContentUnavailableView("No languages found", systemImage: "chevron.left.forwardslash.chevron.right")
+        EmptyState(systemImage: "chevron.left.forwardslash.chevron.right", title: "No Languages Found")
           .frame(maxWidth: .infinity, maxHeight: .infinity)
       }
     }

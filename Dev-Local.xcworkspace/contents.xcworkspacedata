@@ -19,4 +19,7 @@
    <FileRef
       location = "group:../Vault">
    </FileRef>
+   <FileRef
+      location = "group:../Component">
+   </FileRef>
 </Workspace>

@@ -6,6 +6,7 @@
 import AppKit
 import DevScreenshots
 import DevScreenshotsCapture
+import ComponentKit
 import SwiftUI
 
 // MARK: - Facts
@@ -131,14 +132,10 @@ struct ProjectOverviewView: View {
       iconImage(size: 60)
       VStack(alignment: .leading, spacing: 5) {
         Text(row.name)
-          .font(.largeTitle.weight(.bold))
+          .kitFont(.largeTitle)
         HStack(spacing: 8) {
           if let branch = facts.branch {
-            Label([branch, facts.commit].compactMap { $0 }.joined(separator: " · "), systemImage: "arrow.triangle.branch")
-              .font(.callout)
-              .padding(.horizontal, 8)
-              .padding(.vertical, 2)
-              .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+            RefChip(RefChip.Ref(name: branch, isCurrent: true, detail: facts.commit))
           }
           Text(facts.kind)
           if let count = facts.commitCount {
@@ -207,7 +204,7 @@ struct ProjectOverviewView: View {
       }
       Spacer()
       Button(row.needsReview > 0 ? "Review" : "Open") { model.projectTool = .localization }
-        .buttonStyle(.borderedProminent)
+        .buttonStyle(.kitPrimary)
     }
   }
 
@@ -272,18 +269,18 @@ struct ProjectOverviewView: View {
               .foregroundStyle(Color.accentColor)
           }
           let done = active.steps.filter { $0.state == .passed || $0.state == .skipped }.count
-          ProgressView(value: Double(done), total: Double(max(active.steps.count, 1)))
+          MicroBar(value: Double(done) / Double(max(active.steps.count, 1)))
         }
         .padding(10)
-        .background(.background, in: RoundedRectangle(cornerRadius: 10))
+        .kitSurface(.raised, cornerRadius: KitMetrics.radiusLarge)
       }
       VStack(alignment: .leading, spacing: 6) {
         ForEach(list) { workflow in
           let last = root.flatMap { workflows.lastRun(of: workflow.id, in: $0) }
           HStack(spacing: 8) {
-            Circle()
-              .fill(last.map { WorkflowsView.color(for: $0.state) } ?? Color.secondary.opacity(0.4))
-              .frame(width: 7, height: 7)
+            LiveIcon(
+              systemImage: "play", hue: .gray,
+              status: last.map { WorkflowsView.status(for: $0.state) } ?? .idle, size: 18)
             Text(workflow.name)
             Spacer()
             Text(last.map { "\($0.state.rawValue) · \($0.title)" } ?? workflow.trigger.summary)
@@ -314,12 +311,7 @@ struct ProjectOverviewView: View {
           let outdated = library.outdated.count
           if outdated > 0 {
             // dev-screenshots' status: commits under `watch`, or edited scenes, since the pictures.
-            Text(outdated == library.status?.scenes.count ? "Outdated" : "\(outdated) scenes outdated")
-              .font(.caption)
-              .padding(.horizontal, 8)
-              .padding(.vertical, 2)
-              .background(Color.orange.opacity(0.16), in: Capsule())
-              .foregroundStyle(.orange)
+            Chip(outdated == library.status?.scenes.count ? "Outdated" : "\(outdated) scenes outdated", hue: .orange)
           }
         }
         Spacer()
@@ -331,12 +323,12 @@ struct ProjectOverviewView: View {
               Text(Locale.current.localizedString(forIdentifier: code) ?? code).tag(code)
             }
           }
-          .pickerStyle(.segmented)
+          .pickerStyle(.menu)
           .labelsHidden()
           .fixedSize()
         }
         Button("Open Screenshots") { model.projectTool = .screenshots }
-          .buttonStyle(.link)
+          .buttonStyle(.kit)
       }
       if let library, !library.shots.isEmpty {
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 14), count: 5), spacing: 14) {
@@ -362,7 +354,7 @@ struct ProjectOverviewView: View {
       }
     }
     .padding(18)
-    .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(.quaternary))
+    .kitSurface(.card, cornerRadius: KitMetrics.radiusXL)
   }
 
   private func currentLocale(_ library: ScreenshotLibrary) -> String {
@@ -409,27 +401,17 @@ struct OverviewCard<Content: View, Footer: View>: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
-      HStack(spacing: 8) {
-        Image(systemName: systemImage)
-          .foregroundStyle(Color.accentColor)
-        Text(title)
-          .font(.headline)
-        Spacer()
-        if let trailing {
-          Text(trailing)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
-        }
-      }
+      RichHeader(title, meta: trailing.map { [$0] } ?? [], systemImage: systemImage)
+        .padding(.horizontal, -6)
       content()
       Spacer(minLength: 0)
       HStack(spacing: 12) { footer() }
-        .font(.callout)
+        .kitFont(.callout)
+        .buttonStyle(.kit)
     }
-    .padding(18)
+    .padding(14)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 16))
+    .kitSurface(.card, cornerRadius: KitMetrics.radiusXL)
   }
 }
 
@@ -441,6 +423,7 @@ struct DotLabelStyle: LabelStyle {
     HStack(spacing: 5) {
       Circle().fill(color).frame(width: 7, height: 7)
       configuration.title
+        .foregroundStyle(.kitLabel)
     }
   }
 }
