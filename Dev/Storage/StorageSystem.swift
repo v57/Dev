@@ -32,7 +32,9 @@ nonisolated extension StorageDiscovery {
           safety: .cache, cleanup: .trash, minBytes: 10_000_000))
       }
     }
-    for path in children(of: "/private/tmp") where Self.isOwned(path, by: uid) {
+    // The sessions above are the scratch folder's items: the folder itself
+    // is not one, or cleaning it would take every session, running or not.
+    for path in children(of: "/private/tmp") where Self.isOwned(path, by: uid) && path != "/private/tmp/claude-\(uid)" {
       add(StorageItem(
         id: path, category: .caches, group: "Temporary Files",
         title: (path as NSString).lastPathComponent, detail: "/private/tmp", paths: [path],
