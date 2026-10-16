@@ -10,6 +10,7 @@
 		DE5C0000000000000000000A /* DevScreenshots in Frameworks */ = {isa = PBXBuildFile; productRef = DE5C00000000000000000002 /* DevScreenshots */; };
 		DE5C0000000000000000000B /* DevScreenshotsCapture in Frameworks */ = {isa = PBXBuildFile; productRef = DE5C00000000000000000003 /* DevScreenshotsCapture */; };
 		D5C0DE000000000000000003 /* UpdateKit in Frameworks */ = {isa = PBXBuildFile; productRef = D5C0DE000000000000000002 /* UpdateKit */; };
+		C0C0DE000000000000000003 /* ComponentKit in Frameworks */ = {isa = PBXBuildFile; productRef = C0C0DE000000000000000002 /* ComponentKit */; };
 		DA7AB45E0000000000000003 /* SQLiteKit in Frameworks */ = {isa = PBXBuildFile; productRef = DA7AB45E0000000000000002 /* SQLiteKit */; };
 		DA7AB45E0000000000000005 /* WireKit in Frameworks */ = {isa = PBXBuildFile; productRef = DA7AB45E0000000000000004 /* WireKit */; };
 		4906C9282497EB178F132060 /* VaultKit in Frameworks */ = {isa = PBXBuildFile; productRef = F325E5137AFD249B69F073D5 /* VaultKit */; };
@@ -35,6 +36,7 @@
 				DA7AB45E0000000000000003 /* SQLiteKit in Frameworks */,
 				DA7AB45E0000000000000005 /* WireKit in Frameworks */,
 				D5C0DE000000000000000003 /* UpdateKit in Frameworks */,
+				C0C0DE000000000000000003 /* ComponentKit in Frameworks */,
 				4906C9282497EB178F132060 /* VaultKit in Frameworks */,
 				0E31D847659438A515BB01E6 /* GitHubKit in Frameworks */,
 				DE5C0000000000000000000A /* DevScreenshots in Frameworks */,
@@ -79,6 +81,7 @@
 			name = Dev;
 			packageProductDependencies = (
 				D5C0DE000000000000000002 /* UpdateKit */,
+				C0C0DE000000000000000002 /* ComponentKit */,
 				DA7AB45E0000000000000002 /* SQLiteKit */,
 				DA7AB45E0000000000000004 /* WireKit */,
 				F325E5137AFD249B69F073D5 /* VaultKit */,
@@ -117,6 +120,7 @@
 			packageReferences = (
 				DE5C00000000000000000001 /* XCLocalSwiftPackageReference "." */,
 				D5C0DE000000000000000001 /* XCRemoteSwiftPackageReference "UpdateKit" */,
+				C0C0DE000000000000000001 /* XCRemoteSwiftPackageReference "Component" */,
 				DA7AB45E0000000000000001 /* XCRemoteSwiftPackageReference "Database" */,
 				9B3A7F6AB825F8F67EEFD8FF /* XCRemoteSwiftPackageReference "Vault" */,
 				8DF881F3EAA5B613209FE067 /* XCRemoteSwiftPackageReference "Git" */,
@@ -403,12 +407,25 @@
 				kind = branch;
 			};
 		};
+		C0C0DE000000000000000001 /* XCRemoteSwiftPackageReference "Component" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/v57/Component.git";
+			requirement = {
+				branch = main;
+				kind = branch;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
 		D5C0DE000000000000000002 /* UpdateKit */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = UpdateKit;
+		};
+		C0C0DE000000000000000002 /* ComponentKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C0C0DE000000000000000001 /* XCRemoteSwiftPackageReference "Component" */;
+			productName = ComponentKit;
 		};
 		DA7AB45E0000000000000002 /* SQLiteKit */ = {
 			isa = XCSwiftPackageProductDependency;
