@@ -217,16 +217,15 @@ final class StorageStore {
   // MARK: Scratch and temp folders
 
   /// How much scratch space to pick: by how long it has gone untouched, since
-  /// what changed lately may still be in use. macOS clears temp folders after
-  /// about three days anyway, so a day is the longest wait worth offering.
+  /// what changed lately may still be in use.
   enum ScratchPick: CaseIterable, Hashable {
-    case none, day, hour, all
+    case none, month, week, all
 
     var title: String {
       switch self {
       case .none: "None"
-      case .day: "Untouched for a day"
-      case .hour: "Untouched for an hour"
+      case .month: "Untouched for a month"
+      case .week: "Untouched for a week"
       case .all: "All"
       }
     }
@@ -236,10 +235,10 @@ final class StorageStore {
       switch self {
       case .none: return false
       case .all: return true
-      case .day, .hour:
+      case .month, .week:
         // Unknown age (an older scan): treat it as in use.
         guard let modified else { return false }
-        return now.timeIntervalSince(modified) > (self == .day ? 86_400 : 3_600)
+        return now.timeIntervalSince(modified) > (self == .month ? 30 : 7) * 86_400
       }
     }
   }
