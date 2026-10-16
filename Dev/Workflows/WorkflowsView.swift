@@ -4,6 +4,7 @@
 //
 
 import AppKit
+import ComponentKit
 import SwiftUI
 
 /// The Workflows tab: a project's CI. Left, its workflows and their runs;
@@ -30,38 +31,35 @@ struct WorkflowsView: View {
   var body: some View {
     let list = store.workflows(for: root)
     let workflow = list.first { $0.id == workflowID } ?? list.first
-    HStack(spacing: 0) {
+    KitWindowLayout {
       sidebar(list, selected: workflow)
         .frame(width: 240)
-      Divider()
+        .kitPane(.secondary)
       if let workflow {
         steps(workflow)
           .frame(maxWidth: .infinity)
-        Divider()
+          .kitPane()
         inspector(workflow)
-          .frame(width: 300)
+          .frame(width: 310)
       } else {
-        ContentUnavailableView("No workflows", systemImage: "shippingbox")
-          .frame(maxWidth: .infinity)
+        EmptyState(systemImage: "shippingbox", title: "No Workflows")
+          .kitPane()
       }
     }
     .toolbar {
-      ToolbarItemGroup(placement: .primaryAction) {
-        if store.isRunning(root) {
-          Button(role: .destructive) { store.cancel(root) } label: {
-            Label("Stop", systemImage: "stop.fill")
-          }
-          .help("Stop the run in flight")
-        } else if let workflow {
-          Button {
-            if workflow.steps.contains(where: \.publishes) { confirmingRun = workflow } else { start(workflow, confirmed: false) }
-          } label: {
+      KitToolbarItem(placement: .primaryAction) {
+        ToolGroup {
+          if store.isRunning(root) {
+            Button("Stop", systemImage: "stop.fill", role: .destructive) { store.cancel(root) }
+              .help("Stop the run in flight")
+          } else if let workflow {
             // Short, so it never crowds the project's tabs in the toolbar's centre.
-            Label("Run", systemImage: "play.fill")
-              .labelStyle(.titleAndIcon)
+            Button("Run", systemImage: "play.fill") {
+              if workflow.steps.contains(where: \.publishes) { confirmingRun = workflow } else { start(workflow, confirmed: false) }
+            }
+            .help("Run \(workflow.name) now")
+            .disabled(releaseConfig == nil && workflow.steps.contains { $0.kind != .command })
           }
-          .help("Run \(workflow.name) now")
-          .disabled(releaseConfig == nil && workflow.steps.contains { $0.kind != .command })
         }
       }
     }
@@ -135,76 +133,73 @@ struct WorkflowsView: View {
   // MARK: - Left: workflows and runs
 
   private func sidebar(_ list: [Workflow], selected: Workflow?) -> some View {
-    List {
-      Section("Workflows") {
-        ForEach(list) { workflow in
-          Button {
-            workflowID = workflow.id
-            runID = nil
-            stepID = nil
-          } label: {
-            VStack(alignment: .leading, spacing: 2) {
-              Text(workflow.name).fontWeight(.semibold)
-              Text(workflow.trigger.summary)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-          }
-          .buttonStyle(.plain)
-          .listRowBackground(selected?.id == workflow.id ? Color.secondary.opacity(0.12) : Color.clear)
-          .contextMenu {
-            Button("Edit…") { editing = workflow }
-            Button("Duplicate") {
-              var copy = workflow
-              copy.id = workflow.id + "-copy"
-              copy.name = workflow.name + " Copy"
-              save(copy)
-            }
-          }
-        }
-        Button {
-          let id = "workflow-\(Int(Date().timeIntervalSince1970))"
-          editing = Workflow(id: id, name: "New Workflow", steps: [
-            Workflow.Step(id: "build", name: "Build", kind: .release, releaseStep: "build"),
-          ])
-        } label: {
-          Label("New Workflow…", systemImage: "plus")
-        }
-        .buttonStyle(.link)
-      }
-      if let selected {
-        Section("Runs") {
-          let runs = store.runs(for: root).filter { $0.workflowID == selected.id }
-          if runs.isEmpty {
-            Text("No runs yet").foregroundStyle(.secondary)
-          }
-          ForEach(runs) { run in
+    ScrollView {
+      VStack(alignment: .leading, spacing: KitMetrics.gutter) {
+        KitSection(
+          "Workflows", meta: list.count == 1 ? "1 workflow" : "\(list.count) workflows",
+          systemImage: "play", hue: .blue
+        ) {
+          ForEach(list) { workflow in
             Button {
-              runID = run.id
+              workflowID = workflow.id
+              runID = nil
+              stepID = nil
             } label: {
-              HStack(spacing: 8) {
-                Circle().fill(Self.color(for: run.state)).frame(width: 8, height: 8)
-                VStack(alignment: .leading, spacing: 1) {
-                  Text(run.title.isEmpty ? run.startedAt.formatted(date: .abbreviated, time: .shortened) : run.title)
-                    .monospacedDigit()
-                  Text(runNote(run))
-                    .font(.caption)
-                    .foregroundStyle(run.state == .failed ? .red : .secondary)
-                    .lineLimit(1)
-                }
-                Spacer(minLength: 0)
-              }
-              .contentShape(Rectangle())
+              LaneItem(workflow.name, subtitle: workflow.trigger.summary, isSelected: selected?.id == workflow.id)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .listRowBackground(currentRun(selected)?.id == run.id ? Color.secondary.opacity(0.12) : Color.clear)
+            .contextMenu {
+              Button("Edit…") { editing = workflow }
+              Button("Duplicate") {
+                var copy = workflow
+                copy.id = workflow.id + "-copy"
+                copy.name = workflow.name + " Copy"
+                save(copy)
+              }
+            }
+          }
+        } accessory: {
+          Button("New Workflow…", systemImage: "plus") {
+            let id = "workflow-\(Int(Date().timeIntervalSince1970))"
+            editing = Workflow(id: id, name: "New Workflow", steps: [
+              Workflow.Step(id: "build", name: "Build", kind: .release, releaseStep: "build"),
+            ])
+          }
+          .help("New Workflow…")
+        }
+        if let selected {
+          let runs = store.runs(for: root).filter { $0.workflowID == selected.id }
+          KitSection(
+            "Runs", meta: runs.isEmpty ? "None yet" : "\(runs.count) run\(runs.count == 1 ? "" : "s")",
+            systemImage: "clock", hue: .gray, status: runs.first?.state == .running ? .working : .idle
+          ) {
+            if runs.isEmpty {
+              Text("Runs show here when a workflow starts.")
+                .kitFont(.caption)
+                .padding(.horizontal, 6)
+                .padding(.bottom, 4)
+            }
+            ForEach(runs) { run in
+              Button {
+                runID = run.id
+              } label: {
+                LaneItem(
+                  run.title.isEmpty ? run.startedAt.formatted(date: .abbreviated, time: .shortened) : run.title,
+                  subtitle: runNote(run), subtitleHue: run.state == .failed ? .red : nil,
+                  isSelected: currentRun(selected)?.id == run.id
+                ) {
+                  LiveIcon(systemImage: "play", hue: .gray, status: Self.status(for: run.state), size: 18)
+                }
+                .contentShape(Rectangle())
+              }
+              .buttonStyle(.plain)
+            }
           }
         }
       }
+      .padding(KitMetrics.gutter)
     }
-    .listStyle(.sidebar)
   }
 
   private func runNote(_ run: WorkflowRun) -> String {
@@ -215,6 +210,27 @@ struct WorkflowsView: View {
       return "Failed · \(step?.name ?? "") · \(run.startedAt.formatted(date: .abbreviated, time: .omitted))"
     case .passed: return "Passed · \(run.startedAt.formatted(date: .abbreviated, time: .omitted))"
     case .cancelled: return "Cancelled · \(run.startedAt.formatted(date: .abbreviated, time: .omitted))"
+    }
+  }
+
+  /// A run's state as the kit's work status: its live icon carries it.
+  static func status(for state: WorkflowRun.State) -> WorkStatus {
+    switch state {
+    case .running: .working
+    case .passed: .done
+    case .failed: .failed
+    case .cancelled: .paused()
+    }
+  }
+
+  /// A step's state as the kit's work status.
+  static func status(for state: WorkflowRun.StepState) -> WorkStatus {
+    switch state {
+    case .waiting: .idle
+    case .running: .working
+    case .passed: .done
+    case .failed: .failed
+    case .skipped: .paused()
     }
   }
 
@@ -240,12 +256,12 @@ struct WorkflowsView: View {
   private func steps(_ workflow: Workflow) -> some View {
     let run = currentRun(workflow)
     return VStack(alignment: .leading, spacing: 0) {
-      VStack(alignment: .leading, spacing: 8) {
+      VStack(alignment: .leading, spacing: 10) {
         if releaseConfig == nil, workflow.steps.contains(where: { $0.kind != .command }) {
-          HStack(spacing: 10) {
-            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-            Text("This project has no release.env yet: release.sh steps need one.")
-            Spacer()
+          Banner(
+            "This project has no release.env yet.", message: "release.sh steps need one.",
+            systemImage: "exclamationmark.triangle", hue: .orange
+          ) {
             Button(isDetecting ? "Reading the project…" : "Set Up Release") {
               Task {
                 isDetecting = true
@@ -258,12 +274,12 @@ struct WorkflowsView: View {
             }
             .disabled(isDetecting)
           }
-          .padding(10)
-          .background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+          .padding([.horizontal, .top], -KitMetrics.gutter)
+          .padding(.bottom, 4)
         }
         HStack {
           Text(run.map { "\(workflow.name) \($0.version ?? "")" } ?? workflow.name)
-            .font(.title2.weight(.bold))
+            .kitFont(.title1)
             .lineLimit(1)
           Spacer()
           Button("Edit…") { editing = workflow }
@@ -271,26 +287,27 @@ struct WorkflowsView: View {
             .disabled(releaseConfig == nil)
             .help("The project's release.env: scheme, signing, notarization, GitHub and App Store Connect")
         }
+        .buttonStyle(.kit)
         if run == nil || run?.state != .running {
           TextField("Version", text: $version, prompt: Text("Version for the next run (empty reads the project's)"))
-            .textFieldStyle(.roundedBorder)
-            .frame(maxWidth: 360)
+            .kitField()
+            .frame(maxWidth: 380)
             .help("Passed to release.sh as --version; empty reads MARKETING_VERSION")
         }
         HStack(spacing: 6) {
           if let run {
             if let build = run.buildNumber {
-              chip("Build \(build) = commit count", tint: .accentColor)
+              Chip("Build \(build) = commit count", hue: .accent)
                 .help("git rev-list --count HEAD")
             }
-            if let commit = run.commit { chip(commit, monospaced: true) }
-            chip("Started by \(run.startedBy)")
+            if let commit = run.commit { Chip(Text(commit).monospaced(), style: .quiet) }
+            Chip("Started by \(run.startedBy)")
             if let finished = run.finishedAt {
-              chip("\(finished.timeIntervalSince(run.startedAt).clock)")
+              Chip("\(finished.timeIntervalSince(run.startedAt).clock)")
             }
           } else {
-            chip(workflow.trigger.summary)
-            chip(workflow.steps.count == 1 ? "1 step" : "\(workflow.steps.count) steps")
+            Chip(workflow.trigger.summary)
+            Chip(workflow.steps.count == 1 ? "1 step" : "\(workflow.steps.count) steps")
           }
         }
       }
@@ -301,12 +318,16 @@ struct WorkflowsView: View {
           if stage.count == 1, let step = stage.first {
             stepRow(step, run: run)
           } else {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 2) {
               Text("At the same time")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .kitFont(.caption)
+                .padding(.horizontal, 6)
               ForEach(stage) { step in stepRow(step, run: run) }
             }
+            .padding(2)
+            .background(.kitField, in: RoundedRectangle(cornerRadius: KitMetrics.radiusLarge, style: .continuous))
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
           }
         }
         .onMove { from, to in move(workflow, from: from, to: to) }
@@ -327,18 +348,21 @@ struct WorkflowsView: View {
         } label: {
           Label("Add Step", systemImage: "plus")
         }
-        .menuStyle(.borderlessButton)
+        .buttonStyle(.kitPlain)
+        .foregroundStyle(Hue.accent.text)
         .fixedSize()
         .padding(.vertical, 6)
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
       }
-      .listStyle(.inset)
+      .listStyle(.plain)
+      .scrollContentBackground(.hidden)
 
-      Divider()
-      HStack(spacing: 6) {
+      StatusBar {
         Text("Defined in")
         Text(".dev/workflows/\(workflow.id).json")
-          .font(.system(.caption, design: .monospaced))
-          .foregroundStyle(.primary)
+          .kitFont(.mono)
+          .foregroundStyle(.kitLabel)
         Text("· edited here or by an agent through MCP")
         Spacer()
         Button("Show File") {
@@ -350,12 +374,10 @@ struct WorkflowsView: View {
             NSWorkspace.shared.activateFileViewerSelecting([url])
           }
         }
-        .buttonStyle(.link)
+        .buttonStyle(.kitPlain)
+        .foregroundStyle(Hue.accent.text)
       }
-      .font(.caption)
-      .foregroundStyle(.secondary)
-      .padding(.horizontal, 16)
-      .padding(.vertical, 8)
+      .foregroundStyle(.kitSecondary)
     }
   }
 
@@ -372,39 +394,31 @@ struct WorkflowsView: View {
     return Button {
       stepID = step.id
     } label: {
-      HStack(spacing: 12) {
+      LaneItem(
+        step.name, subtitle: state?.note ?? step.runnerTitle, subtitleHue: state?.state == .failed ? .red : nil,
+        isSelected: isSelectedStep(step)
+      ) {
         StepStateIcon(state: state?.state)
-        VStack(alignment: .leading, spacing: 2) {
-          Text(step.name).fontWeight(.semibold)
-          Text(state?.note ?? step.runnerTitle)
-            .font(.caption)
-            .foregroundStyle(state?.state == .failed ? .red : .secondary)
-            .lineLimit(1)
-        }
-        Spacer()
+      }
+      .overlay(alignment: .trailing) {
         if let duration = state?.duration {
-          Text(duration.clock)
-            .font(.caption)
-            .monospacedDigit()
-            .foregroundStyle(state?.state == .running ? Color.accentColor : .secondary)
+          Count(duration.clock).padding(.trailing, 8)
         }
       }
-      .padding(.vertical, 4)
       .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
-    .listRowBackground(stepID == step.id ? Color.secondary.opacity(0.12) : Color.clear)
+    .listRowBackground(Color.clear)
+    .listRowSeparator(.hidden)
+    .listRowInsets(EdgeInsets(top: 1, leading: 8, bottom: 1, trailing: 8))
   }
 
-  private func chip(_ text: String, tint: Color = .secondary, monospaced: Bool = false) -> some View {
-    Text(text)
-      .lineLimit(1)
-      .fixedSize()
-      .font(monospaced ? .system(.caption, design: .monospaced) : .caption)
-      .padding(.horizontal, 8)
-      .padding(.vertical, 2)
-      .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
-      .foregroundStyle(tint == .secondary ? Color.primary : tint)
+  /// The step the inspector shows: the picked one, else the first.
+  private func isSelectedStep(_ step: Workflow.Step) -> Bool {
+    guard let stepID else {
+      return store.workflows(for: root).first { $0.steps.contains(step) }?.steps.first == step
+    }
+    return stepID == step.id
   }
 
   // MARK: - Right: the step
@@ -414,12 +428,15 @@ struct WorkflowsView: View {
     let step = workflow.steps.first { $0.id == stepID } ?? workflow.steps.first
     let run = currentRun(workflow)
     if let step, let index = workflow.steps.firstIndex(of: step) {
-      ScrollView {
-        VStack(alignment: .leading, spacing: 14) {
-          TextField("Name", text: binding(workflow, index, \.name))
-            .textFieldStyle(.plain)
-            .font(.headline)
-          field("Runs On") {
+      KitInspector(width: nil) {
+        InspectorHeader(
+          step.name, meta: ["Step \(index + 1) of \(workflow.steps.count)", step.runnerTitle],
+          systemImage: step.kind == .command ? "terminal" : "hammer",
+          status: run.flatMap { $0.steps.first { $0.id == step.id } }.map { Self.status(for: $0.state) } ?? .idle)
+        FormCard {
+          FormRow("Name", systemImage: "character.cursor.ibeam", hue: .gray,
+                  field: TextField("Name", text: binding(workflow, index, \.name)))
+          FormRow("Runs On", help: step.runnerTitle, systemImage: "laptopcomputer", hue: .gray) {
             Picker("Runs On", selection: binding(workflow, index, \.runner)) {
               Text("This Mac").tag("mac")
               if step.kind == .command {
@@ -430,68 +447,53 @@ struct WorkflowsView: View {
               }
             }
             .labelsHidden()
+            .fixedSize()
           }
-          field("Command") {
-            if step.kind == .command {
-              TextEditor(text: Binding(
+          if step.kind == .command {
+            FormRow("Command", systemImage: "apple.terminal", hue: .green, field: TextField(
+              "Command",
+              text: Binding(
                 get: { step.command ?? "" },
-                set: { value in update(workflow) { $0.steps[index].command = value } }))
-                .font(.system(.callout, design: .monospaced))
-                .frame(minHeight: 60)
-                .padding(4)
-                .background(.background, in: RoundedRectangle(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.quaternary))
-            } else {
-              Text(step.commandLine)
-                .font(.system(.callout, design: .monospaced))
-                .textSelection(.enabled)
-                .padding(8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(.background, in: RoundedRectangle(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.quaternary))
-            }
+                set: { value in update(workflow) { $0.steps[index].command = value } }),
+              axis: .vertical
+            ).kitFont(.mono))
+          } else {
+            FormRow("Command", systemImage: "apple.terminal", hue: .green, field: Text(step.commandLine)
+              .kitFont(.mono)
+              .textSelection(.enabled)
+              .frame(maxWidth: .infinity, alignment: .leading))
           }
-          Toggle("Run at the same time as the step before", isOn: binding(workflow, index, \.parallel))
-            .disabled(index == 0)
-          Toggle("Keep going when a step fails", isOn: Binding(
-            get: { workflow.continueOnFailure },
-            set: { value in update(workflow) { $0.continueOnFailure = value } }))
-          if let run, let state = run.steps.first(where: { $0.id == step.id }) {
-            field("Log") {
-              let lines = store.logs[run.id]?[step.id] ?? state.logTail
-              ScrollView {
-                Text(lines.suffix(400).joined(separator: "\n"))
-                  .font(.system(.caption, design: .monospaced))
-                  .textSelection(.enabled)
-                  .frame(maxWidth: .infinity, alignment: .leading)
-              }
-              .frame(minHeight: 180, maxHeight: 320)
-              .padding(8)
-              .background(.background, in: RoundedRectangle(cornerRadius: 8))
-              .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.quaternary))
-            }
+          FormRow("Run at the same time as the step before", systemImage: "arrow.left.and.right", hue: .gray) {
+            Toggle("Run at the same time as the step before", isOn: binding(workflow, index, \.parallel))
+              .labelsHidden()
+              .toggleStyle(.kitSwitch)
           }
-          Button("Remove Step", role: .destructive) {
-            update(workflow) { $0.steps.remove(at: index) }
-            stepID = nil
+          .disabled(index == 0)
+          FormRow("Keep going when a step fails", systemImage: "arrow.triangle.branch", hue: .orange) {
+            Toggle("Keep going when a step fails", isOn: Binding(
+              get: { workflow.continueOnFailure },
+              set: { value in update(workflow) { $0.continueOnFailure = value } }))
+              .labelsHidden()
+              .toggleStyle(.kitSwitch)
           }
-          .buttonStyle(.link)
-          .disabled(store.isRunning(root))
         }
-        .padding(16)
+        if let run, let state = run.steps.first(where: { $0.id == step.id }) {
+          let lines = store.logs[run.id]?[step.id] ?? state.logTail
+          RunBlocks {
+            RunBlock(
+              step.name, command: step.commandLine, status: Self.status(for: state.state),
+              duration: state.duration?.clock, output: lines.suffix(400).joined(separator: "\n"))
+          }
+        }
+        Button("Remove Step", role: .destructive) {
+          update(workflow) { $0.steps.remove(at: index) }
+          stepID = nil
+        }
+        .buttonStyle(.kit)
+        .disabled(store.isRunning(root))
       }
-      .background(.background.secondary)
     } else {
-      ContentUnavailableView("No steps", systemImage: "list.bullet")
-    }
-  }
-
-  private func field<Content: View>(_ title: String, @ViewBuilder _ content: () -> Content) -> some View {
-    VStack(alignment: .leading, spacing: 5) {
-      Text(title)
-        .font(.caption.weight(.semibold))
-        .foregroundStyle(.secondary)
-      content()
+      EmptyState(systemImage: "list.bullet", title: "No Steps").kitPane(.secondary)
     }
   }
 
@@ -540,27 +542,18 @@ struct WorkflowsView: View {
   }
 }
 
-/// A step's state as a symbol: done, running, failed, skipped or waiting.
+/// A step's state in its live icon: done, running, failed, skipped or waiting.
 struct StepStateIcon: View {
   let state: WorkflowRun.StepState?
 
   var body: some View {
-    Group {
-      switch state {
-      case .passed:
-        Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-      case .failed:
-        Image(systemName: "xmark.circle.fill").foregroundStyle(.red)
-      case .running:
-        ProgressView().controlSize(.small)
-      case .skipped:
-        Image(systemName: "arrow.uturn.forward.circle").foregroundStyle(.secondary)
-      case .waiting, nil:
-        Image(systemName: "circle.dashed").foregroundStyle(.tertiary)
-      }
+    switch state {
+    case .passed: LiveIcon(systemImage: "checkmark", hue: .green, status: .done, size: 22)
+    case .failed: LiveIcon(systemImage: "xmark", hue: .red, status: .failed, size: 22)
+    case .running: LiveIcon(systemImage: "hammer", status: .working, size: 22)
+    case .skipped: LiveIcon(systemImage: "arrow.uturn.forward", hue: .gray, status: .paused(), size: 22)
+    case .waiting, nil: LiveIcon(systemImage: "circle.dashed", hue: .gray, status: .idle, size: 22)
     }
-    .font(.title3)
-    .frame(width: 22, height: 22)
   }
 }
 
