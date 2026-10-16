@@ -410,8 +410,7 @@ struct StorageFileRow: View {
     .contextMenu {
       Button("Show in Finder") { store.reveal(item) }
       Button("Copy Path") {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(item.primaryPath, forType: .string)
+        KitPasteboard.copy(item.primaryPath)
       }
     }
   }
