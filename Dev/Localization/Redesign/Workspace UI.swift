@@ -17,6 +17,7 @@
 //  the overlay is a presentation change, and a run is not presentation.
 
 import Foundation
+import ComponentKit
 import SwiftUI
 
 extension Translation {
@@ -380,37 +381,35 @@ extension Translation {
   /// It is shown for a project whose workspace exists, run or not: before the first run
   /// its line is the honest "No run yet", and the reopen button is offered only once
   /// there is a run to reopen.
-  struct WorkspaceStatusBar: View {
+  struct WorkspaceStatusBar<Trailing: View>: View {
     let workspace: Workspace
+    /// What ends the bar after the run's own reading (the catalog's counts).
+    @ViewBuilder var trailing: Trailing
+
+    init(workspace: Workspace, @ViewBuilder trailing: () -> Trailing = { EmptyView() }) {
+      self.workspace = workspace
+      self.trailing = trailing()
+    }
 
     /// Whether the bar offers the way back into the run's pages: there IS a run, and its
     /// pages are not already up. A run that was never started has nothing to reopen.
     var showsReopen: Bool { !workspace.isOverlayPresented && workspace.run != nil }
 
     var body: some View {
-      HStack(spacing: 10) {
-        Group {
-          if workspace.status.isRunning {
-            ProgressView().controlSize(.small)
-          } else {
-            Image(systemName: "circle.dashed").foregroundStyle(.secondary)
-          }
-        }
-        .frame(width: 16)
-        Text(workspace.status.summary).font(.callout).monospacedDigit()
-        Spacer()
+      // The run's state lives in the bar's live icon (the kit's rule: never a spinner).
+      StatusBar(systemImage: "translate", status: workspace.status.isRunning ? .working : .idle) {
+        Text(workspace.status.summary).monospacedDigit()
         // A run's edits are in memory until Save (8.3), and the bar is where the user looks
         // once the run's pages are closed — so the state is a READING here, not a sentence
         // somewhere in the overlay, and the act is beside it. Save goes through the app's own
         // writer (5.8), which is the same one ⌘S reaches: the flag behind this reading is the
         // flag behind ⌘S, so the two can never disagree.
         if workspace.isDirty {
-          Label("Unsaved", systemImage: "square.and.arrow.down")
-            .font(.caption)
-            .foregroundStyle(.secondary)
+          Chip("Unsaved", systemImage: "square.and.arrow.down", hue: .orange).controlSize(.small)
           Button("Save") {
             Task { await workspace.save() }
           }
+          .buttonStyle(.kitPlain)
           .help(
             "Write this session's results into "
               + (workspace.fileName ?? "the catalog") + " — Save is the only writer of the file")
@@ -418,17 +417,15 @@ extension Translation {
         // The way back into the pages, offered while there IS a run to go back to: the
         // overlay is presented FOR a run, so a bar with none has nothing to reopen.
         if showsReopen {
-          Button {
+          Button("Show Run", systemImage: "chevron.up") {
             workspace.reopenOverlay()
-          } label: {
-            Label("Show run", systemImage: "chevron.up")
           }
+          .buttonStyle(.kitPlain)
           .help("Reopen the run's pages where the run is now")
         }
+        Spacer()
+        trailing
       }
-      .padding(.horizontal, 12)
-      .frame(height: 28)
-      .background(.bar)
       // The shell's own failure channel: a run that could not start (no credential, 5.2)
       // has nothing on screen to report from, and the bar is the one surface that
       // outlives a closed overlay (8.1).

@@ -6,6 +6,7 @@
 //
 
 import AppKit
+import ComponentKit
 import Foundation
 import SwiftData
 import SwiftUI
@@ -88,7 +89,7 @@ struct LocalizationView: View {
         // or a half-opened table. The MIRROR into the store is deliberately NOT part of
         // this: the pane opens as soon as the file is parsed, and the store catches up
         // behind it (`store.isSyncing`).
-        ProgressView("Opening catalog…")
+        EmptyState(systemImage: "globe", title: "Opening Catalog…").status(.working)
       } else if let url = projectCatalogURL {
         boundContent(url: url)
       } else if store.isLoaded {
@@ -214,12 +215,11 @@ struct LocalizationView: View {
       loadedContent(allowsOpenCatalog: false, boundCatalogURL: url)
     } else if FileManager.default.fileExists(atPath: url.path) {
       if store.hasError {
-        ContentUnavailableView(
-          "Couldn't open catalog",
-          systemImage: "exclamationmark.triangle",
-          description: Text("The project catalog failed to open."))
+        EmptyState(
+          systemImage: "exclamationmark.triangle", title: "Couldn't Open the Catalog",
+          message: "The project catalog failed to open.")
       } else {
-        ProgressView("Opening catalog…")
+        EmptyState(systemImage: "globe", title: "Opening Catalog…")
       }
     } else {
       noCatalogState(url: url)
@@ -231,43 +231,30 @@ struct LocalizationView: View {
   /// there, and the app already knows how to find every key the project's
   /// Swift packages and Xcode targets hold.
   private func noCatalogState(url: URL) -> some View {
-    VStack(spacing: 12) {
-      Image(systemName: "doc.text.magnifyingglass")
-        .font(.system(size: 44))
-        .foregroundStyle(.tertiary)
-      Text("No catalog")
-        .font(.title3)
-      VStack(spacing: 4) {
-        Text("This project has no Localizable.xcstrings yet.")
-          .foregroundStyle(.secondary)
-        Text(url.path)
-          .font(.caption)
-          .foregroundStyle(.tertiary)
-          .textSelection(.enabled)
-      }
-      .multilineTextAlignment(.center)
+    EmptyState(
+      systemImage: "doc.text.magnifyingglass", title: "No Catalog",
+      message: "This project has no Localizable.xcstrings yet. Generating one scans the project's Swift packages and Xcode targets for localizable strings — the same pass \"Scan Strings\" runs."
+    ) {
       generateButton
-      Text("Scans the project's Swift packages and Xcode targets for localizable strings — the same pass \"Scan Strings\" runs.")
-        .font(.caption2)
-        .foregroundStyle(.tertiary)
-        .multilineTextAlignment(.center)
     }
-    .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .padding(20)
+    .overlay(alignment: .bottom) {
+      Text(url.path)
+        .kitFont(.caption)
+        .foregroundStyle(.kitTertiary)
+        .textSelection(.enabled)
+        .padding(20)
+    }
   }
 
   /// The generate action: creates the catalog where the project expects it,
   /// then scans that project for the keys to fill it with.
   private var generateButton: some View {
-    Button {
+    Button("Generate Catalog", systemImage: "text.magnifyingglass") {
       isConfirmingGenerate = true
-    } label: {
-      Label("Generate Catalog", systemImage: "text.magnifyingglass")
     }
-    .buttonStyle(.borderedProminent)
+    .buttonStyle(.kitPrimary)
     .disabled(isGenerating)
     .help("Create an empty String Catalog here and scan this project for localizable strings")
-    .padding(.top, 4)
   }
 
   private func loadedContent(allowsOpenCatalog: Bool, boundCatalogURL: URL? = nil) -> some View {
@@ -277,15 +264,11 @@ struct LocalizationView: View {
     let workspace = boundCatalogURL.flatMap { shell.workspace(for: $0) }
     let isOverlayPresented = workspace?.isOverlayPresented ?? false
     return VStack(spacing: 0) {
+      LanguageButtonsRow(store: store)
       CatalogTable(store: store, selection: $inspectedKey)
+        .padding(.horizontal, KitMetrics.gutter)
         .searchable(text: $store.searchText,
                     prompt: "Search keys, comments, translations")
-        .compatSafeAreaBar(edge: .top) {
-          LanguageButtonsRow(store: store)
-        }
-        .compatSafeAreaBar(edge: .bottom) {
-          FooterBar(store: store)
-        }
         // The redesign's pages, over the browser they leave exactly where it is:
         // the overlay is a PRESENTATION of a run, so it is up while the run's
         // pages are open and a run exists to page through — a pane with no run
@@ -300,31 +283,36 @@ struct LocalizationView: View {
         }
       // The run's own bar, at the pane's foot and OUTSIDE the overlay: it is what
       // reports a run whose pages the user closed, and its button reopens them
-      // wherever the run is now. A workspace the shell could not build says so in
-      // the same slot, so a failed open is never silent.
+      // wherever the run is now. The catalog's counts end it. A workspace the shell
+      // could not build says so in the same slot, so a failed open is never silent.
       if let workspace {
-        Divider()
-        Translation.WorkspaceStatusBar(workspace: workspace)
+        Translation.WorkspaceStatusBar(workspace: workspace) {
+          FooterBar(store: store)
+        }
       } else if let failure = shell.error {
-        Divider()
-        Label(failure, systemImage: "exclamationmark.triangle.fill")
-          .font(.caption)
-          .foregroundStyle(.red)
-          .lineLimit(1)
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .padding(.horizontal, 12)
-          .frame(height: 28)
-          .background(.bar)
+        StatusBar(systemImage: "exclamationmark.triangle", hue: .red, status: .failed) {
+          Text(failure).foregroundStyle(Hue.red.text)
+          Spacer()
+          FooterBar(store: store)
+        }
+      } else {
+        StatusBar {
+          Spacer()
+          FooterBar(store: store)
+        }
       }
     }
+    .kitPane()
     .inspector(isPresented: $showsInspector) {
       Group {
         if let key = inspectedKey, let row = store.visibleRows.first(where: { $0.key == key }) {
           RowInspector(store: store, row: row)
         } else {
-          ContentUnavailableView(
-            "No string selected", systemImage: "text.cursor",
-            description: Text("Select a row to see its source, comment and every translation."))
+          EmptyState(
+            systemImage: "text.cursor", title: "No String Selected",
+            message: "Select a row to see its source, comment and every translation."
+          )
+          .kitPane(.secondary)
         }
       }
       .inspectorColumnWidth(min: 260, ideal: 320, max: 420)
@@ -335,12 +323,14 @@ struct LocalizationView: View {
         }
       }
       .toolbar {
-        Button {
-          showsInspector.toggle()
-        } label: {
-          Label("Inspector", systemImage: "sidebar.trailing")
+        KitToolbarItem(placement: .primaryAction) {
+          ToolGroup(iconOnly: true) {
+            Button("Inspector", systemImage: "sidebar.trailing") {
+              showsInspector.toggle()
+            }
+            .help("Show or hide the string inspector")
+          }
         }
-        .help("Show or hide the string inspector")
       }
     }
     .animation(.smooth, value: isOverlayPresented)
@@ -371,25 +361,16 @@ struct LocalizationView: View {
   private var emptyState: some View {
     let fixtureURL = LocalizationStore.defaultFixtureURL
     let fixtureExists = FileManager.default.fileExists(atPath: fixtureURL.path)
-    return VStack(spacing: 12) {
-      Image(systemName: "globe")
-        .font(.system(size: 44))
-        .foregroundStyle(.tertiary)
-      Text("No string catalog open")
-        .font(.title3)
-      Text("Open a .xcstrings file to browse its keys and translations.")
-        .foregroundStyle(.secondary)
-      Button("Open Catalog…") { store.openPanelAndLoad() }
-        .padding(.top, 4)
-      if !fixtureExists {
-        generateButton
-        Text("Creates the test catalog at \(fixtureURL.path) from this repo's Swift packages and Xcode targets.")
-          .font(.caption2)
-          .foregroundStyle(.tertiary)
-          .multilineTextAlignment(.center)
-      }
+    return EmptyState(
+      systemImage: "globe", title: "No String Catalog Open",
+      message: fixtureExists
+        ? "Open a .xcstrings file to browse its keys and translations."
+        : "Open a .xcstrings file, or create the test catalog at \(fixtureURL.path) from this repo's Swift packages and Xcode targets."
+    ) {
+      Button("Open Catalog…") { store.openPanelAndLoad() }.buttonStyle(.kit)
+      if !fixtureExists { generateButton }
     }
-    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .kitPane()
   }
 }
 
@@ -405,57 +386,49 @@ private struct LanguageButtonsRow: View {
   let store: LocalizationStore
 
   var body: some View {
-    HStack(spacing: 6) {
+    HStack(spacing: KitMetrics.gutter) {
       // Which rows show: the status filter, first in the bar (the toolbar's
       // centre belongs to the project's tabs). It stays put while the
       // languages scroll, and folds into a menu when the pane is narrow.
       ViewThatFits(in: .horizontal) {
-        filterPicker.pickerStyle(.segmented).fixedSize()
-        filterPicker.pickerStyle(.menu).fixedSize()
+        KitSegmented(selection: filter, segments: RowFilter.allCases.map { KitSegment($0.title, value: $0) })
+          .fixedSize()
+        Picker("Show", selection: filter) {
+          ForEach(RowFilter.allCases) { Text($0.title).tag($0) }
+        }
+        .pickerStyle(.menu)
+        .labelsHidden()
+        .fixedSize()
       }
+      .help("Show only the rows in this state, in the visible language columns")
       .layoutPriority(1)
-      Divider().frame(height: 18)
       languages
     }
-    .padding(.leading, 12)
+    .padding(.horizontal, KitMetrics.gutter)
+    .padding(.vertical, 6)
     .frame(maxWidth: .infinity, alignment: .leading)
   }
 
-  private var filterPicker: some View {
-    Picker("Show", selection: Binding(get: { store.filter }, set: { store.filter = $0 })) {
-      ForEach(RowFilter.allCases) { rowFilter in
-        Text(rowFilter.title).tag(rowFilter)
-      }
-    }
-    .labelsHidden()
-    .help("Show only the rows in this state, in the visible language columns")
+  private var filter: Binding<RowFilter> {
+    Binding(get: { store.filter }, set: { store.filter = $0 })
   }
 
+  /// The language columns as chips on one track: an on chip shows its column.
   private var languages: some View {
     ScrollView(.horizontal, showsIndicators: false) {
       HStack(spacing: 6) {
-        ForEach(store.pickerLanguages, id: \.self) { language in
-          let selected = store.isLanguageSelected(language)
-          Button {
-            store.toggleLanguage(language)
-          } label: {
-            Text(language)
-              .font(.callout)
-              .foregroundStyle(selected ? .white : .primary)
-              .padding(.horizontal, 10)
-              .padding(.vertical, 4)
-              .background(selected ? Color.accentColor : Color.secondary.opacity(0.12), in: Capsule())
-          }
-          .buttonStyle(.plain)
-          .help(selected ? "Hide \(language) column" : "Show \(language) column")
-        }
         if !store.pickerLanguages.isEmpty {
-          Divider().frame(height: 18)
+          ChipTrack {
+            ForEach(store.pickerLanguages, id: \.self) { language in
+              let selected = store.isLanguageSelected(language)
+              Toggle(language, isOn: Binding(get: { selected }, set: { _ in store.toggleLanguage(language) }))
+                .help(selected ? "Hide \(language) column" : "Show \(language) column")
+            }
+          }
+          .fixedSize()
         }
         addLanguagesButton
       }
-      .padding(.trailing, 12)
-      .padding(.vertical, 6)
     }
   }
 
@@ -466,21 +439,14 @@ private struct LanguageButtonsRow: View {
     Button {
       store.openLanguagePicker()
     } label: {
-      HStack(spacing: 5) {
-        if store.isAddingLanguage {
-          ProgressView()
-            .controlSize(.small)
-        } else {
-          Image(systemName: "plus")
-        }
-        Text(store.isAddingLanguage ? "Adding…" : "Add Languages")
+      if store.isAddingLanguage {
+        LiveIcon(systemImage: "plus", status: .working, size: 20)
+      } else {
+        Label("Add Languages", systemImage: "plus")
       }
-      .font(.callout)
-      .padding(.horizontal, 10)
-      .padding(.vertical, 4)
-      .background(Color.secondary.opacity(0.12), in: Capsule())
     }
-    .buttonStyle(.plain)
+    .buttonStyle(.kitIcon)
+    .foregroundStyle(Hue.accent.text)
     .disabled(!store.isLoaded || store.isAddingLanguage)
     .help("Pick languages this catalog does not carry yet — their columns appear here and a run fills them. The catalog file only gains a language where a translation exists to save")
   }
@@ -537,7 +503,7 @@ private struct AddLanguagesView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
       }
       .frame(maxHeight: .infinity)
-      .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.07)))
+      .background(.kitField, in: RoundedRectangle(cornerRadius: KitMetrics.radiusCard, style: .continuous))
 
       HStack(spacing: 8) {
         Button("Select All") { selection = Set(addable) }
@@ -550,10 +516,11 @@ private struct AddLanguagesView: View {
           dismiss()
         }
         Button(addTitle) { add() }
-          .buttonStyle(.borderedProminent)
+          .buttonStyle(.kitPrimary)
           .keyboardShortcut(.defaultAction)
           .disabled(selection.isEmpty)
       }
+      .buttonStyle(.kit)
     }
     .padding(18)
     .frame(width: 680, height: 540)
@@ -564,7 +531,7 @@ private struct AddLanguagesView: View {
   private func toggle(_ code: String) -> some View {
     let present = store.isLanguagePresent(code)
     Toggle(code, isOn: binding(for: code, present: present))
-      .toggleStyle(.checkbox)
+      .toggleStyle(.kitCheckbox)
       .disabled(present)
       .foregroundStyle(present ? .secondary : .primary)
       .help(present
@@ -609,29 +576,56 @@ private struct CatalogTable: View {
   @Binding var selection: String?
 
   var body: some View {
-    @Bindable var store = store
-    Table(store.visibleRows, selection: $selection, sortOrder: $store.sortOrder) {
-      TableColumn(store.sourceLanguageTitle, sortUsing: CatalogSort(.source)) { row in
-        SourceCell(store: store, row: row)
-      }
-      .width(min: 160, ideal: 300, max: 300)
-
-      if store.showLongest {
-        TableColumn("Longest", sortUsing: CatalogSort(.longest)) { row in
-          LongestCell(store: store, row: row)
-        }
-        .width(min: 140, ideal: 300, max: 300)
-      }
-
-      TableColumnForEach(store.selectedLanguages, id: \.self) { language in
-        TableColumn(language, sortUsing: CatalogSort(.language(language))) { row in
-          LanguageCell(store: store, row: row, language: language)
-        }
-        .width(min: 120, ideal: 240, max: 300)
-      }
-    }
+    KitGrid(store.visibleRows, columns: columns, selection: rowSelection, sort: sort)
   }
 
+  private var columns: [KitGridColumn<CatalogRow>] {
+    var columns = [
+      KitGridColumn<CatalogRow>(store.sourceLanguageTitle, id: "source", width: 300) { row in
+        SourceCell(store: store, row: row)
+      }
+    ]
+    if store.showLongest {
+      columns.append(KitGridColumn("Longest", id: "longest", width: 260) { row in
+        LongestCell(store: store, row: row)
+      })
+    }
+    for language in store.selectedLanguages {
+      columns.append(KitGridColumn(language, id: "lang:" + language, width: 240) { row in
+        LanguageCell(store: store, row: row, language: language)
+      })
+    }
+    return columns
+  }
+
+  /// The grid selects a set; the inspector shows one row, the last one picked.
+  private var rowSelection: Binding<Set<String>> {
+    Binding(
+      get: { selection.map { [$0] } ?? [] },
+      set: { selection = $0.first(where: { $0 != selection }) ?? $0.first })
+  }
+
+  /// The store's sort, as the column the grid's header shows.
+  private var sort: Binding<KitGridSort?> {
+    Binding(
+      get: {
+        guard let first = store.sortOrder.first else { return nil }
+        let id: String
+        switch first.column {
+        case .source, .comment: id = "source"
+        case .longest: id = "longest"
+        case .language(let language): id = "lang:" + language
+        }
+        return KitGridSort(id, ascending: first.order == .forward)
+      },
+      set: { sort in
+        guard let sort else { return }
+        let column: CatalogSort.Column =
+          sort.column == "longest" ? .longest
+          : sort.column.hasPrefix("lang:") ? .language(String(sort.column.dropFirst(5))) : .source
+        store.sortOrder = [CatalogSort(column, order: sort.ascending ? .forward : .reverse)]
+      })
+  }
 }
 
 // MARK: - Inspector
@@ -644,100 +638,97 @@ private struct RowInspector: View {
   let row: CatalogRow
 
   var body: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: 16) {
-        VStack(alignment: .leading, spacing: 6) {
-          Text("Source")
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(.secondary)
-          Text(row.sourceText)
-            .font(.title3.weight(.semibold))
-            .textSelection(.enabled)
-          if !row.commentText.isEmpty {
-            Text(row.commentText)
-              .font(.callout)
-              .foregroundStyle(.secondary)
-              .textSelection(.enabled)
-          }
-          HStack(spacing: 6) {
-            if row.key != row.sourceText {
-              chip(row.key, monospaced: true)
-            }
-            if let width = row.maxWidth { chip("Max \(width) chars") }
-            if !row.isTranslatable { chip("Not translated") }
-          }
-          let note = store.note(for: row.key)
-          if !note.text.isEmpty {
-            Label(note.text, systemImage: note.scope == .project ? "text.book.closed" : "text.bubble")
-              .font(.callout)
-              .padding(8)
-              .frame(maxWidth: .infinity, alignment: .leading)
-              .background(Color.yellow.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
-          }
+    KitInspector(width: nil) {
+      InspectorHeader(row.sourceText, meta: ["Source", row.commentText], systemImage: "doc.text") {
+        if row.key != row.sourceText { Chip(Text(row.key).monospaced(), style: .quiet) }
+        if let width = row.maxWidth { Chip("Max \(width) chars") }
+        if !row.isTranslatable { Chip("Not translated", hue: .gray) }
+      }
+      .textSelection(.enabled)
+      let note = store.note(for: row.key)
+      if !note.text.isEmpty {
+        Banner(
+          note.scope == .project ? "Project rule" : "Note", message: note.text,
+          systemImage: note.scope == .project ? "text.book.closed" : "text.bubble", hue: .yellow
+        ) {
+          Button("Edit…") { store.editNote(row.key) }
         }
-        Divider()
-        if row.isTranslatable {
+      }
+      if row.isTranslatable {
+        KitSection("Translations", meta: translationsMeta, systemImage: "globe", hue: .teal) {
           ForEach(store.pickerLanguages, id: \.self) { language in
             languageSection(language)
           }
         }
-        Divider()
-        HStack {
-          Button("Note…") { store.editNote(row.key) }
-          Button("Project Rules…") { store.openContextDocs() }
-        }
-        .buttonStyle(.link)
       }
-      .padding(16)
+      ActionBar {
+        Button("Note…") { store.editNote(row.key) }
+        Button("Project Rules…") { store.openContextDocs() }
+      }
     }
+  }
+
+  /// "6 languages · 1 needs review".
+  private var translationsMeta: [String] {
+    let languages = store.pickerLanguages
+    let waiting = languages.filter { Self.state(of: cell(for: $0)) == .needsReview }.count
+    var parts = ["\(languages.count) language\(languages.count == 1 ? "" : "s")"]
+    if waiting > 0 { parts.append("\(waiting) need\(waiting == 1 ? "s" : "") review") }
+    return parts
+  }
+
+  private func cell(for language: String) -> LangCell {
+    row.cells[language] ?? LangCell(
+      text: "", state: nil, hasParsed: false, hasOverride: false,
+      hasVariations: false, hasPlurals: false,
+      isEditable: row.isTranslatable, record: nil, pluralRecords: [:])
   }
 
   @ViewBuilder
   private func languageSection(_ language: String) -> some View {
-    let cell = row.cells[language] ?? LangCell(
-      text: "", state: nil, hasParsed: false, hasOverride: false,
-      hasVariations: false, hasPlurals: false,
-      isEditable: row.isTranslatable, record: nil, pluralRecords: [:])
+    let cell = cell(for: language)
     let state = Self.state(of: cell)
-    VStack(alignment: .leading, spacing: 6) {
+    VStack(alignment: .leading, spacing: 4) {
       HStack(spacing: 6) {
         Text(Locale.current.localizedString(forIdentifier: language) ?? language)
-          .fontWeight(.semibold)
-        Text(language).font(.caption).foregroundStyle(.secondary)
+          .foregroundStyle(.kitSecondary)
+        Text(language).kitFont(.caption).foregroundStyle(.kitTertiary)
         Spacer()
-        Text(state.title)
-          .font(.caption.weight(.medium))
-          .padding(.horizontal, 7)
-          .padding(.vertical, 1)
-          .background(state.color.opacity(0.16), in: Capsule())
-          .foregroundStyle(state.color)
+        if state != .missing {
+          Chip(state.title, hue: state.hue).controlSize(.small)
+        }
+        switch state {
+        case .needsReview, .machine:
+          Button("Approve") { store.setCellState(row.key, language: language, .reviewed) }
+            .buttonStyle(.kitPlain)
+            .foregroundStyle(Hue.accent.text)
+            .help("Mark this translation reviewed")
+        case .reviewed, .missing:
+          EmptyView()
+        }
+      }
+      .frame(minHeight: 24)
+      .contextMenu {
+        if state == .reviewed {
+          Button("Needs Review") { store.setCellState(row.key, language: language, .needs_review) }
+        }
       }
       Group {
         if cell.hasPlurals {
           PluralEditCell(store: store, rowKey: row.key, language: language, cell: cell)
         } else if cell.hasVariations {
-          Text(cell.text).foregroundStyle(.secondary)
+          Text(cell.text).foregroundStyle(.kitSecondary)
         } else {
           LanguageEditCell(store: store, rowKey: row.key, language: language, cell: cell, record: cell.record)
         }
       }
-      .padding(6)
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .background(.background, in: RoundedRectangle(cornerRadius: 8))
-      .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.quaternary))
-      HStack {
-        Spacer()
-        switch state {
-        case .needsReview, .machine:
-          Button("Mark Reviewed") { store.setCellState(row.key, language: language, .reviewed) }
-        case .reviewed:
-          Button("Needs Review") { store.setCellState(row.key, language: language, .needs_review) }
-        case .missing:
-          EmptyView()
-        }
-      }
-      .controlSize(.small)
+      .padding(.horizontal, 10)
+      .padding(.vertical, 7)
+      .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
+      .background(.kitField, in: RoundedRectangle(cornerRadius: KitMetrics.radius, style: .continuous))
     }
+    .padding(.horizontal, 6)
+    .padding(.vertical, 2)
   }
 
   enum CellState {
@@ -752,12 +743,12 @@ private struct RowInspector: View {
       }
     }
 
-    var color: Color {
+    var hue: Hue {
       switch self {
       case .reviewed: .green
       case .needsReview: .orange
       case .machine: .purple
-      case .missing: .secondary
+      case .missing: .gray
       }
     }
   }
@@ -770,14 +761,6 @@ private struct RowInspector: View {
     return .reviewed
   }
 
-  private func chip(_ text: String, monospaced: Bool = false) -> some View {
-    Text(text)
-      .font(monospaced ? .system(.caption, design: .monospaced) : .caption)
-      .lineLimit(1)
-      .padding(.horizontal, 7)
-      .padding(.vertical, 2)
-      .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
-  }
 }
 
 // MARK: - Row cells
@@ -792,20 +775,20 @@ private struct SourceCell: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 2) {
       Text(row.sourceText)
-        .lineLimit(3)
+        .lineLimit(1)
         .help(row.sourceText)
       if row.hasPlurals, !row.sourcePluralSummary.isEmpty {
         Text(row.sourcePluralSummary)
           .font(.caption)
           .foregroundStyle(.secondary)
-          .lineLimit(3)
+          .lineLimit(1)
           .help("Plural forms — \(row.sourcePluralSummary)")
       }
       if store.showComments, !row.commentText.isEmpty {
         Text(row.commentText)
           .font(.caption)
           .foregroundStyle(.secondary)
-          .lineLimit(3)
+          .lineLimit(1)
           .help(row.commentText)
       }
     }
@@ -1519,38 +1502,32 @@ private struct FooterBar: View {
 
   var body: some View {
     HStack(spacing: 6) {
-      Text("\(store.totalKeyCount) keys, showing \(store.visibleRows.count)")
-        .foregroundStyle(.secondary)
-      if !store.selectedLanguages.isEmpty {
-        Text("·").foregroundStyle(.tertiary)
-        ForEach(store.selectedLanguages, id: \.self) { language in
-          Text("\(language): \(store.missingCount(for: language)) missing")
-            .foregroundStyle(.secondary)
-        }
-      }
-      // A bulk add shows its result here: the columns it would need are not
-      // opened for it (see LocalizationStore.addLanguages).
-      if let statusNote = store.statusNote {
-        Text("·").foregroundStyle(.tertiary)
-        Text(statusNote).foregroundStyle(.secondary)
-      }
       // The store catching up behind the pane (a whole-catalog mirror, a language seeding):
       // the table and a run are already usable, so this is a NOTE, not a block — it is what
       // the badges and the counts are still waiting for.
       if store.isSyncing {
-        Text("·").foregroundStyle(.tertiary)
-        HStack(spacing: 4) {
-          ProgressView().controlSize(.small)
-          Text("indexing in the background")
-        }
-        .foregroundStyle(.secondary)
+        Text("indexing in the background").foregroundStyle(.kitSecondary)
+        separator
       }
-      Spacer()
+      // A bulk add shows its result here: the columns it would need are not
+      // opened for it (see LocalizationStore.addLanguages).
+      if let statusNote = store.statusNote {
+        Text(statusNote).foregroundStyle(.kitSecondary)
+        separator
+      }
+      ForEach(store.selectedLanguages, id: \.self) { language in
+        Text("\(language): \(store.missingCount(for: language)) missing").foregroundStyle(.kitSecondary)
+        separator
+      }
+      Text("\(store.totalKeyCount) keys, showing \(store.visibleRows.count)")
+        .foregroundStyle(.kitSecondary)
+        .monospacedDigit()
     }
-    .font(.caption)
     .lineLimit(1)
-    .padding(.horizontal, 12)
-    .padding(.vertical, 4)
+  }
+
+  private var separator: some View {
+    Text("·").foregroundStyle(.kitTertiary)
   }
 }
 
