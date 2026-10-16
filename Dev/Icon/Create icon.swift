@@ -191,37 +191,26 @@ struct CreateIconView: View {
     }
   }
 
-  /// The four appearances as cards on one field track, each showing the icon in its Dock; the one the big
-  /// preview shows is raised.
+  /// The four appearances as the kit's tall choice cards, each showing the icon in its Dock; the one the big
+  /// preview shows is picked.
   private var appearances: some View {
-    LazyVGrid(columns: [GridItem(.flexible(), spacing: 4), GridItem(.flexible(), spacing: 4)], spacing: 4) {
+    LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
       ForEach(IconAppearance.allCases) { item in
-        Button {
-          withKitAnimation { appearance = item }
-        } label: {
-          VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-              Tile(systemImage: item.systemImage, hue: item == appearance ? .accent : .gray, size: 18, style: .solid)
-              VStack(alignment: .leading, spacing: 0) {
-                Text(item.title).kitFont(.headline)
-                Text(item.subtitle).kitFont(.caption)
-              }
+        ChoiceCard(isOn: $appearance.picks(item)) {
+          HStack(spacing: 8) {
+            Tile(systemImage: item.systemImage, hue: item == appearance ? .accent : .gray, size: 18, style: .solid)
+            VStack(alignment: .leading, spacing: 0) {
+              Text(item.title).kitFont(.headline)
+              Text(item.subtitle).kitFont(.caption)
             }
-            .padding(.horizontal, 2)
-            dockScene(item)
+            Spacer(minLength: 0)
           }
-          .padding(6)
-          .contentShape(Rectangle())
-          .background {
-            if item == appearance { Color.clear.kitSurface(.raised, cornerRadius: KitMetrics.radiusLarge) }
-          }
+          .padding(.horizontal, 2)
+          dockScene(item)
         }
-        .buttonStyle(.plain)
-        .accessibilityAddTraits(item == appearance ? .isSelected : [])
       }
     }
-    .padding(4)
-    .kitSurface(.field, cornerRadius: KitMetrics.radiusXL)
+    .kitChoiceCardStyle(.tall)
     .frame(maxWidth: 680)
   }
 

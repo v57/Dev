@@ -48,7 +48,6 @@ struct ContentView: View {
     NavigationSplitView {
       // The kit sidebar's own bottom bar has the toggle.
       SidebarView(model: model)
-        .frame(minWidth: 220)
         .navigationSplitViewColumnWidth(min: 220, ideal: 240, max: 360)
         .toolbar(removing: .sidebarToggle)
     } detail: {
@@ -65,7 +64,7 @@ struct ContentView: View {
     .navigationTitle(windowTitle)
     .navigationSubtitle(windowSubtitle)
     // The kit's rich title stands in for the window's.
-    .toolbar(removing: .title)
+    .kitHidesSystemTitle()
     .onAppear {
       AppContext.shared.localization = localizationStore
       AppContext.shared.shell = translation
@@ -335,26 +334,6 @@ struct ContentView: View {
           message: "Pick a project in the sidebar, or open Storage or Virtual Machines."
         ).kitPane()
       }
-    }
-  }
-}
-
-/// A toolbar item that holds kit cards: on macOS 26 it drops the shared glass behind it, since the kit
-/// draws its own cards (`ToolGroup`, the segmented capsule).
-struct KitToolbarItem<Content: View>: ToolbarContent {
-  var placement: ToolbarItemPlacement
-  @ViewBuilder var content: () -> Content
-
-  init(placement: ToolbarItemPlacement, @ViewBuilder content: @escaping () -> Content) {
-    self.placement = placement
-    self.content = content
-  }
-
-  var body: some ToolbarContent {
-    if #available(macOS 26, *) {
-      ToolbarItem(placement: placement) { content() }.sharedBackgroundVisibility(.hidden)
-    } else {
-      ToolbarItem(placement: placement) { content() }
     }
   }
 }

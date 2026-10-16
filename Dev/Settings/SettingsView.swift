@@ -13,14 +13,12 @@ struct SettingsView: View {
   @AppStorage("settings.tab") private var tab = "translation"
 
   var body: some View {
-    KitSettings(selection: $tab) {
+    KitSettings(selection: $tab, window: .hiddenTitleBar) {
       SettingsPane("General", systemImage: "gearshape", id: "general") { GeneralSettingsView() }
       SettingsPane("Translation", systemImage: "globe", hue: .blue, id: "translation") { TranslationSettingsView() }
       SettingsPane("Agents", systemImage: "powerplug", id: "agents") { AgentsSettingsView() }
       SettingsPane("Advanced", systemImage: "slider.horizontal.3", id: "advanced") { AdvancedSettingsView() }
     }
-    // The kit's sidebar runs up under the traffic lights, with no title bar over it.
-    .ignoresSafeArea(.container, edges: .top)
     .frame(width: 640, height: 560)
     .toolbar(removing: .title)
     .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)

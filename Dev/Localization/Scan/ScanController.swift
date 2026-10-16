@@ -6,6 +6,7 @@
 //
 
 import AppKit
+import ComponentKit
 import Foundation
 
 /// Run state for Scan Strings: one scan at a time, its live progress, the
@@ -394,9 +395,7 @@ final class ScanController {
 
   func copyReport() {
     guard let text = reportText else { return }
-    let pasteboard = NSPasteboard.general
-    pasteboard.clearContents()
-    pasteboard.setString(text, forType: .string)
+    KitPasteboard.copy(text)
   }
 
   static func durationText(_ seconds: TimeInterval) -> String {

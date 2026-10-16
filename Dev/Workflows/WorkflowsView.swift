@@ -132,73 +132,89 @@ struct WorkflowsView: View {
 
   // MARK: - Left: workflows and runs
 
-  private func sidebar(_ list: [Workflow], selected: Workflow?) -> some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: KitMetrics.gutter) {
-        KitSection(
-          "Workflows", meta: list.count == 1 ? "1 workflow" : "\(list.count) workflows",
-          systemImage: "play", hue: .blue
-        ) {
-          ForEach(list) { workflow in
-            Button {
-              workflowID = workflow.id
-              runID = nil
-              stepID = nil
-            } label: {
-              LaneItem(workflow.name, subtitle: workflow.trigger.summary, isSelected: selected?.id == workflow.id)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .contextMenu {
-              Button("Edit…") { editing = workflow }
-              Button("Duplicate") {
-                var copy = workflow
-                copy.id = workflow.id + "-copy"
-                copy.name = workflow.name + " Copy"
-                save(copy)
-              }
-            }
-          }
-        } accessory: {
-          Button("New Workflow…", systemImage: "plus") {
-            let id = "workflow-\(Int(Date().timeIntervalSince1970))"
-            editing = Workflow(id: id, name: "New Workflow", steps: [
-              Workflow.Step(id: "build", name: "Build", kind: .release, releaseStep: "build"),
-            ])
-          }
-          .help("New Workflow…")
+  /// A row of the left list: a workflow, or one of its runs.
+  private nonisolated enum Pick: Hashable, Sendable {
+    case workflow(String)
+    case run(UUID)
+  }
+
+  /// The list holds two marks: the run the middle shows is selected, its workflow is current (selected itself
+  /// before it ever ran).
+  private func pick(_ selected: Workflow?) -> Binding<Pick?> {
+    Binding(
+      get: {
+        guard let selected else { return nil }
+        if let run = currentRun(selected) { return .run(run.id) }
+        return .workflow(selected.id)
+      },
+      set: { pick in
+        switch pick {
+        case .workflow(let id):
+          workflowID = id
+          runID = nil
+          stepID = nil
+        case .run(let id):
+          runID = id
+        case nil:
+          break
         }
-        if let selected {
-          let runs = store.runs(for: root).filter { $0.workflowID == selected.id }
-          KitSection(
-            "Runs", meta: runs.isEmpty ? "None yet" : "\(runs.count) run\(runs.count == 1 ? "" : "s")",
-            systemImage: "clock", hue: .gray, status: runs.first?.state == .running ? .working : .idle
-          ) {
-            if runs.isEmpty {
-              Text("Runs show here when a workflow starts.")
-                .kitFont(.caption)
-                .padding(.horizontal, 6)
-                .padding(.bottom, 4)
+      })
+  }
+
+  private func sidebar(_ list: [Workflow], selected: Workflow?) -> some View {
+    KitList(selection: pick(selected)) {
+      KitSection(
+        "Workflows", meta: list.count == 1 ? "1 workflow" : "\(list.count) workflows",
+        systemImage: "play", hue: .blue
+      ) {
+        ForEach(list) { workflow in
+          SidebarRow(value: Pick.workflow(workflow.id), workflow.name, subtitle: workflow.trigger.summary) {
+            EmptyView()
+          }
+          .isCurrent(selected?.id == workflow.id)
+          .contextMenu {
+            Button("Edit…") { editing = workflow }
+            Button("Duplicate") {
+              var copy = workflow
+              copy.id = workflow.id + "-copy"
+              copy.name = workflow.name + " Copy"
+              save(copy)
             }
-            ForEach(runs) { run in
-              Button {
-                runID = run.id
-              } label: {
-                LaneItem(
-                  run.title.isEmpty ? run.startedAt.formatted(date: .abbreviated, time: .shortened) : run.title,
-                  subtitle: runNote(run), subtitleHue: run.state == .failed ? .red : nil,
-                  isSelected: currentRun(selected)?.id == run.id
-                ) {
-                  LiveIcon(systemImage: "play", hue: .gray, status: Self.status(for: run.state), size: 18)
-                }
-                .contentShape(Rectangle())
-              }
-              .buttonStyle(.plain)
+          }
+        }
+      } accessory: {
+        Button("New Workflow…", systemImage: "plus") {
+          let id = "workflow-\(Int(Date().timeIntervalSince1970))"
+          editing = Workflow(id: id, name: "New Workflow", steps: [
+            Workflow.Step(id: "build", name: "Build", kind: .release, releaseStep: "build"),
+          ])
+        }
+        .help("New Workflow…")
+      }
+      if let selected {
+        let runs = store.runs(for: root).filter { $0.workflowID == selected.id }
+        KitSection(
+          "Runs", meta: runs.isEmpty ? "None yet" : "\(runs.count) run\(runs.count == 1 ? "" : "s")",
+          systemImage: "clock", hue: .gray, status: runs.first?.state == .running ? .working : .idle
+        ) {
+          if runs.isEmpty {
+            Text("Runs show here when a workflow starts.")
+              .kitFont(.caption)
+              .padding(.horizontal, 6)
+              .padding(.bottom, 4)
+          }
+          ForEach(runs) { run in
+            SidebarRow(
+              value: Pick.run(run.id),
+              run.title.isEmpty ? run.startedAt.formatted(date: .abbreviated, time: .shortened) : run.title,
+              systemImage: "play", hue: .gray, status: Self.status(for: run.state)
+            )
+            .subtitle {
+              Text(runNote(run)).foregroundStyle(run.state == .failed ? AnyShapeStyle(Hue.red.text) : AnyShapeStyle(.kitSecondary))
             }
           }
         }
       }
-      .padding(KitMetrics.gutter)
     }
   }
 

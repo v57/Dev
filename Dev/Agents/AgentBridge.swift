@@ -130,8 +130,7 @@ struct AgentsSettingsView: View {
             .lineLimit(2)
           Spacer()
           Button(copied ? "Copied" : "Copy") {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(command, forType: .string)
+            KitPasteboard.copy(command)
             copied = true
           }
           .buttonStyle(.kitPlain)
