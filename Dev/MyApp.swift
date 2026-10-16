@@ -55,7 +55,7 @@ struct MyApp: App {
         Settings {
             SettingsView().componentKit()
         }
-        // KitSettings' sidebar runs up under the traffic lights.
+        // KitSettings(…, window: .hiddenTitleBar) runs its sidebar up under the traffic lights.
         .windowStyle(.hiddenTitleBar)
     }
 }
