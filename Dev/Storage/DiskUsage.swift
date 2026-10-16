@@ -20,6 +20,8 @@ nonisolated enum DiskUsage {
   struct Measurement {
     var bytes: Int64 = 0
     var sharedElsewhere: Int64 = 0
+    /// The latest modification time of anything measured, in seconds since 1970.
+    var newest = 0
   }
 
   /// Bytes under `paths`, skipping the `excluded` subtrees (they are another
@@ -38,6 +40,7 @@ nonisolated enum DiskUsage {
       if !skipped.isEmpty, skipped.contains(entry.path) {
         return .skip
       }
+      measurement.newest = max(measurement.newest, entry.modified.tv_sec)
       if entry.isDirectory {
         measurement.bytes += entry.allocatedBytes
       } else {

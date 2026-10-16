@@ -286,7 +286,7 @@ extension StorageStore {
   }
 
   /// Unticks everything ticked, or ticks the recommended ones (else all).
-  func toggleGroup(_ items: [StorageItem], preferring prefer: (StorageItem) -> Bool = { $0.safety != .data }) {
+  func toggleGroup(_ items: [StorageItem], preferring prefer: (StorageItem) -> Bool = \.isRecommended) {
     let pickable = items.filter { $0.cleanup.isCleanable && !$0.isLocked }
     if pickable.contains(where: isSelected) {
       setSelected(false, pickable)
@@ -444,7 +444,7 @@ private struct SmartScanPage: View {
           VStack(alignment: .leading, spacing: 8) {
             Text("\(store.recommendedBytes.byteString) is safe to clean")
               .font(.largeTitle.weight(.bold))
-            Text("Caches, build output and leftovers of deleted apps, which your tools make again on their own. Your own data, your apps and language versions are never picked for you.")
+            Text("Caches and build output, which your tools make again on their own. Your own data, what you installed and scratch space that may be in use are never picked for you.")
               .font(.title3)
               .foregroundStyle(.secondary)
               .fixedSize(horizontal: false, vertical: true)
@@ -462,6 +462,9 @@ private struct SmartScanPage: View {
           }
         }
         .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.quaternary))
+        if !store.scratchItems.isEmpty {
+          ScratchPicker()
+        }
         HStack(alignment: .top, spacing: 12) {
           if !unusedApps.isEmpty {
             tip(
@@ -505,7 +508,7 @@ private struct SmartScanPage: View {
 
   private func sectionRow(_ section: StorageSection) -> some View {
     let items = section.categories.flatMap { store.items(in: $0) }
-    let recommended = items.filter { $0.safety != .data && $0.cleanup.isCleanable && !$0.isLocked }
+    let recommended = items.filter(\.isRecommended)
     let picked = items.filter(store.isSelected).reduce(0) { $0 + $1.bytes }
     return HStack(spacing: 14) {
       RoundCheck(state: store.checkState(recommended), disabled: recommended.isEmpty || store.isBusy) {
@@ -545,6 +548,41 @@ private struct SmartScanPage: View {
     .padding(14)
     .frame(maxWidth: .infinity)
     .background(Color.orange.opacity(0.09), in: RoundedRectangle(cornerRadius: 14))
+  }
+}
+
+/// Agents' scratchpads and temp folders, picked apart from Smart Scan by how
+/// long they have gone untouched: what changed lately may still be in use.
+private struct ScratchPicker: View {
+  @Environment(StorageStore.self) private var store
+
+  var body: some View {
+    let items = store.scratchItems
+    let picked = items.filter(store.isSelected)
+    HStack(spacing: 14) {
+      BadgeIcon(symbol: "clock.arrow.circlepath", color: .teal)
+      VStack(alignment: .leading, spacing: 2) {
+        Text("Scratch and temp folders · \(items.reduce(0) { $0 + $1.bytes }.byteString)").fontWeight(.semibold)
+        Text(picked.isEmpty
+          ? "Agent scratchpads and temp files, \(items.count) folders. Some may be in use, so pick by age."
+          : "\(picked.count) of \(items.count) folders picked · \(picked.reduce(0) { $0 + $1.bytes }.byteString)")
+          .font(.callout)
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+      }
+      Spacer(minLength: 8)
+      Picker("Pick", selection: Binding(get: { store.scratchPick }, set: { if let pick = $0 { store.pickScratch(pick) } })) {
+        ForEach(StorageStore.ScratchPick.allCases, id: \.self) { pick in
+          Text(pick.title).tag(Optional(pick))
+        }
+      }
+      .labelsHidden()
+      .pickerStyle(.menu)
+      .fixedSize()
+      .disabled(store.isBusy)
+    }
+    .padding(14)
+    .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.quaternary))
   }
 }
 

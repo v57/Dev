@@ -16,6 +16,8 @@ nonisolated extension StorageDiscovery {
   /// what is still there.
   mutating func addTemporary() {
     let uid = getuid()
+    // One item per session, so the ones still running can be told apart by
+    // age from the ones long done.
     for project in children(of: "/private/tmp/claude-\(uid)") {
       let name = (project as NSString).lastPathComponent
       // Claude Code names a project's folder after its path, slashes as dashes.
@@ -23,10 +25,12 @@ nonisolated extension StorageDiscovery {
       let title = name.hasPrefix(homePrefix)
         ? "~/" + name.dropFirst(homePrefix.count).replacingOccurrences(of: "-", with: "/")
         : name
-      add(StorageItem(
-        id: project, category: .claude, group: "Claude Code scratchpads", title: title,
-        detail: "\(children(of: project).count) sessions' scratch files", paths: [project],
-        safety: .cache, cleanup: .trash, minBytes: 10_000_000))
+      for session in children(of: project) {
+        add(StorageItem(
+          id: session, category: .claude, group: "Claude Code scratchpads", title: title,
+          detail: "Session " + (session as NSString).lastPathComponent.prefix(8), paths: [session],
+          safety: .cache, cleanup: .trash, minBytes: 10_000_000))
+      }
     }
     for path in children(of: "/private/tmp") where Self.isOwned(path, by: uid) {
       add(StorageItem(

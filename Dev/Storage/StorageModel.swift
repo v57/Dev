@@ -313,6 +313,9 @@ nonisolated struct StorageItem: Identifiable, Codable, Sendable, Hashable {
   /// Why the item cannot be picked right now (a VM a workflow runs on, a
   /// runtime the installed Xcode uses), or nil. Optional so older scans load.
   var lockReason: String?
+  /// When anything inside last changed, filled by measuring; nil for sizes a
+  /// tool reported and for scans saved before this existed.
+  var modified: Date?
 
   var isLocked: Bool { lockReason != nil }
 
@@ -320,6 +323,39 @@ nonisolated struct StorageItem: Identifiable, Codable, Sendable, Hashable {
 
   /// The item's main location, for Reveal in Finder and the path line.
   var primaryPath: String { paths.first ?? "" }
+}
+
+// MARK: - What Smart Scan picks
+
+nonisolated extension StorageItem {
+  /// Something installed rather than made: a formula, a language version or
+  /// toolchain, a global package, a simulator runtime, the Command Line Tools,
+  /// an app's own tools and VM. Only installing it again brings it back.
+  var isInstalled: Bool {
+    guard safety == .rebuildable else { return false }
+    if category.section == .installed { return true }
+    if StorageLanguages.classify(self)?.isVersion == true { return true }
+    switch (category, group) {
+    case (.xcode, "Command Line Tools"), (.xcode, "Simulator Runtimes"), (.claude, "Claude Code"),
+      (.claude, "Claude desktop"), (.web, "Test Browsers"):
+      return true
+    default:
+      return false
+    }
+  }
+
+  /// An agent session's scratchpad or a temp folder: often still in use by
+  /// whatever made it, so it is picked by age on its own, not by Smart Scan.
+  var isScratch: Bool {
+    (category == .claude && group == "Claude Code scratchpads")
+      || (category == .caches && group == "Temporary Files")
+  }
+
+  /// What Smart Scan picks: caches and build output. Never your data, never
+  /// what you installed, never scratch space.
+  var isRecommended: Bool {
+    safety != .data && cleanup.isCleanable && !isLocked && !isInstalled && !isScratch
+  }
 }
 
 // MARK: - Snapshot

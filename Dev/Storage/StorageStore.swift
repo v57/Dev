@@ -209,13 +209,61 @@ final class StorageStore {
 
   @ObservationIgnored private var autoSelectedScan: Date?
 
-  /// What Smart Scan picks: every cleanable cache and rebuildable item. Your
-  /// own data is never in it.
-  var recommendedItems: [StorageItem] {
-    items.filter { $0.safety != .data && $0.cleanup.isCleanable && !$0.isLocked }
-  }
+  /// What Smart Scan picks: caches and build output (`isRecommended`).
+  var recommendedItems: [StorageItem] { items.filter(\.isRecommended) }
 
   var recommendedBytes: Int64 { recommendedItems.reduce(0) { $0 + $1.bytes } }
+
+  // MARK: Scratch and temp folders
+
+  /// How much scratch space to pick: by how long it has gone untouched, since
+  /// what changed lately may still be in use.
+  enum ScratchPick: CaseIterable, Hashable {
+    case none, week, day, all
+
+    var title: String {
+      switch self {
+      case .none: "None"
+      case .week: "Untouched for a week"
+      case .day: "Untouched for a day"
+      case .all: "All"
+      }
+    }
+
+    /// Whether an item last changed at `modified` belongs to this pick.
+    func includes(_ modified: Date?, now: Date) -> Bool {
+      switch self {
+      case .none: return false
+      case .all: return true
+      case .week, .day:
+        // Unknown age (an older scan): treat it as in use.
+        guard let modified else { return false }
+        return now.timeIntervalSince(modified) > (self == .week ? 7 : 1) * 86_400
+      }
+    }
+  }
+
+  var scratchItems: [StorageItem] {
+    items.filter { $0.isScratch && $0.cleanup.isCleanable && !$0.isLocked }
+  }
+
+  /// Ticks exactly the scratch items this pick includes.
+  func pickScratch(_ pick: ScratchPick) {
+    let now = Date()
+    let all = scratchItems
+    setSelected(false, all)
+    setSelected(true, all.filter { pick.includes($0.modified, now: now) })
+  }
+
+  /// The pick the scratch selection matches now, or nil when it was ticked by hand.
+  var scratchPick: ScratchPick? {
+    let now = Date()
+    let all = scratchItems
+    let picked = Set(all.filter(isSelected).map(\.id))
+    return ScratchPick.allCases.first { pick in
+      Set(all.filter { pick.includes($0.modified, now: now) }.map(\.id)) == picked
+    }
+  }
 
   // MARK: Selecting
 

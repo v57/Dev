@@ -109,6 +109,7 @@ nonisolated enum StorageScanner {
       let measurement = DiskUsage.measure(item.paths, excluding: item.excluded, ledger: ledger)
       item.bytes = measurement.bytes
       item.sharedBytes = measurement.sharedElsewhere > 0 ? measurement.sharedElsewhere : nil
+      item.modified = measurement.newest > 0 ? Date(timeIntervalSince1970: TimeInterval(measurement.newest)) : nil
     }
     guard !Task.isCancelled, item.bytes >= item.minBytes else { return nil }
     return item
