@@ -210,8 +210,11 @@ nonisolated enum StorageCategory: String, CaseIterable, Identifiable, Codable, S
 /// How much it costs to get an item back after it is cleaned. Drives the badge,
 /// the confirmation wording and what "Select Safe" picks.
 nonisolated enum StorageSafety: Int, Codable, Sendable, Comparable {
+  /// Nothing is removed: identical copies become clones that share blocks.
+  /// Below `cache` so it sorts as the safest without renumbering saved scans.
+  case lossless = -1
   /// A cache the owning tool refills on its own.
-  case cache
+  case cache = 0
   /// Rebuilt or re-downloaded on demand: build outputs, SDKs, node_modules.
   case rebuildable
   /// Your own data: VM disks, media, model downloads you picked, app state.
@@ -221,6 +224,7 @@ nonisolated enum StorageSafety: Int, Codable, Sendable, Comparable {
 
   var title: String {
     switch self {
+    case .lossless: "Lossless"
     case .cache: "Cache"
     case .rebuildable: "Rebuildable"
     case .data: "Your data"
@@ -229,6 +233,7 @@ nonisolated enum StorageSafety: Int, Codable, Sendable, Comparable {
 
   var help: String {
     switch self {
+    case .lossless: "Nothing is removed: identical copies share their space."
     case .cache: "Refilled automatically by the tool that owns it."
     case .rebuildable: "Rebuilt or re-downloaded the next time it is needed."
     case .data: "Not recreated on its own — review before removing."
@@ -252,10 +257,13 @@ nonisolated enum StorageCleanup: Codable, Sendable, Hashable {
   case adminCommand(script: String, verb: String)
   /// Shown for understanding only; cleaned from its own app (Photos, Trash…).
   case revealOnly(reason: String)
+  /// Replace identical files under these folders with APFS clones of one copy.
+  case cloneDuplicates(roots: [String])
 
   var verb: String {
     switch self {
     case .trash, .trashContents: "Move to Trash"
+    case .cloneDuplicates: "Replace with clones"
     case .command(_, _, let verb), .adminCommand(_, let verb): verb
     case .revealOnly: "Reveal only"
     }

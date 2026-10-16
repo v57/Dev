@@ -214,30 +214,46 @@ nonisolated enum DiskUsage {
     var device: Int32 { pointer.pointee.fts_statp?.pointee.st_dev ?? 0 }
     var inode: UInt64 { pointer.pointee.fts_statp?.pointee.st_ino ?? 0 }
 
+    var isRegularFile: Bool {
+      guard let stat = pointer.pointee.fts_statp else { return false }
+      return stat.pointee.st_mode & S_IFMT == S_IFREG
+    }
+
+    var ownerID: uid_t { pointer.pointee.fts_statp?.pointee.st_uid ?? 0 }
+
+    /// The BSD flags (`chflags`): locked, compressed, dataless…
+    var flags: UInt32 { pointer.pointee.fts_statp?.pointee.st_flags ?? 0 }
+
+    var modified: timespec { pointer.pointee.fts_statp?.pointee.st_mtimespec ?? timespec() }
+
     /// APFS's clone bookkeeping for this file, or nil where the volume does
     /// not keep it: whether it may share blocks, how many are its own, and the
     /// id its pure clones share.
-    var cloneInfo: CloneInfo? {
-      var list = attrlist()
-      list.bitmapcount = u_short(ATTR_BIT_MAP_COUNT)
-      list.commonattr = attrgroup_t(ATTR_CMN_RETURNED_ATTRS)
-      // Extended common attributes ride in `forkattr` with FSOPT_ATTR_CMN_EXTENDED.
-      list.forkattr = attrgroup_t(ATTR_CMNEXT_PRIVATESIZE) | attrgroup_t(ATTR_CMNEXT_CLONEID)
-        | attrgroup_t(ATTR_CMNEXT_EXT_FLAGS)
-      var buffer = (UInt64(0), UInt64(0), UInt64(0), UInt64(0), UInt64(0), UInt64(0), UInt64(0))
-      let options = UInt32(FSOPT_NOFOLLOW | FSOPT_ATTR_CMN_EXTENDED | FSOPT_PACK_INVAL_ATTRS)
-      return withUnsafeMutableBytes(of: &buffer) { raw -> CloneInfo? in
-        guard getattrlist(pointer.pointee.fts_path, &list, raw.baseAddress, raw.count, options) == 0 else {
-          return nil
-        }
-        // u_int32 length, attribute_set_t (five u_int32), then the requested
-        // attributes in bit order: PRIVATESIZE, CLONEID, EXT_FLAGS.
-        let start = 4 + 20
-        return CloneInfo(
-          privateSize: raw.loadUnaligned(fromByteOffset: start, as: Int64.self),
-          id: raw.loadUnaligned(fromByteOffset: start + 8, as: UInt64.self),
-          flags: raw.loadUnaligned(fromByteOffset: start + 16, as: UInt64.self))
+    var cloneInfo: CloneInfo? { DiskUsage.cloneInfo(atPath: pointer.pointee.fts_path) }
+  }
+
+  /// APFS's clone bookkeeping for the file at `path` (not following a
+  /// symlink), or nil where the volume does not keep it.
+  static func cloneInfo(atPath path: UnsafePointer<CChar>) -> CloneInfo? {
+    var list = attrlist()
+    list.bitmapcount = u_short(ATTR_BIT_MAP_COUNT)
+    list.commonattr = attrgroup_t(ATTR_CMN_RETURNED_ATTRS)
+    // Extended common attributes ride in `forkattr` with FSOPT_ATTR_CMN_EXTENDED.
+    list.forkattr = attrgroup_t(ATTR_CMNEXT_PRIVATESIZE) | attrgroup_t(ATTR_CMNEXT_CLONEID)
+      | attrgroup_t(ATTR_CMNEXT_EXT_FLAGS)
+    var buffer = (UInt64(0), UInt64(0), UInt64(0), UInt64(0), UInt64(0), UInt64(0), UInt64(0))
+    let options = UInt32(FSOPT_NOFOLLOW | FSOPT_ATTR_CMN_EXTENDED | FSOPT_PACK_INVAL_ATTRS)
+    return withUnsafeMutableBytes(of: &buffer) { raw -> CloneInfo? in
+      guard getattrlist(path, &list, raw.baseAddress, raw.count, options) == 0 else {
+        return nil
       }
+      // u_int32 length, attribute_set_t (five u_int32), then the requested
+      // attributes in bit order: PRIVATESIZE, CLONEID, EXT_FLAGS.
+      let start = 4 + 20
+      return CloneInfo(
+        privateSize: raw.loadUnaligned(fromByteOffset: start, as: Int64.self),
+        id: raw.loadUnaligned(fromByteOffset: start + 8, as: UInt64.self),
+        flags: raw.loadUnaligned(fromByteOffset: start + 16, as: UInt64.self))
     }
   }
 

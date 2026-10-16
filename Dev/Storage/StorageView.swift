@@ -139,6 +139,16 @@ struct StorageCleanSheet: View {
           systemImage: "lock.fill")
           .foregroundStyle(.secondary)
       }
+      let clones = items.filter {
+        if case .cloneDuplicates = $0.cleanup { return true }
+        return false
+      }
+      if !clones.isEmpty {
+        Label(
+          "Identical files become clones of one copy and keep their paths: nothing is removed, and the files are read again first, so it takes a while.",
+          systemImage: "square.on.square")
+          .foregroundStyle(.secondary)
+      }
       if !commands.isEmpty {
         Label(
           "\(commands.count) are removed by their own tool (simctl, ollama, go) and do not go through the Trash.",
@@ -204,6 +214,7 @@ extension StorageSidebarEntry {
 extension StorageSafety {
   var color: Color {
     switch self {
+    case .lossless: .mint
     case .cache: .green
     case .rebuildable: .blue
     case .data: .orange

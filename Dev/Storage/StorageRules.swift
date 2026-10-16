@@ -62,6 +62,7 @@ nonisolated extension StorageDiscovery {
       currentDirectory: nil, timeout: 30)
     var usedRuntimes = Set<String>()
     var unavailable: [String] = []
+    var shutDown: [String] = []
     if listed.succeeded, let data = listed.stdout.data(using: .utf8),
       let list = try? JSONDecoder.storage.decode(SimDeviceList.self, from: data) {
       for (runtime, devices) in list.devices.sorted(by: { $0.key < $1.key }) {
@@ -73,6 +74,7 @@ nonisolated extension StorageDiscovery {
           }
           usedRuntimes.insert(runtime)
           let booted = device.state == "Booted"
+          if !booted { shutDown.append(path) }
           let detail = [StorageNames.simRuntime(runtime), device.state,
             StorageNames.relative(device.lastUsedAt).map { "used \($0)" }]
             .compactMap { $0 }.joined(separator: " · ")
@@ -85,6 +87,14 @@ nonisolated extension StorageDiscovery {
                 verb: "Erase content")))
         }
       }
+    }
+    // Every device renders the same wallpapers and downloads the same system
+    // assets; a booted one is writing to them, so it is left out.
+    if !shutDown.isEmpty {
+      add(StorageItem(
+        id: "sim:clones", category: .xcode, group: "Simulators",
+        title: "Identical files in simulators", paths: [], safety: .lossless,
+        cleanup: .cloneDuplicates(roots: shutDown), reportedSize: true))
     }
     if !unavailable.isEmpty {
       add(StorageItem(
@@ -117,6 +127,18 @@ nonisolated extension StorageDiscovery {
           bytes: runtime.sizeBytes ?? 0, reportedSize: true))
       }
     }
+  }
+
+  /// `roots` without the data folders of simulators booted now: checked again
+  /// right before cloning, since a device may have booted after the scan.
+  static func excludingBootedSimulators(_ roots: [String]) -> [String] {
+    let listed = ScanShell.run("/usr/bin/xcrun", arguments: ["simctl", "list", "devices", "booted", "-j"],
+      currentDirectory: nil, timeout: 30)
+    guard listed.succeeded, let data = listed.stdout.data(using: .utf8),
+      let list = try? JSONDecoder.storage.decode(SimDeviceList.self, from: data)
+    else { return [] }
+    let booted = Set(list.devices.values.flatMap { $0 }.filter { $0.state == "Booted" }.map(\.udid))
+    return roots.filter { !booted.contains(($0 as NSString).lastPathComponent) }
   }
 
   // MARK: Android & Gradle

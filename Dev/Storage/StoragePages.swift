@@ -389,6 +389,8 @@ struct StorageFileRow: View {
       Spacer(minLength: 8)
       if case .command(_, _, let verb) = item.cleanup {
         Text(verb).font(.caption).foregroundStyle(.secondary)
+      } else if case .cloneDuplicates = item.cleanup {
+        Text(item.cleanup.verb).font(.caption).foregroundStyle(.secondary)
       } else if case .revealOnly(let reason) = item.cleanup {
         Image(systemName: "info.circle").foregroundStyle(.secondary).help(reason)
       }
@@ -739,6 +741,8 @@ private struct GroupsPage: View {
 
   private func about(_ safety: StorageSafety) -> String {
     switch safety {
+    case .lossless:
+      return "Copies of the same files. They become clones that share one copy's space and stay where they are, so nothing is removed and Smart Scan picks them."
     case .cache:
       return "Files kept to work faster. The tool that owns them fills them again on its own, so Smart Scan picks them."
     case .rebuildable:

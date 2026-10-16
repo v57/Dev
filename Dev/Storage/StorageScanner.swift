@@ -99,7 +99,13 @@ nonisolated enum StorageScanner {
   /// Sizes one item; nil when it is below its own threshold (and so noise).
   static func measure(_ item: StorageItem, ledger: SharedBlockLedger) -> StorageItem? {
     var item = item
-    if !item.reportedSize {
+    if case .cloneDuplicates(let roots) = item.cleanup {
+      // What cloning frees is what the copies hold on their own, which only
+      // reading them tells; their bytes are already counted by their folders.
+      let found = StorageDuplicates.find(in: roots)
+      item.bytes = found.bytes
+      item.detail = "\(found.copyCount) copies of \(found.groups.count) files · nothing is removed"
+    } else if !item.reportedSize {
       let measurement = DiskUsage.measure(item.paths, excluding: item.excluded, ledger: ledger)
       item.bytes = measurement.bytes
       item.sharedBytes = measurement.sharedElsewhere > 0 ? measurement.sharedElsewhere : nil
@@ -197,6 +203,18 @@ nonisolated enum StorageCleaner {
           throw CleanError(message: reason)
         case .adminCommand:
           continue  // run by cleanAsRoot
+        case .cloneDuplicates(let roots):
+          let idle = StorageDiscovery.excludingBootedSimulators(roots)
+          guard !idle.isEmpty else { throw CleanError(message: "The simulators are booted, or simctl did not answer") }
+          let result = StorageDuplicates.cloneAll(in: idle)
+          if result.cloned == 0, let first = result.failures.first { throw CleanError(message: first) }
+          report.cleanedIDs.append(item.id)
+          report.cleanedBytes += result.freed
+          if !result.failures.isEmpty {
+            report.failures.append((item.title,
+              "\(result.failures.count) files kept their own copy. First: \(result.failures[0])"))
+          }
+          continue
         }
         report.cleanedIDs.append(item.id)
         report.cleanedBytes += item.bytes
@@ -246,7 +264,7 @@ nonisolated enum StorageCleaner {
         for path in item.paths {
           body.append("/usr/bin/find \(StorageSystemScan.quoted(path)) -mindepth 1 -maxdepth 1 -exec /bin/rm -rf {} +")
         }
-      case .command, .revealOnly:
+      case .command, .revealOnly, .cloneDuplicates:
         continue
       }
       script += """
