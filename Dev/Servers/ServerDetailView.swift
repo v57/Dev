@@ -3,6 +3,7 @@
 //  Dev
 //
 
+import ComponentKit
 import SwiftUI
 
 /// The pane for one server: what it is, whether it answers, and what its corpus
@@ -40,9 +41,9 @@ struct ServerDetailView: View {
       if let row {
         content(row)
       } else {
-        ContentUnavailableView(
-          "Server not found", systemImage: "server.rack",
-          description: Text("This connection was removed. Pick another one in the sidebar."))
+        EmptyState(
+          systemImage: "server.rack", title: "Server Not Found",
+          message: "This connection was removed. Pick another one in the sidebar.")
       }
     }
     .navigationTitle(row?.name ?? "Server")

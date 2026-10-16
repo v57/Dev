@@ -25,9 +25,9 @@ struct VMsView: View {
           VMDetail(vm: vm, projects: projects, runner: store.runner(for: vm))
             .id(vm.id)
         } else {
-          ContentUnavailableView(
-            "Pick a virtual machine", systemImage: "desktopcomputer",
-            description: Text("Start it, then run a project's build or tests inside it."))
+          EmptyState(
+            systemImage: "desktopcomputer", title: "Pick a Virtual Machine",
+            message: "Start it, then run a project's build or tests inside it.")
         }
       }
       .frame(minWidth: 380, maxWidth: .infinity, maxHeight: .infinity)

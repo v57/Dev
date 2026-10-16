@@ -6,6 +6,7 @@
 import AppKit
 import DevScreenshots
 import DevScreenshotsCapture
+import ComponentKit
 import SwiftUI
 
 /// The Screenshots tab: capture (the scenes in `.dev/screenshots.json`, through Dev's own
@@ -193,22 +194,22 @@ struct ScreenshotsView: View {
         }
       }
     } else if let config = library?.config {
-      ContentUnavailableView {
-        Label("No screenshots yet", systemImage: "photo.on.rectangle")
-      } description: {
-        Text("Capture takes the \(config.scenes.count) scenes in .dev/screenshots.json: Dev builds the app, opens each scene from its launch arguments and saves the pictures in \(config.output).")
-      } actions: {
+      EmptyState(
+        systemImage: "photo.on.rectangle", title: "No Screenshots Yet",
+        message: "Capture takes the \(config.scenes.count) scenes in .dev/screenshots.json: Dev builds the app, opens each scene from its launch arguments and saves the pictures in \(config.output)."
+      ) {
         Button("Capture") { store.capture(root) }
+          .buttonStyle(.kitPrimary)
           .disabled(store.phase(root) != .idle)
       }
     } else {
-      ContentUnavailableView {
-        Label("No screenshot scenes", systemImage: "photo.on.rectangle")
-      } description: {
-        Text(library?.configError
-             ?? "Describe the app's screens in .dev/screenshots.json: each scene is the launch arguments that open it. Dev captures them, frames them for the App Store and uploads them.")
-      } actions: {
+      EmptyState(
+        systemImage: "photo.on.rectangle", title: "No Screenshot Scenes",
+        message: library?.configError
+          ?? "Describe the app's screens in .dev/screenshots.json: each scene is the launch arguments that open it. Dev captures them, frames them for the App Store and uploads them."
+      ) {
         Button("Show Project in Finder") { NSWorkspace.shared.activateFileViewerSelecting([root]) }
+          .buttonStyle(.kit)
       }
     }
   }
