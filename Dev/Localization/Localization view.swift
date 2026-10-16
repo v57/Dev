@@ -576,7 +576,8 @@ private struct CatalogTable: View {
   @Binding var selection: String?
 
   var body: some View {
-    KitGrid(store.visibleRows, columns: columns, selection: rowSelection, sort: sort)
+    // Rows grow with their cells: a source wraps, plural forms and comments add lines under it.
+    KitGrid(store.visibleRows, columns: columns, selection: rowSelection, sort: sort, rowHeight: .automatic)
   }
 
   private var columns: [KitGridColumn<CatalogRow>] {
@@ -775,20 +776,20 @@ private struct SourceCell: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 2) {
       Text(row.sourceText)
-        .lineLimit(1)
+        .lineLimit(3)
         .help(row.sourceText)
       if row.hasPlurals, !row.sourcePluralSummary.isEmpty {
         Text(row.sourcePluralSummary)
           .font(.caption)
           .foregroundStyle(.secondary)
-          .lineLimit(1)
+          .lineLimit(3)
           .help("Plural forms — \(row.sourcePluralSummary)")
       }
       if store.showComments, !row.commentText.isEmpty {
         Text(row.commentText)
           .font(.caption)
           .foregroundStyle(.secondary)
-          .lineLimit(1)
+          .lineLimit(3)
           .help(row.commentText)
       }
     }
