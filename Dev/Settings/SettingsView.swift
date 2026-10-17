@@ -102,18 +102,7 @@ struct TranslationSettingsView: View {
     VStack(alignment: .leading, spacing: 18) {
       FormCard {
         FormRow("Provider", help: model.preset?.note, systemImage: "globe", hue: .blue) {
-          Picker("Provider", selection: $model.providerID) {
-            Text("Choose…").tag("")
-            ForEach(ProviderPreset.Group.allCases, id: \.self) { group in
-              Section(group.rawValue) {
-                ForEach(ProviderPreset.all.filter { $0.group == group }) { preset in
-                  Text(preset.name).tag(preset.id)
-                }
-              }
-            }
-          }
-          .labelsHidden()
-          .fixedSize()
+          KitPicker("Provider", selection: $model.providerID, sections: providerSections)
         }
         if let preset = model.preset {
           if preset.asksForBaseURL {
@@ -194,6 +183,14 @@ struct TranslationSettingsView: View {
     case .missing: "No key yet"
     case .notNeeded: "This server needs no key"
     }
+  }
+
+  /// "Choose…" on its own, then the presets under their groups (Recommended, Popular, …).
+  private var providerSections: [(String, [KitSegment<String>])] {
+    [("", [KitSegment("Choose…", value: "")])]
+      + ProviderPreset.Group.allCases.map { group in
+        (group.rawValue, ProviderPreset.all.filter { $0.group == group }.map { KitSegment($0.name, value: $0.id) })
+      }
   }
 
   @ViewBuilder
