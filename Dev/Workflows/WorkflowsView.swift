@@ -203,6 +203,8 @@ struct WorkflowsView: View {
               .kitFont(.caption)
               .padding(.horizontal, 6)
               .padding(.bottom, 4)
+              // In a KitList each row is its own slice of the card: the row spans the card.
+              .frame(maxWidth: .infinity, alignment: .leading)
           }
           ForEach(runs) { run in
             SidebarRow(
