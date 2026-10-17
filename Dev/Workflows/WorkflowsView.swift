@@ -27,6 +27,7 @@ struct WorkflowsView: View {
   @State private var releaseConfig: ReleaseConfig?
   @State private var showsReleaseSettings = false
   @State private var isDetecting = false
+  @State private var showsAddStep = false
 
   var body: some View {
     let list = store.workflows(for: root)
@@ -172,9 +173,9 @@ struct WorkflowsView: View {
             EmptyView()
           }
           .isCurrent(selected?.id == workflow.id)
-          .contextMenu {
-            Button("Edit…") { editing = workflow }
-            Button("Duplicate") {
+          .kitContextMenu {
+            Button("Edit…", systemImage: "pencil") { editing = workflow }
+            Button("Duplicate", systemImage: "plus.square.on.square") {
               var copy = workflow
               copy.id = workflow.id + "-copy"
               copy.name = workflow.name + " Copy"
@@ -347,22 +348,21 @@ struct WorkflowsView: View {
           }
         }
         .onMove { from, to in move(workflow, from: from, to: to) }
-        Menu {
+        Button("Add Step", systemImage: "plus") { showsAddStep = true }
+        .kitMenu(isPresented: $showsAddStep) {
           ForEach(ReleaseStep.allCases) { step in
             Button(step.title) { add(Workflow.Step(id: uniqueID(step.rawValue, in: workflow), name: step.title, kind: .release, releaseStep: step.rawValue), to: workflow) }
           }
           Divider()
-          Button("Screenshots") { add(Workflow.Step(id: uniqueID("screenshots", in: workflow), name: "Screenshots", kind: .screenshots), to: workflow) }
-          Button("Command on This Mac") { add(Workflow.Step(id: uniqueID("command", in: workflow), name: "Command", kind: .command, command: "swift test"), to: workflow) }
+          Button("Screenshots", systemImage: "camera") { add(Workflow.Step(id: uniqueID("screenshots", in: workflow), name: "Screenshots", kind: .screenshots), to: workflow) }
+          Button("Command on This Mac", systemImage: "laptopcomputer") { add(Workflow.Step(id: uniqueID("command", in: workflow), name: "Command", kind: .command, command: "swift test"), to: workflow) }
           ForEach(vms.machines) { vm in
-            Button("Command on \(vm.name)") {
+            Button("Command on \(vm.name)", systemImage: "desktopcomputer") {
               add(Workflow.Step(id: uniqueID("vm", in: workflow), name: "Test on \(vm.name)", kind: .command,
                                 command: VMRunner.defaultCommand(for: root, system: VMSettings.load(vm.id).system ?? vm.guessedSystem),
                                 runner: "vm:" + vm.name, parallel: true), to: workflow)
             }
           }
-        } label: {
-          Label("Add Step", systemImage: "plus")
         }
         .buttonStyle(.kitPlain)
         .foregroundStyle(Hue.accent.text)
@@ -453,17 +453,7 @@ struct WorkflowsView: View {
           FormRow("Name", systemImage: "character.cursor.ibeam", hue: .gray,
                   field: TextField("Name", text: binding(workflow, index, \.name)))
           FormRow("Runs On", help: step.runnerTitle, systemImage: "laptopcomputer", hue: .gray) {
-            Picker("Runs On", selection: binding(workflow, index, \.runner)) {
-              Text("This Mac").tag("mac")
-              if step.kind == .command {
-                ForEach(vms.machines) { vm in Text("\(vm.name) (VM)").tag("vm:" + vm.name) }
-                if let name = step.vmName, !vms.machines.contains(where: { $0.name == name }) {
-                  Text("\(name) (VM)").tag(step.runner)
-                }
-              }
-            }
-            .labelsHidden()
-            .fixedSize()
+            KitPicker("Runs On", selection: binding(workflow, index, \.runner), segments: runners(for: step))
           }
           if step.kind == .command {
             FormRow("Command", systemImage: "apple.terminal", hue: .green, field: TextField(
@@ -545,6 +535,17 @@ struct WorkflowsView: View {
         }
       }
     }
+  }
+
+  /// Where a step can run: this Mac, and a command also on each VM (a VM that has gone keeps its row).
+  private func runners(for step: Workflow.Step) -> [KitSegment<String>] {
+    var runners = [KitSegment("This Mac", value: "mac", systemImage: "laptopcomputer")]
+    guard step.kind == .command else { return runners }
+    runners += vms.machines.map { KitSegment("\($0.name) (VM)", value: "vm:" + $0.name, systemImage: "desktopcomputer") }
+    if let name = step.vmName, !vms.machines.contains(where: { $0.name == name }) {
+      runners.append(KitSegment("\(name) (VM)", value: step.runner, systemImage: "desktopcomputer"))
+    }
+    return runners
   }
 
   private func uniqueID(_ base: String, in workflow: Workflow) -> String {

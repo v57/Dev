@@ -33,6 +33,8 @@ struct SidebarView: View {
   @State private var serverSheet: ServerSheet?
   /// The bottom bar's search: it narrows the Projects section by name.
   @State private var search = ""
+  /// The bottom bar's + menu is open.
+  @State private var showsAddMenu = false
 
   var body: some View {
     @Bindable var model = model
@@ -48,13 +50,12 @@ struct SidebarView: View {
           serverSheet = sheet
         }
     } bottomBar: {
-      Menu {
-        Button("Add Project…") { model.addProjectsFromPanel() }
-        Button("Add Localization Server…") { serverSheet = .add }
-      } label: {
-        Label("Add", systemImage: "plus")
-      }
-      .help("Add a project or a Localization Server")
+      Button("Add", systemImage: "plus") { showsAddMenu = true }
+        .kitMenu(isPresented: $showsAddMenu) {
+          Button("Add Project…", systemImage: "folder.badge.plus") { model.addProjectsFromPanel() }.kitMenuHint("⇧⌘O")
+          Button("Add Localization Server…", systemImage: "server.rack") { serverSheet = .add }
+        }
+        .help("Add a project or a Localization Server")
     }
     .sheet(item: $serverSheet) { sheet in
       switch sheet {
@@ -130,12 +131,13 @@ struct SidebarView: View {
       } else {
         ForEach(shown) { row in
           ProjectRow(row: row)
-            .contextMenu {
+            .kitContextMenu {
               if let root = row.rootURL {
-                Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([root]) }
+                Button("Open in \(ProjectOpener.appName)", systemImage: "arrow.up.forward.app") { ProjectOpener.open(root) }
+                Button("Show in Finder", systemImage: "folder") { NSWorkspace.shared.activateFileViewerSelecting([root]) }
                 Divider()
               }
-              Button("Remove Project", role: .destructive) {
+              Button("Remove Project", systemImage: "trash", role: .destructive) {
                 model.removeProject(id: row.id, localization: localization)
               }
             }

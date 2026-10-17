@@ -146,28 +146,17 @@ struct ScreenshotsView: View {
       let overflowing = Set(store.reports[root]?.overflowing ?? [])
       VStack(spacing: 0) {
         HStack {
-          Picker("Language", selection: Binding(get: { current }, set: { locale = $0 })) {
-            ForEach(library.locales, id: \.self) { code in
-              Text(Locale.current.localizedString(forIdentifier: code) ?? code).tag(code)
-            }
-          }
-          .labelsHidden()
-          .fixedSize()
+          KitPicker(
+            "Language", selection: Binding(get: { current }, set: { locale = $0 }),
+            segments: library.locales.map { KitSegment(ProjectOverviewView.languageName($0), value: $0, systemImage: "globe") })
           if library.targets.count > 1 {
-            Picker("Device", selection: Binding(get: { device }, set: { target = $0 })) {
-              ForEach(library.targets, id: \.self) { Text($0).tag($0) }
-            }
-            .labelsHidden()
-            .fixedSize()
+            KitPicker(
+              "Device", selection: Binding(get: { device }, set: { target = $0 }),
+              options: library.targets.map { ($0, $0) })
           }
           Spacer()
-          Picker("Show", selection: $showsFinal) {
-            Text("Captured").tag(false)
-            Text("Framed").tag(true)
-          }
-          .pickerStyle(.segmented)
-          .labelsHidden()
-          .fixedSize()
+          KitSegmented(selection: $showsFinal, options: [("Captured", false), ("Framed", true)])
+            .fixedSize()
         }
         .padding(16)
         ScrollView {

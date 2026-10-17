@@ -73,14 +73,12 @@ struct CreateIconView: View {
       FormCard("Symbol") {
         FormRow("SF Symbol", systemImage: "square.grid.2x2", hue: .indigo,
                 field: TextField("SF Symbol", text: $create.settings.symbol))
-        Menu("Suggestions") {
+        KitMenuButton("Suggestions", systemImage: "sparkles") {
           ForEach(["hammer.fill", "cylinder.split.1x2", "star.fill",
                    "drop.fill", "bolt.fill", "book.fill", "hexagon.fill"], id: \.self) { s in
-            Button(s) { create.settings.symbol = s }
+            Button(s, systemImage: s) { create.settings.symbol = s }
           }
         }
-        .buttonStyle(.kit)
-        .fixedSize()
         .padding(12)
       }
 
@@ -113,14 +111,7 @@ struct CreateIconView: View {
 
       FormCard("Quantize") {
         FormRow("Palette", systemImage: "square.grid.2x2", hue: .purple) {
-          Picker("Palette", selection: $create.settings.palette) {
-            ForEach([2, 4, 8, 16], id: \.self) { n in
-              Text("\(n) colors").tag(n)
-            }
-          }
-          .pickerStyle(.menu)
-          .labelsHidden()
-          .fixedSize()
+          KitPicker("Palette", selection: $create.settings.palette, options: [2, 4, 8, 16].map { ("\($0) colors", $0) })
         }
       }
 

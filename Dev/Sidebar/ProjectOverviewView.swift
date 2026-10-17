@@ -316,16 +316,12 @@ struct ProjectOverviewView: View {
         }
         Spacer()
         if let library, library.locales.count > 1 {
-          Picker("Language", selection: Binding(
-            get: { currentLocale(library) }, set: { locale = $0 })
-          ) {
-            ForEach(library.locales.prefix(6), id: \.self) { code in
-              Text(Locale.current.localizedString(forIdentifier: code) ?? code).tag(code)
-            }
+          let current = currentLocale(library)
+          KitMenuButton(Self.languageName(current), systemImage: "globe") {
+            KitMenuOptions(
+              selection: Binding(get: { current }, set: { locale = $0 }),
+              options: library.locales.prefix(6).map { (Self.languageName($0), $0) })
           }
-          .pickerStyle(.menu)
-          .labelsHidden()
-          .fixedSize()
         }
         Button("Open Screenshots") { model.projectTool = .screenshots }
           .buttonStyle(.kit)
@@ -355,6 +351,10 @@ struct ProjectOverviewView: View {
     }
     .padding(18)
     .kitSurface(.card, cornerRadius: KitMetrics.radiusXL)
+  }
+
+  static func languageName(_ code: String) -> String {
+    Locale.current.localizedString(forIdentifier: code) ?? code
   }
 
   private func currentLocale(_ library: ScreenshotLibrary) -> String {
@@ -463,8 +463,8 @@ struct ScreenshotThumbnail: View {
       }
       .font(.caption)
     }
-    .contextMenu {
-      Button("Show in Finder") {
+    .kitContextMenu {
+      Button("Show in Finder", systemImage: "folder") {
         NSWorkspace.shared.activateFileViewerSelecting([shot.final ?? shot.captured])
       }
     }

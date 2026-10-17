@@ -64,11 +64,11 @@ struct ServersSidebarSection: View {
       } else {
         ForEach(store.servers) { row in
           ServerSidebarRow(row: row, status: store.statuses[row.id] ?? .unknown)
-            .contextMenu {
-              Button("Check Now") { Task { await store.check(id: row.id) } }
-              Button("Edit…") { onEdit(.edit(row.id)) }
+            .kitContextMenu {
+              Button("Check Now", systemImage: "arrow.clockwise") { Task { await store.check(id: row.id) } }
+              Button("Edit…", systemImage: "pencil") { onEdit(.edit(row.id)) }
               Divider()
-              Button("Remove", role: .destructive) { pendingRemoval = row }
+              Button("Remove", systemImage: "trash", role: .destructive) { pendingRemoval = row }
             }
         }
       }

@@ -415,9 +415,9 @@ struct StorageFileRow: View {
     .padding(.vertical, 7)
     .background(store.isSelected(item) ? Color.accentColor.opacity(0.07) : .clear, in: RoundedRectangle(cornerRadius: 10))
     .opacity(item.isLocked ? 0.6 : 1)
-    .contextMenu {
-      Button("Show in Finder") { store.reveal(item) }
-      Button("Copy Path") {
+    .kitContextMenu {
+      Button("Show in Finder", systemImage: "folder") { store.reveal(item) }
+      Button("Copy Path", systemImage: "doc.on.doc") {
         KitPasteboard.copy(item.primaryPath)
       }
     }
@@ -571,14 +571,11 @@ private struct ScratchPicker: View {
           .lineLimit(1)
       }
       Spacer(minLength: 8)
-      Picker("Pick", selection: Binding(get: { store.scratchPick }, set: { if let pick = $0 { store.pickScratch(pick) } })) {
-        ForEach(StorageStore.ScratchPick.allCases, id: \.self) { pick in
-          Text(pick.title).tag(Optional(pick))
-        }
+      KitMenuButton(store.scratchPick?.title ?? "Pick") {
+        KitMenuOptions(
+          selection: Binding(get: { store.scratchPick }, set: { if let pick = $0 { store.pickScratch(pick) } }),
+          segments: StorageStore.ScratchPick.allCases.map { KitSegment($0.title, value: Optional($0)) })
       }
-      .labelsHidden()
-      .pickerStyle(.menu)
-      .fixedSize()
       .disabled(store.isBusy)
     }
     .padding(14)
@@ -829,7 +826,7 @@ private struct ModelCard: View {
     .frame(maxWidth: .infinity, alignment: .leading)
     .background(.background, in: RoundedRectangle(cornerRadius: 14))
     .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(on ? Color.accentColor : Color.secondary.opacity(0.2), lineWidth: on ? 2 : 1))
-    .contextMenu { Button("Show in Finder") { store.reveal(item) } }
+    .kitContextMenu { Button("Show in Finder", systemImage: "folder") { store.reveal(item) } }
   }
 }
 
@@ -910,15 +907,9 @@ private struct UninstallerPage: View {
             .font(.callout).foregroundStyle(.secondary)
         }
         .padding(16)
-        Picker("Show", selection: $filter) {
-          Text("All").tag("all")
-          Text("Unused").tag("unused")
-          Text("Large").tag("large")
-          Text("Developer").tag("dev")
-        }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .padding(.horizontal, 16)
+        KitSegmented(selection: $filter, options: [("All", "all"), ("Unused", "unused"), ("Large", "large"), ("Developer", "dev")])
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .padding(.horizontal, 16)
         .padding(.bottom, 8)
         ScrollView {
           VStack(spacing: 2) {

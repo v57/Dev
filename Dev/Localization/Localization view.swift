@@ -393,12 +393,7 @@ private struct LanguageButtonsRow: View {
       ViewThatFits(in: .horizontal) {
         KitSegmented(selection: filter, segments: RowFilter.allCases.map { KitSegment($0.title, value: $0) })
           .fixedSize()
-        Picker("Show", selection: filter) {
-          ForEach(RowFilter.allCases) { Text($0.title).tag($0) }
-        }
-        .pickerStyle(.menu)
-        .labelsHidden()
-        .fixedSize()
+        KitPicker("Show", selection: filter, options: RowFilter.allCases.map { ($0.title, $0) })
       }
       .help("Show only the rows in this state, in the visible language columns")
       .layoutPriority(1)

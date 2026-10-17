@@ -34,11 +34,7 @@ struct GeneralSettingsView: View {
   var body: some View {
     FormCard {
       FormRow("Open projects in", systemImage: "arrow.up.forward.app", hue: .blue) {
-        Picker("Open projects in", selection: $openIn) {
-          ForEach(ProjectOpener.Target.allCases) { Text($0.title).tag($0.rawValue) }
-        }
-        .labelsHidden()
-        .fixedSize()
+        KitPicker("Open projects in", selection: $openIn, options: ProjectOpener.Target.allCases.map { ($0.title, $0.rawValue) })
       }
       FormRow("Show strings to review in the sidebar", systemImage: "text.badge.checkmark", hue: .orange) {
         Toggle("Show strings to review in the sidebar", isOn: $showsReviewBadge)
@@ -127,12 +123,7 @@ struct TranslationSettingsView: View {
           }
           if preset.id == ProviderPreset.custom.id {
             FormRow("API", systemImage: "point.3.connected.trianglepath.dotted", hue: .gray) {
-              Picker("API", selection: $model.wire) {
-                Text("Chat Completions").tag(Wire.chatCompletions)
-                Text("Responses").tag(Wire.responses)
-              }
-              .labelsHidden()
-              .fixedSize()
+              KitPicker("API", selection: $model.wire, options: [("Chat Completions", Wire.chatCompletions), ("Responses", Wire.responses)])
             }
           }
         }
@@ -212,12 +203,9 @@ struct TranslationSettingsView: View {
               field: HStack {
         TextField("Model", text: $model.model, prompt: Text("model id"))
         if !model.availableModels.isEmpty {
-          Menu("Available") {
-            ForEach(model.availableModels, id: \.self) { id in
-              Button(id) { model.model = id }
-            }
+          KitMenuButton("Available") {
+            KitMenuOptions(selection: $model.model, options: model.availableModels.map { ($0, $0) })
           }
-          .fixedSize()
         }
         Button("Fetch Models") { Task { await model.fetchModels() } }
           .buttonStyle(.kitPlain)
