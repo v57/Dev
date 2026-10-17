@@ -69,7 +69,7 @@ struct CreateIconView: View {
 
   var controls: some View {
     @Bindable var create = create
-    return VStack(alignment: .leading, spacing: 18) {
+    return KitLazyStack(alignment: .leading, spacing: 18) {
       FormCard("Symbol") {
         FormRow("SF Symbol", systemImage: "square.grid.2x2", hue: .indigo,
                 field: TextField("SF Symbol", text: $create.settings.symbol))

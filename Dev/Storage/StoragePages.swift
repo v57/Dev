@@ -437,7 +437,7 @@ private struct SmartScanPage: View {
 
   var body: some View {
     ScrollView {
-      VStack(alignment: .leading, spacing: 20) {
+      KitLazyStack(alignment: .leading, spacing: 20) {
         HStack(spacing: 28) {
           StorageRing(segments: segments, used: used, total: store.volumeTotal)
             .frame(width: 140, height: 140)
@@ -770,7 +770,8 @@ private struct GroupsPage: View {
           .padding(.horizontal, 16)
           .padding(.bottom, 110)
         } else {
-          VStack(spacing: 2) {
+          // A group can hold hundreds of folders: rows are built as they scroll in.
+          LazyVStack(spacing: 2) {
             ForEach(group.items) { StorageFileRow(item: $0) }
           }
           .padding(.horizontal, 12)

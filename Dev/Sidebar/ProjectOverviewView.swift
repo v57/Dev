@@ -102,7 +102,8 @@ struct ProjectOverviewView: View {
 
   var body: some View {
     ScrollView {
-      VStack(alignment: .leading, spacing: 20) {
+      // The header, the cards and the screenshots come in as they near the screen.
+      KitLazyStack(alignment: .leading, spacing: 20) {
         header
         Grid(horizontalSpacing: 16, verticalSpacing: 16) {
           GridRow {
@@ -260,16 +261,16 @@ struct ProjectOverviewView: View {
     let active = root.flatMap { workflows.active[$0] }
     OverviewCard(title: "Workflows", systemImage: "shippingbox", trailing: list.isEmpty ? nil : "\(list.count) workflows") {
       if let active {
-        VStack(alignment: .leading, spacing: 6) {
-          HStack {
-            ProgressView().controlSize(.small)
-            Text("\(active.workflowName) \(active.title)").fontWeight(.semibold)
-            Spacer()
-            Text(active.steps.first { $0.state == .running }?.name ?? "Starting")
-              .foregroundStyle(Color.accentColor)
-          }
-          let done = active.steps.filter { $0.state == .passed || $0.state == .skipped }.count
-          MicroBar(value: Double(done) / Double(max(active.steps.count, 1)))
+        // The run's progress is the live icon's ring: steps passed or skipped of all its steps.
+        let done = active.steps.filter { $0.state == .passed || $0.state == .skipped }.count
+        HStack {
+          LiveIcon(
+            systemImage: "play", hue: .accent,
+            status: .working(progress: Double(done) / Double(max(active.steps.count, 1))), size: 22)
+          Text("\(active.workflowName) \(active.title)").fontWeight(.semibold)
+          Spacer()
+          Text(active.steps.first { $0.state == .running }?.name ?? "Starting")
+            .foregroundStyle(Color.accentColor)
         }
         .padding(10)
         .kitSurface(.raised, cornerRadius: KitMetrics.radiusLarge)
