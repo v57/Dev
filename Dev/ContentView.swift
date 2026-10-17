@@ -42,8 +42,6 @@ struct ContentView: View {
   @State private var workflows = WorkflowStore()
   /// Requests from agents over MCP that need this window: runs and "Ask First".
   @State private var agents = AgentBridge()
-  /// The Translate button's menu (the run without learning) is open.
-  @State private var showsTranslateMenu = false
 
   var body: some View {
     @Bindable var model = model
@@ -184,19 +182,15 @@ struct ContentView: View {
       if let catalogURL = paneCatalogURL {
         KitToolbarItem(placement: .primaryAction) {
           ToolGroup {
-            Button("Translate", systemImage: "play.fill") {
+            KitSplitButton("Translate", systemImage: "play.fill") {
               Task { await translation.start(catalogURL) }
-            }
-            .help(translation.startHelp(catalogURL))
-            Button("More Ways to Translate", systemImage: "chevron.down") { showsTranslateMenu = true }
-              .labelStyle(.iconOnly)
-              .kitMenu(isPresented: $showsTranslateMenu) {
-                Button("Translate Without Learning", systemImage: "forward.fill") {
-                  Task { await translation.startSkippingLearning(catalogURL) }
-                }
-                .help(translation.skipLearningHelp(catalogURL))
+            } menu: {
+              Button("Translate Without Learning", systemImage: "forward.fill") {
+                Task { await translation.startSkippingLearning(catalogURL) }
               }
               .help(translation.skipLearningHelp(catalogURL))
+            }
+            .help(translation.startHelp(catalogURL))
           }
           .disabled(!translation.canStart(catalogURL))
         }
