@@ -35,9 +35,10 @@ struct MyApp: App {
     }
 
     var body: some Scene {
-        // Dev keeps the system accent: the kit's controls take it, like the system's did.
+        // Dev keeps the system accent: the kit's controls take it, like the system's did. A screenshot
+        // launch builds every row and section at once, so a scene never captures a lazy placeholder.
         WindowGroup {
-            ContentView().componentKit()
+            ContentView().componentKit().kitLazyLoading(!LaunchOptions.isScreenshotMode)
         }
         .defaultSize(width: 1280, height: 800)
         .commands {
@@ -53,7 +54,7 @@ struct MyApp: App {
             }
         }
         Settings {
-            SettingsView().componentKit()
+            SettingsView().componentKit().kitLazyLoading(!LaunchOptions.isScreenshotMode)
         }
         // KitSettings(…, window: .hiddenTitleBar) runs its sidebar up under the traffic lights.
         .windowStyle(.hiddenTitleBar)
