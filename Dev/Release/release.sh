@@ -202,9 +202,17 @@ do_screenshots() {
 do_archive() {
   step archive
   run rm -rf "$ARCHIVE"
+  # macOS: drop the Swift package code the app doesn't use. LTO strips it, and ld-archive-prelink (beside this
+  # script) keeps Xcode's per-package `ld -r` from holding on to all of it.
+  local size=()
+  if [ "$PLATFORM" = macos ]; then
+    run install -m 755 "$(dirname "$0")/ld-archive-prelink" "$OUT/ld-archive-prelink"
+    size=(SWIFT_LTO=YES ALTERNATE_LINKER_PATH="$OUT/ld-archive-prelink"
+      'OTHER_SWIFT_FLAGS=$(inherited) -Xfrontend -internalize-at-link -Xfrontend -conditional-runtime-records')
+  fi
   xcb ${CONTAINER[@]+"${CONTAINER[@]}"} -scheme "$SCHEME" -configuration "$CONFIGURATION" -destination "$DESTINATION" \
-    -archivePath "$ARCHIVE" MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" archive \
-    || fail "the archive failed"
+    -archivePath "$ARCHIVE" MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+    ${size[@]+"${size[@]}"} archive || fail "the archive failed"
   artifact "$ARCHIVE"
   done_step
 }
