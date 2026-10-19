@@ -236,6 +236,9 @@ extension Translation {
     /// has a button of its own.
     private func footer(_ run: Run?) -> some View {
       VStack(alignment: .leading, spacing: 6) {
+        if let run, run.progress != nil {
+          RunEstimateBar(run: run)
+        }
         HStack(spacing: 12) {
           controls(run)
           Spacer()
@@ -371,6 +374,27 @@ extension Translation {
     }
   }
 
+  /// The run's estimated progress and the time it has left (`RunProgress`), read on a timer
+  /// while the run lasts; once it stops, the bar stays where it got to.
+  struct RunEstimateBar: View {
+    let run: Run
+
+    var body: some View {
+      let isActive = run.state == .running || run.state == .scanning
+      TimelineView(.animation(minimumInterval: 0.5, paused: !isActive)) { _ in
+        let estimate = run.estimate
+        HStack(spacing: 12) {
+          KitProgressBar(
+            status: isActive
+              ? .working(progress: estimate?.fraction)
+              : run.state == .finished ? .done : .paused(progress: estimate?.fraction))
+          Text(estimate?.line ?? (isActive ? "Estimating…" : ""))
+            .font(.callout).foregroundStyle(.secondary).monospacedDigit()
+        }
+      }
+    }
+  }
+
   /// The bottom bar: the run's state, and the way back into its pages.
   ///
   /// It is the one surface that survives the overlay being closed (8.1), so it reports
@@ -396,9 +420,36 @@ extension Translation {
     var showsReopen: Bool { !workspace.isOverlayPresented && workspace.run != nil }
 
     var body: some View {
-      // The run's state lives in the bar's live icon (the kit's rule: never a spinner).
-      StatusBar(systemImage: "translate", status: workspace.status.isRunning ? .working : .idle) {
+      // The estimate moves with time, so the bar reads it on a timer while a run lasts.
+      TimelineView(.animation(minimumInterval: 0.5, paused: !workspace.status.isRunning)) { _ in
+        bar(workspace.run?.estimate)
+      }
+      // The shell's own failure channel: a run that could not start (no credential, 5.2)
+      // has nothing on screen to report from, and the bar is the one surface that
+      // outlives a closed overlay (8.1).
+      .alert(
+        "Translation",
+        isPresented: Binding(
+          get: { workspace.error != nil },
+          set: { if !$0 { workspace.error = nil } })
+      ) {
+        Button("OK") { workspace.error = nil }
+      } message: {
+        Text(workspace.error ?? "")
+      }
+    }
+
+    private func bar(_ estimate: Run.Estimate?) -> some View {
+      // The run's state lives in the bar's live icon (the kit's rule: never a spinner); its
+      // ring fills with the run's estimated progress.
+      StatusBar(
+        systemImage: "translate",
+        status: workspace.status.isRunning ? .working(progress: estimate?.fraction) : .idle
+      ) {
         Text(workspace.status.summary).monospacedDigit()
+        if workspace.status.isRunning, let line = estimate?.line {
+          Text(line).monospacedDigit().foregroundStyle(.secondary)
+        }
         // A run's edits are in memory until Save (8.3), and the bar is where the user looks
         // once the run's pages are closed — so the state is a READING here, not a sentence
         // somewhere in the overlay, and the act is beside it. Save goes through the app's own
@@ -425,19 +476,6 @@ extension Translation {
         }
         Spacer()
         trailing
-      }
-      // The shell's own failure channel: a run that could not start (no credential, 5.2)
-      // has nothing on screen to report from, and the bar is the one surface that
-      // outlives a closed overlay (8.1).
-      .alert(
-        "Translation",
-        isPresented: Binding(
-          get: { workspace.error != nil },
-          set: { if !$0 { workspace.error = nil } })
-      ) {
-        Button("OK") { workspace.error = nil }
-      } message: {
-        Text(workspace.error ?? "")
       }
     }
   }

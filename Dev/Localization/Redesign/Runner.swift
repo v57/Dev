@@ -23,6 +23,7 @@
 //  it: the two implementations run side by side until the old one is deleted.
 //
 
+import CodeProgress
 import Foundation
 import Observation
 import SwiftData
@@ -80,6 +81,14 @@ extension Translation {
     var failures: [Failure] = []
     var startedAt: Date?
     var finishedAt: Date?
+    /// How far the run got and how long it has left, estimated from the stages earlier runs
+    /// timed (`RunProgress`). Its snapshots move with time, so a readout reads one on a timer
+    /// while the run lasts. A new one starts with every execution: a pause ends it, and a
+    /// resume plans the stages left from the cursor.
+    var progress: ProgressTracker?
+    /// Where the bar stood when the tracker in `progress` started: a resumed run's tracker
+    /// counts only what is left, and the bar goes on from where the pause left it.
+    var progressBase = 0.0
 
     init(stage: Stage, project: Project, mode: Mode = .full) {
       self.stage = stage
@@ -480,6 +489,8 @@ extension Translation {
     /// The only client there is. The runner owns it, so a park and the telemetry it
     /// earns belong to the run that paid for them.
     let router: Router
+    /// The durations progress estimates come from, kept across launches.
+    let progressHistory: ProgressHistory
     private(set) var runs: [Stage: Run] = [:]
     var isRunning: Bool {
       runs.values.contains { $0.state == .running || $0.state == .scanning }
@@ -514,13 +525,15 @@ extension Translation {
     init(project: Project) {
       self.project = project
       self.router = Router()
+      self.progressHistory = .standard
     }
 
     /// A runner with a client handed in. One client per runner is the point: the
     /// telemetry and the parks are the run's own numbers (5.7).
-    init(project: Project, router: Router) {
+    init(project: Project, router: Router, progressHistory: ProgressHistory = .standard) {
       self.project = project
       self.router = router
+      self.progressHistory = progressHistory
     }
 
     /// Runs a stage's whole plan, one batch at a time, from its first operation to
@@ -654,9 +667,16 @@ extension Translation {
       let cursor = run.batchIndex
       run.finishedAt = nil
       run.state = .running
+      let model = RunProgress.model
+      let progress = ProgressTracker(
+        operation: RunProgress.retryOperation,
+        stages: batches.map { RunProgress.stage(for: $0, model: model) }, history: progressHistory)
+      run.progressBase = 0
+      run.progress = progress
       for batch in batches {
         if Task.isCancelled { break }
         guard let index = run.batches.firstIndex(where: { $0.id == batch.id }) else { continue }
+        progress.begin(RunProgress.stage(for: run.batches[index], model: model))
         // The batch being re-asked is what the run REPORTS it is on: `Run.reasking` reads the
         // cursor, and the cursor of a finished run is past the end of the list — so the re-ask
         // moves it onto the batch it is asking, which is what the progress line and the overlay's
@@ -686,6 +706,7 @@ extension Translation {
           markFailed(batch, error: error, in: run)
         }
       }
+      if Task.isCancelled { progress.cancel() } else { progress.complete() }
       run.isRetrying = false
       run.batchIndex = cursor
       // The run ends where it began: FINISHED. Stopping a re-ask stops the asking; it does not
@@ -722,6 +743,14 @@ extension Translation {
       }
       run.finishedAt = nil
       run.state = .scanning
+      let progress = ProgressTracker(
+        operation: RunProgress.operation(run.stage, mode: run.mode),
+        stages: RunProgress.planned(
+          for: run, model: RunProgress.model,
+          last: progressHistory.plan(for: RunProgress.operation(run.stage, mode: run.mode)) ?? []),
+        history: progressHistory)
+      run.progressBase = isFresh ? 0 : (run.estimate?.fraction ?? 0)
+      run.progress = progress
       do {
         guard router.isConfigured else {
           // The button checks this before a run starts (5.2), so meeting it here
@@ -731,11 +760,15 @@ extension Translation {
         }
         try await runOperations(run)
         run.state = .finished
+        progress.complete()
       } catch is CancellationError {
+        // A paused run plans what is left when it resumes; the stages it finished count.
+        progress.cancel()
         // Pause and cancel both interrupt the batch in flight, and everything
         // applied is kept. The state they set is what the run reports.
         run.state = run.state == .cancelled ? .cancelled : .paused
       } catch {
+        progress.cancel()
         fail(run, message: error.localizedDescription, retryable: Self.retryable(error))
         run.state = .finished
       }
@@ -748,6 +781,7 @@ extension Translation {
         try Task.checkCancellation()
         let operation = run.operations[run.operationIndex]
         if operation == .prepare {
+          run.progress?.begin(RunProgress.prepare)
           try prepare(run)
           run.operationIndex += 1
           continue
@@ -756,12 +790,15 @@ extension Translation {
         // batches it already cut, because the cursor counts THOSE.
         if !scanned(operation, in: run) {
           run.state = .scanning
+          run.progress?.begin(RunProgress.scan(operation))
           try scan(operation, into: run)
         }
         run.state = .running
+        let model = RunProgress.model
         while run.batchIndex < run.batches.count {
           try Task.checkCancellation()
           let batch = run.batches[run.batchIndex]
+          run.progress?.begin(RunProgress.stage(for: batch, model: model))
           do {
             try await perform(batch, in: run)
           } catch is CancellationError {
@@ -772,6 +809,8 @@ extension Translation {
             // batch would fail the same way, so the run stops and reports instead of
             // spending a request per batch to hear the same answer.
             if let backend = error as? BackendError, case .notConfigured = backend {
+              // Not a batch that took its time: nothing for the history to learn from.
+              run.progress?.cancel()
               return
             }
           }

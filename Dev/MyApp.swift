@@ -6,7 +6,8 @@ import UpdateKit
 import VaultKit
 
 /// `Dev --screenshots <command>` is `dev-screenshots` (release.sh's screenshots step runs it this way);
-/// `Dev --mcp` serves MCP over stdin/stdout for agents and never opens a window; any other launch is the app.
+/// `Dev --mcp` serves MCP over stdin/stdout for agents and never opens a window; a test run hosts DevTests in a bare
+/// app; any other launch is the app.
 @main enum DevMain {
     static func main() {
         if let index = CommandLine.arguments.firstIndex(of: "--screenshots") {
@@ -15,6 +16,11 @@ import VaultKit
         }
         if CommandLine.arguments.contains("--mcp") {
             MCPServer.run()
+        }
+        // DevTests runs inside a bare app: no window, no vault sync, no update check.
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
+            NSApplication.shared.setActivationPolicy(.accessory)
+            NSApplication.shared.run()
         }
         MyApp.main()
     }
