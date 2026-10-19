@@ -7,6 +7,9 @@ import VaultKit
 ///
 /// A project removed in Dev stays in the other apps: Dev remembers it and doesn't bring it back. A project
 /// removed in Git leaves Dev too, unless Dev holds translation work for it.
+///
+/// Dev lists only Xcode projects: the vault notes each project's kinds (`VaultProject.Kind`), and the others
+/// stay in the other apps (Settings ▸ General ▸ Show only Xcode projects).
 @MainActor final class VaultProjects {
   static let shared = VaultProjects()
 
@@ -43,12 +46,32 @@ import VaultKit
     }
   }
 
-  /// Adds the vault's projects on this Mac that Dev doesn't list, and removes adopted ones the vault no
-  /// longer has.
+  /// Whether Dev leaves out the projects that aren't Xcode projects (on unless turned off in Settings).
+  var showsOnlyXcodeProjects: Bool {
+    UserDefaults.standard.object(forKey: SidebarPreferences.onlyXcodeProjects) as? Bool ?? true
+  }
+
+  /// The folders of the projects Dev leaves out: the vault's projects on this Mac that aren't Xcode projects.
+  func hiddenRoots() -> Set<String> {
+    guard !LaunchOptions.isScreenshotMode, showsOnlyXcodeProjects else { return [] }
+    return Set(vault.localProjects.filter { !$0.kinds.contains(.xcode) }.compactMap(\.localPath))
+  }
+
+  /// Follows the vault again after Show only Xcode projects changed.
+  func preferencesChanged() {
+    guard observer != nil else { return }
+    Task { await follow() }
+  }
+
+  /// Notes the kinds of this Mac's projects, adds the vault's Xcode projects on this Mac that Dev doesn't list,
+  /// and removes adopted ones the vault no longer has.
   private func follow() async {
     guard let model else { return }
+    vault.perform { try $0.refreshProjectKinds() }
     let fileManager = FileManager.default
-    let local = vault.localProjects.filter { !dismissed.contains($0.id) }
+    let local = vault.localProjects.filter { project in
+      !dismissed.contains(project.id) && (!showsOnlyXcodeProjects || project.kinds.contains(.xcode))
+    }
     let known = Set(model.projects.compactMap { $0.rootURL?.standardizedFileURL.path })
     let missing = local.compactMap(\.localPath).filter { path in
       !known.contains(path) && fileManager.fileExists(atPath: path)
@@ -61,6 +84,7 @@ import VaultKit
     for path in adopted where !inVault.contains(path) {
       if model.removeUnusedProject(rootPath: path) { adopted.remove(path) }
     }
+    model.refresh()
   }
 
   /// Publishes project folders for the other apps.

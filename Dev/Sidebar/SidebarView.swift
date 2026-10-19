@@ -38,6 +38,8 @@ struct SidebarView: View {
   @State private var showsAddMenu = false
   /// The project groups closed in the Projects section (vault group ids).
   @AppStorage("CollapsedProjectGroups") private var collapsedGroups = CollapsedGroups()
+  /// Settings ▸ General: the projects that aren't Xcode projects leave the list.
+  @AppStorage(SidebarPreferences.onlyXcodeProjects) private var onlyXcodeProjects = true
 
   var body: some View {
     @Bindable var model = model
@@ -120,6 +122,10 @@ struct SidebarView: View {
       // A selection usually precedes a reconcile (catalog open); refresh so
       // badges track the record state the interaction just changed.
       model.refresh()
+    }
+    .onChange(of: onlyXcodeProjects) {
+      model.refresh()
+      VaultProjects.shared.preferencesChanged()
     }
   }
 

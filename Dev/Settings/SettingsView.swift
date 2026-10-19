@@ -30,6 +30,7 @@ struct GeneralSettingsView: View {
   @AppStorage(ProjectOpener.key) private var openIn = ProjectOpener.Target.xcode.rawValue
   @AppStorage(SidebarPreferences.showReviewBadge) private var showsReviewBadge = true
   @AppStorage(SidebarPreferences.offerNonGitFolders) private var offersFolders = true
+  @AppStorage(SidebarPreferences.onlyXcodeProjects) private var onlyXcodeProjects = true
 
   var body: some View {
     FormCard {
@@ -39,6 +40,12 @@ struct GeneralSettingsView: View {
       FormRow("Show strings to review in the sidebar", systemImage: "text.badge.checkmark", hue: .orange) {
         Toggle("Show strings to review in the sidebar", isOn: $showsReviewBadge)
           .labelsHidden().toggleStyle(.kitSwitch)
+      }
+      FormRow(
+        "Show only Xcode projects",
+        help: "Folders without an .xcodeproj stay in the other v57 apps.", systemImage: "hammer", hue: .blue
+      ) {
+        Toggle("Show only Xcode projects", isOn: $onlyXcodeProjects).labelsHidden().toggleStyle(.kitSwitch)
       }
       FormRow(
         "Offer folders without git when adding a folder of repos",
@@ -90,6 +97,7 @@ struct AdvancedSettingsView: View {
 enum SidebarPreferences {
   static let showReviewBadge = "general.showReviewBadge"
   static let offerNonGitFolders = "general.offerNonGitFolders"
+  static let onlyXcodeProjects = "general.onlyXcodeProjects"
 }
 
 /// Which model translation runs on. Users bring their own key: pick a provider,

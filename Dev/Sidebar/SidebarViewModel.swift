@@ -219,7 +219,10 @@ final class SidebarViewModel {
     let context = TranslationStore.shared.context
     let fetched = (try? context.fetch(FetchDescriptor<Project>())) ?? []
     let fm = FileManager.default
+    // Only Xcode projects: the vault knows the others' kinds and Dev leaves them to the other apps.
+    let hidden = VaultProjects.shared.hiddenRoots()
     projects = fetched
+      .filter { project in project.rootURL.map { !hidden.contains($0.standardizedFileURL.path) } ?? true }
       .sorted {
         $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending
       }
@@ -238,6 +241,8 @@ final class SidebarViewModel {
           needsReview: badge.needsReview,
           languages: badge.languages.values.sorted { $0.total == $1.total ? $0.code < $1.code : $0.total > $1.total })
       }
+    // A project that left the list can't stay selected.
+    if case .project(let id) = selection, !projects.contains(where: { $0.id == id }) { selection = nil }
     // The MCP process reads the project list from here (never the demo's).
     if !LaunchOptions.isScreenshotMode { KnownProjects.write(projects.compactMap { row in
       row.rootURL.map { KnownProjects.Entry(name: row.name, root: $0.path) }
@@ -470,12 +475,19 @@ final class SidebarViewModel {
         message: "Couldn't save the imported project: \(error.localizedDescription)")
       return nil
     }
+    // The other v57 apps list the folder too, and the vault notes which are
+    // Xcode projects: the others leave the list.
+    VaultProjects.shared.publish(resolved.compactMap(\.rootURL))
+    refresh()
     // Read after the save: a new project's ID before it is temporary, and the
     // rows never match it.
-    let firstID = resolved.first?.persistentModelID
-    refresh()
-    // The other v57 apps list the folder too.
-    VaultProjects.shared.publish(resolved.compactMap(\.rootURL))
+    let shown = resolved.filter { project in projects.contains { $0.id == project.persistentModelID } }
+    let firstID = shown.first?.persistentModelID
+    if !resolved.isEmpty, shown.isEmpty {
+      alert = SidebarAlert(
+        title: "No Xcode project",
+        message: "Dev lists only folders with an Xcode project. To list the others too, turn off Show only Xcode projects in Settings ▸ General.")
+    }
     // Offer only what is not a project already: re-dropping a folder must not
     // keep suggesting the directories the reader added from its last drop.
     let known = Set(projects.compactMap(\.rootURL))
@@ -522,9 +534,9 @@ final class SidebarViewModel {
         message: "Couldn't save the imported projects: \(error.localizedDescription)")
       return nil
     }
-    refresh()
     VaultProjects.shared.publish(added.compactMap(\.rootURL))
-    return added.first?.persistentModelID
+    refresh()
+    return added.first { project in projects.contains { $0.id == project.persistentModelID } }?.persistentModelID
   }
 
   /// Removes the project at `rootPath` because the vault dropped it (removed in Git), unless it holds
