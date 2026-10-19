@@ -7,6 +7,7 @@
 
 import ComponentKit
 import SwiftUI
+import VaultKit
 
 /// Sidebar column of the split view, in the order the reader uses it:
 ///  - Projects: one row per imported project (drag a folder in, or + ▸ Add Project…),
@@ -35,6 +36,8 @@ struct SidebarView: View {
   @State private var search = ""
   /// The bottom bar's + menu is open.
   @State private var showsAddMenu = false
+  /// The project groups closed in the Projects section (vault group ids).
+  @AppStorage("CollapsedProjectGroups") private var collapsedGroups = CollapsedGroups()
 
   var body: some View {
     @Bindable var model = model
@@ -120,27 +123,27 @@ struct SidebarView: View {
     }
   }
 
-  /// The Projects card: one row per project (narrowed by the search), or the drop hint.
+  /// The Projects card: the projects (narrowed by the search) in the vault's groups, which open and close, or the
+  /// drop hint.
   private var projectsSection: some View {
-    let shown = search.isEmpty
-      ? model.projects
-      : model.projects.filter { $0.name.localizedCaseInsensitiveContains(search) }
+    let layout = ProjectGroupsLayout(
+      projects: model.projects, tree: Vault.shared.projectTree, collapsed: collapsedGroups.ids, search: search)
     return KitSection("Projects", meta: projectsMeta, systemImage: "folder", hue: .blue) {
       if model.projects.isEmpty {
         dropHintRow
       } else {
-        ForEach(shown) { row in
-          ProjectRow(row: row)
-            .kitContextMenu {
-              if let root = row.rootURL {
-                Button("Open in \(ProjectOpener.appName)", systemImage: "arrow.up.forward.app") { ProjectOpener.open(root) }
-                Button("Show in Finder", systemImage: "folder") { NSWorkspace.shared.activateFileViewerSelecting([root]) }
-                Divider()
-              }
-              Button("Remove Project", systemImage: "trash", role: .destructive) {
-                model.removeProject(id: row.id, localization: localization)
-              }
+        ForEach(layout.rows) { row in
+          Group {
+            switch row.item {
+            case .group(let group, let projects):
+              ProjectGroupRow(
+                group: group, projects: projects, isExpanded: groupIsExpanded(group.id), isSearching: !search.isEmpty,
+                holdsSelection: projects.contains { model.selection == .project($0.id) })
+            case .project(let project):
+              projectRow(project, reservesDisclosure: layout.hasGroups)
             }
+          }
+          .kitRowIndent(row.depth)
         }
       }
     } accessory: {
@@ -148,6 +151,30 @@ struct SidebarView: View {
         .buttonStyle(.kitIcon)
         .help("Add a project folder")
     }
+    .animation(.kit, value: layout.rows.map(\.id))
+  }
+
+  private func projectRow(_ row: SidebarProjectRow, reservesDisclosure: Bool) -> some View {
+    ProjectRow(row: row, reservesDisclosure: reservesDisclosure)
+      .kitContextMenu {
+        if let root = row.rootURL {
+          Button("Open in \(ProjectOpener.appName)", systemImage: "arrow.up.forward.app") { ProjectOpener.open(root) }
+          Button("Show in Finder", systemImage: "folder") { NSWorkspace.shared.activateFileViewerSelecting([root]) }
+          Divider()
+        }
+        Button("Remove Project", systemImage: "trash", role: .destructive) {
+          model.removeProject(id: row.id, localization: localization)
+        }
+      }
+  }
+
+  /// Whether a group is open, as Dev keeps it.
+  private func groupIsExpanded(_ id: String) -> Binding<Bool> {
+    Binding(
+      get: { !collapsedGroups.ids.contains(id) },
+      set: { isOpen in
+        if isOpen { collapsedGroups.ids.remove(id) } else { collapsedGroups.ids.insert(id) }
+      })
   }
 
   /// "1 project · DemoApp": how many, and which one is open.
@@ -178,11 +205,47 @@ struct SidebarView: View {
   }
 }
 
+// MARK: - Project group row
+
+/// A group of projects (made in Git, shared through the vault): its folder, its name, and while closed how many
+/// strings wait for review in the projects inside it. A click opens or closes it; closed, it stands in for the open
+/// project inside it as the current row.
+private struct ProjectGroupRow: View {
+  let group: VaultProjectGroup
+  let projects: [SidebarProjectRow]
+  @Binding var isExpanded: Bool
+  /// A search opens every group, so the chevron can't close it.
+  let isSearching: Bool
+  /// The open project is in it.
+  let holdsSelection: Bool
+  @AppStorage(SidebarPreferences.showReviewBadge) private var showsReviewBadge = true
+
+  var body: some View {
+    let isOpen = isExpanded || isSearching
+    let needsReview = projects.reduce(0) { $0 + $1.needsReview }
+    SidebarRow(group.name, subtitle: group.note?.isEmpty == false ? group.note : nil) {
+      RowTile(systemImage: isOpen ? "folder.fill" : "folder", hue: StableHue.pick(group.name))
+    } trailing: {
+      if showsReviewBadge, !isOpen, needsReview > 0 {
+        Count(needsReview.formatted(.number.notation(.compactName)), .attention)
+          .help("\(needsReview) strings need review")
+      }
+    }
+    .disclosure(isExpanded: isSearching ? .constant(true) : $isExpanded)
+    .isCurrent(holdsSelection && !isOpen)
+    .action { if !isSearching { withAnimation(.kit) { isExpanded.toggle() } } }
+    .help(projects.count == 1 ? "1 project" : "\(projects.count) projects")
+    .accessibilityHint(isOpen ? "Collapses the group" : "Expands the group")
+  }
+}
+
 // MARK: - Project row
 
 /// One project row: its app icon, its name, and how many strings wait for review.
 private struct ProjectRow: View {
   let row: SidebarProjectRow
+  /// Keeps the chevron's slot, so the icon lines up with the groups' beside it.
+  var reservesDisclosure = false
   @AppStorage(SidebarPreferences.showReviewBadge) private var showsReviewBadge = true
 
   var body: some View {
@@ -194,6 +257,7 @@ private struct ProjectRow: View {
           .help("\(row.needsReview) strings need review")
       }
     }
+    .disclosureSlot(reservesDisclosure)
   }
 
   @ViewBuilder
