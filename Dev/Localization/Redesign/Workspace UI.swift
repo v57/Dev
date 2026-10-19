@@ -474,7 +474,6 @@ extension Translation {
           .buttonStyle(.kitPlain)
           .help("Reopen the run's pages where the run is now")
         }
-        Spacer()
         trailing
       }
     }

@@ -292,12 +292,10 @@ struct LocalizationView: View {
       } else if let failure = shell.error {
         StatusBar(systemImage: "exclamationmark.triangle", hue: .red, status: .failed) {
           Text(failure).foregroundStyle(Hue.red.text)
-          Spacer()
           FooterBar(store: store)
         }
       } else {
         StatusBar {
-          Spacer()
           FooterBar(store: store)
         }
       }
