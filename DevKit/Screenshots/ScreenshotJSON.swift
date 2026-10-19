@@ -55,13 +55,22 @@ enum ScreenshotJSON {
 
   private static func scalar(_ value: Any) throws -> String {
     // JSONSerialization spells 0.07 as 0.070000000000000007; Swift's shortest form reads back the same.
-    if let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(), CFNumberIsFloatType(number) {
+    if let number = value as? NSNumber, isFloat(number) {
       let double = number.doubleValue
       if double.isFinite, double == double.rounded(), abs(double) < 1e15 { return String(Int64(double)) }
       return "\(double)"
     }
     let data = try JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed, .withoutEscapingSlashes])
     return String(decoding: data, as: UTF8.self)
+  }
+
+  /// A floating-point number (not a Bool or an integer).
+  private static func isFloat(_ number: NSNumber) -> Bool {
+    #if canImport(ObjectiveC)
+      CFGetTypeID(number) != CFBooleanGetTypeID() && CFNumberIsFloatType(number)
+    #else
+      ["d", "f"].contains(String(cString: number.objCType))
+    #endif
   }
 
   private static func sortedKeys(_ object: [String: Any]) -> [String] {
