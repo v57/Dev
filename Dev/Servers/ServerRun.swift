@@ -3,6 +3,7 @@
 //  Dev
 //
 
+import CodeProgress
 import Foundation
 import Observation
 
@@ -102,6 +103,17 @@ final class ServerRun {
 
   var isRunning: Bool { phase.isActive }
 
+  /// How far the run got and how long it has left, estimated from the stages earlier runs
+  /// timed (`ServerRun.Progress`). Its snapshots move with time, so a readout reads one on a
+  /// timer while the run lasts. A new one starts with every run.
+  private(set) var progress: ProgressTracker?
+  /// The durations progress estimates come from, kept across launches.
+  let progressHistory: ProgressHistory
+
+  init(progressHistory: ProgressHistory = .standard) {
+    self.progressHistory = progressHistory
+  }
+
   /// One line for the pane's status area.
   var summaryLine: String {
     guard isRunning || phase == .finished || phase == .cancelled || isFailed else { return "" }
@@ -157,8 +169,18 @@ final class ServerRun {
     phase = .starting
     let client = LocalizeClient(base: base, key: key)
     let router = TranslationRouter.shared
+    let operation = Progress.operation(plan)
+    let progress = ProgressTracker(
+      operation: operation,
+      stages: Progress.planned(
+        last: progressHistory.plan(for: operation) ?? [], model: Progress.model, locale: locale),
+      history: progressHistory)
+    self.progress = progress
     task = Task { [weak self] in
       await self?.run(client: client, router: router)
+      // Only a whole run is the plan for next time; a stopped or failed one keeps the stages
+      // it finished but not the one it was in.
+      if self?.phase == .finished { progress.complete() } else { progress.cancel() }
     }
   }
 
@@ -202,6 +224,7 @@ final class ServerRun {
     var learned = Learned()
     if plan.hasLearning {
       phase = .learning
+      progress?.begin(Progress.learn)
       learned = await learn(client: client, locale: locale)
       if Task.isCancelled {
         phase = .cancelled
@@ -214,9 +237,15 @@ final class ServerRun {
     // vertical
     phase = .vertical
     var writtenSources: [String] = []
+    let requestModel = Progress.model
     do {
-      for try await batch in client.worklistBatches(
-        locale: locale, filters: ["empty", "stale"], limit: Self.pageSize) {
+      var pages = client.worklistBatches(
+        locale: locale, filters: ["empty", "stale"], limit: Self.pageSize
+      ).makeAsyncIterator()
+      while true {
+        // The stream reads ahead, so this times what the run waited for the page.
+        progress?.begin(Progress.worklist)
+        guard let batch = try await pages.next() else { break }
         if Task.isCancelled { break }
         batches += 1
         let scoped = batch.filter { scope == nil || $0.namespace == scope }
@@ -235,6 +264,7 @@ final class ServerRun {
           }
           sourceCharacters += chunk.reduce(0) { $0 + $1.source.count }
 
+          progress?.begin(Progress.vertical(model: requestModel, locale: locale, strings: chunk.count))
           let outcome = await router.translateBatch(items, from: Self.sourceLanguage, to: locale)
           if !outcome.model.isEmpty { model = outcome.model }
           if outcome.truncated {
@@ -251,6 +281,7 @@ final class ServerRun {
                 model: outcome.model.isEmpty ? nil : outcome.model))
           }
           if !entries.isEmpty {
+            progress?.begin(Progress.write(entries.count))
             let result = try await client.writeValues(entries)
             rowsWritten += result.written
             rowsSkipped += result.skipped
@@ -372,6 +403,7 @@ final class ServerRun {
     // every affected source is seen (or the inventory ends).
     var rows: [String: LocalizeInventory.Item] = [:]
     var cursor: String?
+    progress?.begin(Progress.rows)
     do {
       repeat {
         var body: [String: Any] = ["limit": Self.pageSize]
@@ -401,6 +433,7 @@ final class ServerRun {
       var context = TranslationContext()
       context.comment = row.comment
       context.neighbors = siblings.prefix(4).map { "\($0.key): \($0.value)" }
+      progress?.begin(Progress.horizontal(model: Progress.model, locale: locale))
       let repaired = try? await router.translate(source, from: Self.sourceLanguage, to: locale, context: context)
       guard let repaired, !repaired.isEmpty,
             TranslationValidator.validate(source: source, target: repaired).isEmpty else {
@@ -409,6 +442,7 @@ final class ServerRun {
         continue
       }
       do {
+        progress?.begin(Progress.write(1))
         let result = try await client.writeValues([
           LocalizeValueEntry(
             source: source, locale: locale, value: repaired, origin: "machine",

@@ -3,6 +3,7 @@
 //  Dev
 //
 
+import ComponentKit
 import SwiftUI
 
 /// The server pane's controls: which locale to translate into, which namespace
@@ -79,6 +80,9 @@ struct ServerRunBar: View {
         }
       }
 
+      if run.progress != nil {
+        ServerRunEstimateBar(run: run)
+      }
       if !run.summaryLine.isEmpty {
         Text(run.summaryLine)
           .font(.caption)
@@ -149,5 +153,33 @@ struct ServerRunBar: View {
   private var skipLearningHelp: String {
     if run.isRunning { return "A run is in progress — stop it first" }
     return "\(Translation.Run.skipLearningHelp) — here it skips folding this server's verified values in first."
+  }
+}
+
+/// The run's estimated progress and the time it has left (`ServerRun.Progress`), read on a
+/// timer while the run lasts, as the project run's `Translation.RunEstimateBar` does; once it
+/// stops, the bar stays where it got to.
+struct ServerRunEstimateBar: View {
+  let run: ServerRun
+
+  var body: some View {
+    TimelineView(.animation(minimumInterval: 0.5, paused: !run.isRunning)) { _ in
+      let estimate = run.estimate
+      HStack(spacing: 12) {
+        KitProgressBar(status: status(estimate))
+        Text(estimate?.line ?? (run.isRunning ? "Estimating…" : ""))
+          .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+      }
+    }
+  }
+
+  private func status(_ estimate: Translation.Run.Estimate?) -> WorkStatus {
+    switch run.phase {
+    case .finished: return .done
+    case .failed(let message): return .failed(message)
+    default:
+      return run.isRunning
+        ? .working(progress: estimate?.fraction) : .paused(progress: estimate?.fraction)
+    }
   }
 }
