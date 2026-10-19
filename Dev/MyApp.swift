@@ -1,4 +1,5 @@
 import AppKit
+import CodeWorkspace
 import ComponentKit
 import DevScreenshotsCapture
 import SwiftUI
@@ -37,7 +38,11 @@ struct MyApp: App {
     init() {
         updater.start()
         // Projects added here sync with the other v57 apps and devices through the vault.
-        if !LaunchOptions.isScreenshotMode { Vault.shared.startSync() }
+        // It also keeps their app icons, found with Code's ProjectIcon, for Dev's sidebar and the other apps.
+        if !LaunchOptions.isScreenshotMode {
+            Vault.shared.startSync()
+            Vault.shared.findProjectIcons(with: { ProjectIcon.find(in: $0) }) { ProjectIcon.thumbnail(of: $0) }
+        }
     }
 
     var body: some Scene {

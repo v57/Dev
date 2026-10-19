@@ -268,7 +268,9 @@ private struct ProjectRow: View {
 
   @ViewBuilder
   private var thumbnail: some View {
-    if let icon = row.iconImage {
+    if let icon = row.vaultIcon.flatMap(Image.init(data:)) {
+      Avatar(name: row.name, image: icon, kind: .thing, size: 18)
+    } else if let icon = row.iconImage {
       Image(nsImage: icon)
         .resizable()
         .interpolation(.high)

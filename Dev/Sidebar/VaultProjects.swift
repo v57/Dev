@@ -57,6 +57,16 @@ import VaultKit
     return Set(vault.localProjects.filter { !$0.kinds.contains(.xcode) }.compactMap(\.localPath))
   }
 
+  /// The app icons the vault keeps (see `Vault.findProjectIcons`), by project folder.
+  func icons() -> [String: Data] {
+    guard !LaunchOptions.isScreenshotMode else { return [:] }
+    var icons: [String: Data] = [:]
+    for project in vault.localProjects {
+      if let path = project.localPath, let icon = project.icon { icons[path] = icon }
+    }
+    return icons
+  }
+
   /// Follows the vault again after Show only Xcode projects changed.
   func preferencesChanged() {
     guard observer != nil else { return }

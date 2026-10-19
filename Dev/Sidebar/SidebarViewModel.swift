@@ -84,6 +84,8 @@ struct SidebarProjectRow: Identifiable {
   /// The project's AppIcon.appiconset, when it has one.
   let iconURL: URL?
   let iconImage: NSImage?
+  /// The icon the vault keeps for the project (found anywhere in its folder), preferred to `iconImage`.
+  let vaultIcon: Data?
   /// Distinct translatable keys present in the project's reconciled records.
   let keyCount: Int
   let catalogExists: Bool
@@ -221,6 +223,7 @@ final class SidebarViewModel {
     let fm = FileManager.default
     // Only Xcode projects: the vault knows the others' kinds and Dev leaves them to the other apps.
     let hidden = VaultProjects.shared.hiddenRoots()
+    let icons = VaultProjects.shared.icons()
     projects = fetched
       .filter { project in project.rootURL.map { !hidden.contains($0.standardizedFileURL.path) } ?? true }
       .sorted {
@@ -235,6 +238,7 @@ final class SidebarViewModel {
           catalogURL: project.catalogURL,
           iconURL: project.iconURL,
           iconImage: project.iconThumbnail,
+          vaultIcon: project.rootURL.flatMap { icons[$0.standardizedFileURL.path] },
           keyCount: badge.keys,
           catalogExists: fm.fileExists(atPath: project.catalogURL.path),
           hasRecords: badge.records > 0,
