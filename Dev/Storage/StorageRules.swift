@@ -311,7 +311,9 @@ nonisolated extension StorageDiscovery {
       .first { fileManager.isExecutableFile(atPath: $0) }
     guard let qemuImg else { return }
     var running = Set<String>()
-    if let utmctl = VMStore.utmctlPaths.first(where: { fileManager.isExecutableFile(atPath: $0) }) {
+    // A closed UTM runs no machine; asking utmctl would open it.
+    if VMStore.isUTMRunning,
+       let utmctl = VMStore.utmctlPaths.first(where: { fileManager.isExecutableFile(atPath: $0) }) {
       let list = ScanShell.run(utmctl, arguments: ["list"], currentDirectory: nil, timeout: 20)
       for vm in VMStore.parseList(list.stdout) where vm.status != .stopped { running.insert(vm.name) }
     }

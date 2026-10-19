@@ -3,7 +3,7 @@
 //  Dev
 //
 
-import Foundation
+import AppKit
 import Observation
 
 // MARK: - VirtualMachine
@@ -66,6 +66,8 @@ extension VirtualMachine.System: Codable {}
 
 /// The UTM VMs on this Mac: their state, their address, and the commands that
 /// start and stop them. Everything goes through `utmctl`, which ships with UTM.
+/// `utmctl` opens UTM, so while UTM is closed the list comes from the `.utm`
+/// bundles (every machine stopped) and only starting one opens it.
 @Observable
 final class VMStore {
   private(set) var machines: [VirtualMachine] = []
@@ -91,6 +93,11 @@ final class VMStore {
     utmctlPaths.first { FileManager.default.isExecutableFile(atPath: $0) }
   }
 
+  /// Whether UTM is open: only then may `utmctl` ask it anything.
+  nonisolated static var isUTMRunning: Bool {
+    !NSRunningApplication.runningApplications(withBundleIdentifier: "com.utmapp.UTM").isEmpty
+  }
+
   func refresh() async {
     guard let utmctl = Self.utmctl else {
       error = "UTM is not installed (utmctl not found)."
@@ -99,6 +106,16 @@ final class VMStore {
     }
     isRefreshing = true
     defer { isRefreshing = false }
+    guard Self.isUTMRunning else {
+      error = nil
+      addresses = [:]
+      machines = await Self.bundles()
+        .map { id, bundle in
+          VirtualMachine(id: id, name: bundle.name, status: .stopped, bundleURL: bundle.url, macAddress: bundle.mac)
+        }
+        .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+      return
+    }
     let result = await LineProcess.run(utmctl, ["list"])
     guard result.status == 0 else {
       error = result.output.isEmpty ? "utmctl list failed." : result.output
@@ -198,11 +215,16 @@ final class VMStore {
 
   // MARK: - bundles
 
-  /// Every `.utm` bundle Spotlight knows, by VM UUID, with its first network MAC.
-  private static func bundles() async -> [String: (url: URL, mac: String?)] {
+  /// Every `.utm` bundle in UTM's container or known to Spotlight, by VM UUID,
+  /// with its name and first network MAC.
+  private static func bundles() async -> [String: (url: URL, name: String, mac: String?)] {
     let found = await LineProcess.run("/usr/bin/mdfind", ["kMDItemFSName == '*.utm'"])
-    var out: [String: (URL, String?)] = [:]
-    for path in found.output.split(separator: "\n").map(String.init) where path.hasSuffix(".utm") {
+    let container = URL(fileURLWithPath: NSHomeDirectory())
+      .appendingPathComponent("Library/Containers/com.utmapp.UTM/Data/Documents")
+    let stored = (try? FileManager.default.contentsOfDirectory(atPath: container.path))?
+      .map { container.appendingPathComponent($0).path } ?? []
+    var out: [String: (URL, String, String?)] = [:]
+    for path in Set(stored + found.output.split(separator: "\n").map(String.init)) where path.hasSuffix(".utm") {
       let url = URL(fileURLWithPath: path)
       guard let data = try? Data(contentsOf: url.appendingPathComponent("config.plist")),
             let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
@@ -210,7 +232,8 @@ final class VMStore {
             let uuid = info["UUID"] as? String
       else { continue }
       let mac = (plist["Network"] as? [[String: Any]])?.first?["MacAddress"] as? String
-      out[uuid] = (url, mac)
+      let name = info["Name"] as? String ?? url.deletingPathExtension().lastPathComponent
+      out[uuid] = (url, name, mac)
     }
     return out
   }
