@@ -166,6 +166,7 @@ struct SidebarView: View {
         if let root = row.rootURL {
           Button("Open in \(ProjectOpener.appName)", systemImage: "arrow.up.forward.app") { ProjectOpener.open(root) }
           Button("Show in Finder", systemImage: "folder") { NSWorkspace.shared.activateFileViewerSelecting([root]) }
+          OtherPlacesMenu(root: root)
           Divider()
         }
         Button("Remove Project", systemImage: "trash", role: .destructive) {
