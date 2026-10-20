@@ -6,10 +6,10 @@
 //
 //  One completion, read as it is written.
 //
-//  Two protocols arrive through this file, picked by `Wire` (OpenAIChatClient.swift):
-//  the Responses protocol, whose frames name their own event type, and the chat wire's
-//  `choices`/`delta` frames. Which one a provider speaks is its preset's business. Everything
-//  downstream is identical for both — this file only turns frames into text.
+//  Three protocols arrive through this file, picked by `Wire` (OpenAIChatClient.swift):
+//  the Responses and Messages protocols, whose frames name their own event type, and the
+//  chat wire's `choices`/`delta` frames. Which one a model speaks is its preset's business.
+//  Everything downstream is identical for all three — this file only turns frames into text.
 //
 //  The redesign's requirement is that a row reaches the run the moment the model finishes
 //  writing it, not when the whole batch does (5.5): a 33-row reply is minutes of writing,
@@ -99,7 +99,7 @@ extension Translation {
       if !apiKey.isEmpty {
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
       }
-      for (name, value) in headers {
+      for (name, value) in wire.headers(apiKey: apiKey).merging(headers, uniquingKeysWith: { _, own in own }) {
         request.setValue(value, forHTTPHeaderField: name)
       }
       do {
@@ -125,6 +125,17 @@ extension Translation {
               instructions: system,
               input: [ResponsesRequest.Item(role: "user", content: user)],
               temperature: temperature,
+              stream: true))
+        case .anthropicMessages:
+          // Like Responses, Messages streams its usage on its own (`message_start`,
+          // `message_delta`) and knows no `stream_options`.
+          request.httpBody = try JSONEncoder().encode(
+            MessagesRequest(
+              model: model,
+              system: system,
+              messages: [MessagesRequest.Message(role: "user", content: user)],
+              temperature: temperature,
+              max_tokens: Wire.defaultMaxTokens,
               stream: true))
         }
       } catch {
@@ -196,7 +207,14 @@ extension Translation {
           arrived = true
           onChunk(text)
         }
-        if let reported = frame.usage, !reported.isEmpty { usage = reported }
+        // The Messages wire reports its usage in two frames (input first, output
+        // last), so a frame's numbers fill in the ones before it.
+        if let reported = frame.usage, !reported.isEmpty {
+          usage = Usage(
+            promptTokens: reported.promptTokens ?? usage?.promptTokens,
+            completionTokens: reported.completionTokens ?? usage?.completionTokens,
+            cachedTokens: reported.cachedTokens ?? usage?.cachedTokens)
+        }
       }
       guard arrived else { throw BackendError.emptyResult(model) }
       return usage
@@ -237,6 +255,19 @@ extension Translation {
         }
         content = Self.outputText(of: object)
         usage = (object["usage"] as? [String: Any]).flatMap(Self.responsesUsage(of:))
+      case .anthropicMessages:
+        // The Messages shape: `content` blocks, the answer in the `text` ones.
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+          throw BackendError.decoding(BackendError.bodyExcerpt(data) ?? "invalid JSON")
+        }
+        if let message = Self.errorMessage(in: object) {
+          throw BackendError.badStatus(200, message)
+        }
+        let blocks = object["content"] as? [[String: Any]] ?? []
+        let text = blocks.filter { $0["type"] as? String == "text" }
+          .compactMap { $0["text"] as? String }.joined()
+        content = text.isEmpty ? nil : text
+        usage = (object["usage"] as? [String: Any]).flatMap(Self.messagesUsage(of:))
       }
       guard let content, !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
         throw BackendError.emptyResult(model)
@@ -283,10 +314,23 @@ extension Translation {
       if let message = errorMessage(in: object) {
         throw BackendError.badStatus(200, message)
       }
-      // A Responses-API frame names its own event type; the chat wire's frames
-      // carry no `type` and fall through to the `choices` reading below.
+      // A Responses or Messages frame names its own event type; the chat wire's
+      // frames carry no `type` and fall through to the `choices` reading below.
       if let type = object["type"] as? String {
         switch type {
+        case "content_block_delta":
+          // Messages: only `text_delta`s are the answer; thinking deltas are not.
+          guard let delta = object["delta"] as? [String: Any],
+            delta["type"] as? String == "text_delta"
+          else { return (nil, nil) }
+          return (delta["text"] as? String, nil)
+        case "message_start":
+          // Messages: the input side of the usage, before any text.
+          let message = object["message"] as? [String: Any]
+          return (nil, (message?["usage"] as? [String: Any]).flatMap(messagesUsage(of:)))
+        case "message_delta":
+          // Messages: the output side of the usage, at the end.
+          return (nil, (object["usage"] as? [String: Any]).flatMap(messagesUsage(of:)))
         case "response.output_text.delta":
           return (object["delta"] as? String, nil)
         case "response.completed", "response.incomplete":
@@ -307,7 +351,8 @@ extension Translation {
           throw BackendError.badStatus(200, (object["message"] as? String) ?? "the model call failed")
         default:
           // created / in_progress / output_item.* / content_part.* / reasoning
-          // deltas: read for nothing, passed over.
+          // deltas, and Messages' ping / content_block_start|stop / message_stop:
+          // read for nothing, passed over.
           return (nil, nil)
         }
       }
@@ -371,6 +416,16 @@ extension Translation {
       return usage.isEmpty ? nil : usage
     }
 
+    /// The usage numbers of a Messages-API frame: `input_tokens` / `output_tokens`,
+    /// cache hits as `cache_read_input_tokens`.
+    private static func messagesUsage(of object: [String: Any]) -> Usage? {
+      var usage = Usage()
+      usage.promptTokens = object["input_tokens"] as? Int
+      usage.completionTokens = object["output_tokens"] as? Int
+      usage.cachedTokens = object["cache_read_input_tokens"] as? Int
+      return usage.isEmpty ? nil : usage
+    }
+
     // MARK: - wire shapes
 
     private struct Request: Encodable {
@@ -400,6 +455,22 @@ extension Translation {
       var stream: Bool
 
       struct Item: Encodable {
+        var role: String
+        var content: String
+      }
+    }
+
+    /// The Messages-API request body. It streams usage in its own frames; there is
+    /// no `stream_options` in this protocol either.
+    private struct MessagesRequest: Encodable {
+      var model: String
+      var system: String
+      var messages: [Message]
+      var temperature: Double?
+      var max_tokens: Int
+      var stream: Bool
+
+      struct Message: Encodable {
         var role: String
         var content: String
       }

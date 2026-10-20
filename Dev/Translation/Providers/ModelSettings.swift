@@ -42,7 +42,7 @@ nonisolated enum ModelSettings {
       providerID: preset.id,
       providerName: preset.name,
       baseURL: url,
-      wire: preset.id == ProviderPreset.custom.id ? (wire ?? preset.wire) : preset.wire,
+      wire: preset.id == ProviderPreset.custom.id ? (wire ?? preset.wire) : preset.wire(for: model),
       model: model,
       apiKey: ProviderKeychain.key(for: preset),
       needsKey: preset.needsKey,

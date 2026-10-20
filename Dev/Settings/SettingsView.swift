@@ -120,7 +120,7 @@ struct TranslationSettingsView: View {
           }
           if preset.id == ProviderPreset.custom.id {
             FormRow("API", systemImage: "point.3.connected.trianglepath.dotted", hue: .gray) {
-              KitPicker("API", selection: $model.wire, options: [("Chat Completions", Wire.chatCompletions), ("Responses", Wire.responses)])
+              KitPicker("API", selection: $model.wire, options: [("Chat Completions", Wire.chatCompletions), ("Responses", Wire.responses), ("Anthropic Messages", Wire.anthropicMessages)])
             }
           }
         }

@@ -7,21 +7,38 @@ import Foundation
 
 // MARK: - Wire
 
-/// Which OpenAI wire protocol a call speaks.
+/// Which wire protocol a call speaks.
 ///
 /// `chatCompletions` is the classic shape — `messages` in, `choices` out.
 /// `responses` is the Responses API — `instructions` + `input` in, `output`
-/// items out — which is what Muse speaks on OpenCode Go.
+/// items out — which is what Muse, GPT and Grok speak on OpenCode.
+/// `anthropicMessages` is Anthropic's Messages API — `system` + `messages` in,
+/// `content` blocks out — which is what Claude and Qwen speak on OpenCode.
 nonisolated enum Wire: String, Sendable {
   case chatCompletions
   case responses
+  case anthropicMessages
 
   /// Path under the provider root.
   var path: String {
     switch self {
     case .chatCompletions: return "chat/completions"
     case .responses: return "responses"
+    case .anthropicMessages: return "messages"
     }
+  }
+
+  /// The Messages API requires an output cap; nobody here asks for one, so a
+  /// call gets room for the longest batch reply.
+  static let defaultMaxTokens = 32_000
+
+  /// The headers this wire needs besides the bearer token: the Messages API
+  /// takes its key as `x-api-key` and wants a version.
+  func headers(apiKey: String) -> [String: String] {
+    guard self == .anthropicMessages else { return [:] }
+    var headers = ["anthropic-version": "2023-06-01"]
+    if !apiKey.isEmpty { headers["x-api-key"] = apiKey }
+    return headers
   }
 }
 
@@ -69,7 +86,7 @@ nonisolated struct OpenAIChatClient: Sendable {
     if !apiKey.isEmpty {
       request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
     }
-    for (name, value) in headers {
+    for (name, value) in wire.headers(apiKey: apiKey).merging(headers, uniquingKeysWith: { _, own in own }) {
       request.setValue(value, forHTTPHeaderField: name)
     }
     do {
@@ -98,6 +115,14 @@ nonisolated struct OpenAIChatClient: Sendable {
           input: [ResponsesRequest.Item(role: "user", content: user)],
           temperature: temperature,
           max_output_tokens: maxTokens)
+        request.httpBody = try JSONEncoder().encode(body)
+      case .anthropicMessages:
+        let body = MessagesRequest(
+          model: model,
+          system: system,
+          messages: [MessagesRequest.Message(role: "user", content: user)],
+          temperature: temperature,
+          max_tokens: maxTokens ?? Wire.defaultMaxTokens)
         request.httpBody = try JSONEncoder().encode(body)
       }
     } catch {
@@ -153,6 +178,17 @@ nonisolated struct OpenAIChatClient: Sendable {
           decoded.usage?.input_tokens,
           decoded.usage?.output_tokens,
           decoded.usage?.cachedTokens)
+      case .anthropicMessages:
+        let decoded = try JSONDecoder().decode(MessagesResponse.self, from: data)
+        if let apiError = decoded.error?.message, !apiError.isEmpty {
+          throw BackendError.badStatus(http.statusCode, apiError)
+        }
+        let text = (decoded.content ?? []).filter { $0.type == "text" }.compactMap(\.text).joined()
+        reply = (
+          text.isEmpty ? nil : text,
+          decoded.usage?.input_tokens,
+          decoded.usage?.output_tokens,
+          decoded.usage?.cache_read_input_tokens)
       }
     } catch let error as BackendError {
       throw error
@@ -277,6 +313,40 @@ nonisolated struct OpenAIChatClient: Sendable {
     }
 
     var output: [OutputItem]?
+    var error: APIError?
+    var usage: Usage?
+  }
+
+  /// The Messages-API request body (Claude and Qwen on OpenCode).
+  private struct MessagesRequest: Encodable {
+    var model: String
+    var system: String
+    var messages: [Message]
+    var temperature: Double?
+    var max_tokens: Int
+
+    struct Message: Encodable {
+      var role: String
+      var content: String
+    }
+  }
+
+  /// The Messages-API reply: `content` blocks, the answer in its `text` ones.
+  private struct MessagesResponse: Decodable {
+    struct Block: Decodable {
+      var type: String?
+      var text: String?
+    }
+
+    struct APIError: Decodable { var message: String? }
+
+    struct Usage: Decodable {
+      var input_tokens: Int?
+      var output_tokens: Int?
+      var cache_read_input_tokens: Int?
+    }
+
+    var content: [Block]?
     var error: APIError?
     var usage: Usage?
   }

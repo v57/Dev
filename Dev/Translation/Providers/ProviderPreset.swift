@@ -15,7 +15,8 @@ import Foundation
 /// base URLs and key variables), plus OpenAI, Mistral, Groq, Together, local Ollama
 /// and a Custom entry.
 /// Every provider is spoken to over an OpenAI wire: Anthropic, Gemini and MiniMax
-/// through their OpenAI-compatible endpoints.
+/// through their OpenAI-compatible endpoints. OpenCode is the exception: it serves
+/// some models only on the Responses or Anthropic Messages wire (`modelWires`).
 nonisolated struct ProviderPreset: Identifiable, Sendable, Hashable {
   enum Group: String, Sendable, CaseIterable {
     case recommended = "Recommended"
@@ -32,6 +33,9 @@ nonisolated struct ProviderPreset: Identifiable, Sendable, Hashable {
   /// Empty when the user has to supply it (Custom, Azure, Tencent).
   let baseURL: String
   let wire: Wire
+  /// Models served on another wire than `wire`, for a provider that routes each
+  /// model to its own protocol; the first match wins.
+  var modelWires: [ModelWire] = []
   /// Environment variables that may hold the key, in Hermes' order. Read from the
   /// process environment as a fallback and by "Import Keys".
   let keyNames: [String]
@@ -49,8 +53,29 @@ nonisolated struct ProviderPreset: Identifiable, Sendable, Hashable {
   /// The models worth starting with, researched per provider (`ModelRecommendations`).
   var recommendations: [ModelRecommendation] { ModelRecommendations.forPreset(id) }
 
+  /// The wire `model` is spoken to on.
+  func wire(for model: String) -> Wire {
+    modelWires.first { $0.matches(model) }?.wire ?? wire
+  }
+
   /// The user types the base URL for this provider.
   var asksForBaseURL: Bool { baseURL.isEmpty || group == .local }
+}
+
+/// The wire one model, or a family of them, is served on.
+nonisolated struct ModelWire: Sendable, Hashable {
+  /// A model id, or an id prefix ending in `*`.
+  let pattern: String
+  let wire: Wire
+
+  init(_ pattern: String, _ wire: Wire) {
+    self.pattern = pattern
+    self.wire = wire
+  }
+
+  func matches(_ model: String) -> Bool {
+    pattern.hasSuffix("*") ? model.hasPrefix(pattern.dropLast()) : model == pattern
+  }
 }
 
 /// A model worth starting with, and what it costs.
@@ -90,6 +115,21 @@ nonisolated extension ProviderPreset {
   /// process for routing and prompt-cache affinity.
   private static let openCodeHeaders = ["x-opencode-session": RoutedModel.sessionID]
 
+  /// OpenCode serves each model on its own upstream's protocol and refuses the
+  /// others ("ModelProtocolUnsupported"), so every model not on the chat wire is
+  /// listed, after the endpoint tables in opencode.ai/docs/zen and /docs/go.
+  /// Gemini (Google's own protocol) and Jev are not spoken here.
+  private static let openCodeZenWires: [ModelWire] = [
+    .init("gpt-*", .responses), .init("grok-*", .responses), .init("muse-*", .responses),
+    .init("claude-*", .anthropicMessages),
+    .init("qwen3.8-max", .chatCompletions), .init("qwen*", .anthropicMessages),
+  ]
+  private static let openCodeGoWires: [ModelWire] = [
+    .init("gpt-*", .responses), .init("grok-*", .responses), .init("muse-*", .responses),
+    .init("claude-*", .anthropicMessages), .init("qwen*", .anthropicMessages),
+    .init("minimax-m3", .anthropicMessages),
+  ]
+
   static let all: [ProviderPreset] = recommended + popular + more + local + [custom]
 
   static let recommended: [ProviderPreset] = [
@@ -105,13 +145,13 @@ nonisolated extension ProviderPreset {
       note: "One key for hundreds of models. Free models: 20 requests/min, 50/day (1000/day after buying credits), and may log prompts."),
     ProviderPreset(
       id: "opencode-zen", name: "OpenCode Zen", group: .recommended,
-      baseURL: "https://opencode.ai/zen/v1", wire: .chatCompletions,
+      baseURL: "https://opencode.ai/zen/v1", wire: .chatCompletions, modelWires: openCodeZenWires,
       keyNames: ["OPENCODE_ZEN_API_KEY", "OPENCODE_API_KEY"], keysURL: "https://opencode.ai/auth",
       note: "Free preview models, but open models run on heavily quantized hosts, so quality drops: review more.",
       headers: openCodeHeaders),
     ProviderPreset(
       id: "opencode-go", name: "OpenCode Go", group: .recommended,
-      baseURL: "https://opencode.ai/zen/go/v1", wire: .chatCompletions,
+      baseURL: "https://opencode.ai/zen/go/v1", wire: .chatCompletions, modelWires: openCodeGoWires,
       keyNames: ["OPENCODE_GO_API_KEY", "OPENCODE_API_KEY"], keysURL: "https://opencode.ai/auth",
       note: "A flat subscription with free models. Open models run on heavily quantized hosts, so quality drops: review more.",
       headers: openCodeHeaders),
