@@ -30,16 +30,16 @@ struct ScreenshotConfigTests {
     #expect(config.mac?.window == nil)
   }
 
-  @Test func theMacIsCapturedFocusedUnlessTheConfigSaysNot() throws {
+  @Test func theMacIsCapturedInTheBackgroundUnlessTheConfigSaysNot() throws {
     let plain = try JSONDecoder().decode(ScreenshotConfig.self, from: Data(#"{ "scenes": [{ "id": "a" }] }"#.utf8))
-    #expect(plain.mac?.activate == true)
+    #expect(plain.mac?.activate == false)
     let encoder = JSONEncoder()
     encoder.outputFormatting = .sortedKeys
     #expect(String(decoding: try encoder.encode(ScreenshotConfig.Mac()), as: UTF8.self) == "{}")
-    let background = ScreenshotConfig.Mac(activate: false)
-    let written = try encoder.encode(background)
-    #expect(String(decoding: written, as: UTF8.self) == #"{"activate":false}"#)
-    #expect(try JSONDecoder().decode(ScreenshotConfig.Mac.self, from: written) == background)
+    let focused = ScreenshotConfig.Mac(activate: true)
+    let written = try encoder.encode(focused)
+    #expect(String(decoding: written, as: UTF8.self) == #"{"activate":true}"#)
+    #expect(try JSONDecoder().decode(ScreenshotConfig.Mac.self, from: written) == focused)
   }
 
   @Test func problemsAreReported() {

@@ -4,9 +4,10 @@
   import Foundation
 
   /// Takes a locale's pictures of a Mac app: launches a new instance in the background (`open -n -g`, so nobody's
-  /// typing lands in it), waits until the scene is up and captures its window with `screencapture -l`. With
-  /// `mac.activate` (the default) the app is brought to the front once and every picture is taken while it is
-  /// focused: the capture pauses while the reader is in another app, and a picture focus left during is taken again.
+  /// typing lands in it), waits until the scene is up and captures its window with `screencapture -l`. It stays in
+  /// the background; ComponentKit apps draw the focused look anyway (`-KitAppearsActive YES`). With `mac.activate`
+  /// the app is brought to the front once and every picture is taken while it is focused: the capture pauses while
+  /// the reader is in another app, and a picture focus left during is taken again.
   ///
   /// An app with a scene handler (`Screenshots.prepare { scene in … }`) takes every scene in that one launch; the
   /// others are launched again for each. Apps without `Screenshots.prepare()` are captured by their largest window
@@ -284,6 +285,8 @@
       return [
         "-AppleLanguages", "(\(locale), \(language))", "-AppleLocale", locale.replacingOccurrences(of: "-", with: "_"),
         "-ApplePersistenceIgnoreState", "YES",
+        // ComponentKit draws the focused window's look (accent selections) though the app stays in the background.
+        "-KitAppearsActive", "YES",
         // `Light`, not `NSRequiresAquaSystemAppearance`: that opts the app out of dark mode for the whole launch, so
         // a later scene switched to dark in place keeps light text views.
         "-AppleInterfaceStyle", appearance == .dark ? "Dark" : "Light",

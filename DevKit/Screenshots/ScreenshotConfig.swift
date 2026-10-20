@@ -84,14 +84,15 @@ public struct ScreenshotConfig: Codable, Hashable, Sendable {
     /// The window's content size in points; a Retina capture is twice that in pixels (1440×900 → 2880×1800, an App
     /// Store size). Only apps that call `Screenshots.prepare()` resize; the others are captured as they open.
     public var window: [Int]?
-    /// The active-window look App Store pictures want: the app is brought to the front once, and every picture
-    /// waits until it is focused (a capture pauses while the reader is in another app). `false` keeps it in the
-    /// background, with the inactive look.
+    /// Brings the app to the front once, and every picture waits until it is focused (a capture pauses while the
+    /// reader is in another app). Off by default: the app stays in the background, and apps on ComponentKit still
+    /// draw the focused look (every launch gets `-KitAppearsActive YES`); only the system's own parts (the window's
+    /// buttons) look inactive.
     public var activate: Bool
     /// A built app, relative to the root, instead of building `build`.
     public var app: String?
 
-    public init(window: [Int]? = [1440, 900], activate: Bool = true, app: String? = nil) {
+    public init(window: [Int]? = [1440, 900], activate: Bool = false, app: String? = nil) {
       self.window = window
       self.activate = activate
       self.app = app
@@ -223,7 +224,7 @@ extension ScreenshotConfig.Mac {
     let c = try decoder.container(keyedBy: CodingKeys.self)
     self.init(
       window: c.contains(.window) ? try c.decodeIfPresent([Int].self, forKey: .window) : [1440, 900],
-      activate: try c.decodeIfPresent(Bool.self, forKey: .activate) ?? true,
+      activate: try c.decodeIfPresent(Bool.self, forKey: .activate) ?? false,
       app: try c.decodeIfPresent(String.self, forKey: .app))
   }
 
@@ -235,7 +236,7 @@ extension ScreenshotConfig.Mac {
     } else {
       try c.encodeNil(forKey: .window)
     }
-    if !activate { try c.encode(activate, forKey: .activate) }
+    if activate { try c.encode(activate, forKey: .activate) }
     try c.encodeIfPresent(app, forKey: .app)
   }
 }
