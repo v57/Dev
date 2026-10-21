@@ -7,7 +7,6 @@
 
 import AppKit
 import Foundation
-import SwiftData
 import UniformTypeIdentifiers
 
 // MARK: - Sidebar destinations
@@ -53,9 +52,9 @@ nonisolated enum SidebarSelection: Hashable, Sendable {
   /// A tool opened without a project (File ▸ New Icon).
   case tool(DevTool)
   /// A directory/catalog project from the Projects section.
-  case project(PersistentIdentifier)
+  case project(Int64)
   /// A localize server from the Servers section. Keyed by the server's own
-  /// string id rather than its PersistentIdentifier, because the id is what its
+  /// string id rather than its Int64, because the id is what its
   /// keychain item and its status are keyed by too.
   case server(String)
   /// The Storage tool: what fills this Mac, by developer category.
@@ -77,7 +76,7 @@ struct SidebarAlert: Identifiable {
 /// Immutable per-project row data, computed once per `refresh()` so row
 /// bodies never touch SwiftData or the filesystem repeatedly.
 struct SidebarProjectRow: Identifiable {
-  let id: PersistentIdentifier
+  let id: Int64
   let name: String
   let rootURL: URL?
   let catalogURL: URL
@@ -142,7 +141,7 @@ final class SidebarViewModel {
   }
 
   /// The tab each project was last left on, while the app runs.
-  @ObservationIgnored private var lastTool: [PersistentIdentifier: DevTool] = [:]
+  @ObservationIgnored private var lastTool: [Int64: DevTool] = [:]
 
   /// True while a project is the selection: the toolbar's tab control is
   /// visible only then.
@@ -167,6 +166,11 @@ final class SidebarViewModel {
 
   init() {
     observeSaves()
+    // The project list is the store's: it is read once the store has opened.
+    Task { [weak self] in
+      await TranslationData.shared.start()
+      self?.refresh()
+    }
   }
 
   /// The alert the sidebar shows (import failure, refused removal), or nil.
@@ -179,8 +183,7 @@ final class SidebarViewModel {
   /// them), offered to the reader as projects to add. Empty = no offer showing.
   var importSuggestions: [RepoDiscovery.Skipped] = []
 
-  /// The selected project's live SwiftData object, or nil when the
-  /// selection is a projectless tool. Looked up on demand.
+  /// The selected project's row, or nil when the selection is a projectless tool.
   var selectedProject: Project? {
     guard case .project(let id) = selection else { return nil }
     return project(id: id)
@@ -188,13 +191,11 @@ final class SidebarViewModel {
 
   // MARK: lookups
 
-  func project(id: PersistentIdentifier) -> Project? {
-    let context = TranslationStore.shared.context
-    return ((try? context.fetch(FetchDescriptor<Project>())) ?? [])
-      .first { $0.persistentModelID == id }
+  func project(id: Int64) -> Project? {
+    TranslationData.shared.project(id: id)
   }
 
-  func projectRow(id: PersistentIdentifier) -> SidebarProjectRow? {
+  func projectRow(id: Int64) -> SidebarProjectRow? {
     projects.first { $0.id == id }
   }
 
@@ -206,20 +207,16 @@ final class SidebarViewModel {
   /// badges tracking record state within one interaction.
   ///
   /// The rows are built at once from the badge counts already in hand; the
-  /// counts themselves are a fetch of the WHOLE record table (measured ~1.5 s
-  /// for a 67,844-record store even properties-limited, and 7.6 s through
-  /// `project.records`), so they are recounted OFF the main actor, and only
-  /// when something has saved since the last count (`countsAreStale`). A
-  /// selection change over an unchanged store costs a project fetch and
-  /// nothing else; the badges catch up when a recount lands.
+  /// counts themselves are one grouped query of the record table, run by the
+  /// store off the main actor, and only when a record has moved since the last
+  /// count (`countsAreStale`). The badges catch up when a recount lands.
   func refresh() {
     rebuildRows()
     if countsAreStale { recount() }
   }
 
   private func rebuildRows() {
-    let context = TranslationStore.shared.context
-    let fetched = (try? context.fetch(FetchDescriptor<Project>())) ?? []
+    let fetched = TranslationData.shared.projects
     let fm = FileManager.default
     // Only Xcode projects: the vault knows the others' kinds and Dev leaves them to the other apps.
     let hidden = VaultProjects.shared.hiddenRoots()
@@ -230,9 +227,9 @@ final class SidebarViewModel {
         $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending
       }
       .map { project in
-        let badge = badgeCounts[project.persistentModelID] ?? BadgeCounts()
+        let badge = badgeCounts[project.id] ?? BadgeCounts()
         return SidebarProjectRow(
-          id: project.persistentModelID,
+          id: project.id,
           name: project.displayName,
           rootURL: project.rootURL,
           catalogURL: project.catalogURL,
@@ -263,22 +260,18 @@ final class SidebarViewModel {
   }
 
   /// The last counts, by project.
-  @ObservationIgnored private var badgeCounts: [PersistentIdentifier: BadgeCounts] = [:]
-  /// True when a context has saved since `badgeCounts` was taken (or none was
-  /// ever taken). Set by `ModelContext.didSave` from ANY context — the
-  /// background mirror and the passes save on their own — so a recount is paid
-  /// once per change, not once per click.
+  @ObservationIgnored private var badgeCounts: [Int64: BadgeCounts] = [:]
+  /// True when a record has moved since `badgeCounts` was taken (or none was
+  /// ever taken), so a recount is paid once per change, not once per click.
   @ObservationIgnored private var countsAreStale = true
   @ObservationIgnored private var recountTask: Task<Void, Never>?
-  @ObservationIgnored private var saveObserver: NSObjectProtocol?
+  @ObservationIgnored private var recordObservation: ObservationToken?
 
-  /// Starts watching for saves. Idempotent; called from `init`.
+  /// Starts watching for record changes. Idempotent; called from `init`.
   private func observeSaves() {
-    guard saveObserver == nil else { return }
-    saveObserver = NotificationCenter.default.addObserver(
-      forName: ModelContext.didSave, object: nil, queue: .main
-    ) { [weak self] _ in
-      MainActor.assumeIsolated { self?.countsAreStale = true }
+    guard recordObservation == nil else { return }
+    recordObservation = TranslationData.shared.observeRecords { [weak self] _, _ in
+      self?.countsAreStale = true
     }
   }
 
@@ -286,54 +279,19 @@ final class SidebarViewModel {
     countsAreStale = false
     recountTask?.cancel()
     recountTask = Task { [weak self] in
-      let counts = await Task.detached(priority: .utility) {
-        Self.recordCounts(in: ModelContext(TranslationStore.container))
-      }.value
+      let counts = await TranslationData.shared.recordCounts()
       guard !Task.isCancelled, let self else { return }
-      self.badgeCounts = counts
+      self.badgeCounts = counts.mapValues { count in
+        BadgeCounts(
+          keys: count.keys, records: count.records, needsReview: count.needsReview,
+          languages: count.languages.reduce(into: [:]) { result, entry in
+            result[entry.key] = LanguageProgress(
+              code: entry.key, total: entry.value.records, translated: entry.value.translated,
+              needsReview: entry.value.needsReview)
+          })
+      }
       self.rebuildRows()
     }
-  }
-
-  /// One properties-limited fetch of the record table, grouped in memory —
-  /// never `project.records` (see `refresh`). On a context of its own, off the
-  /// main actor.
-  private nonisolated static func recordCounts(
-    in context: ModelContext
-  ) -> [PersistentIdentifier: BadgeCounts] {
-    var descriptor = FetchDescriptor<TranslationRecord>()
-    // Only the two fields the badges read, so the fetch builds no object graph
-    // and no relationship fault per record.
-    descriptor.propertiesToFetch = [\.key, \.project, \.language, \.state]
-    let rows = (try? context.fetch(descriptor)) ?? []
-    var keys: [PersistentIdentifier: Set<String>] = [:]
-    var counts: [PersistentIdentifier: Int] = [:]
-    var review: [PersistentIdentifier: Int] = [:]
-    // (total, translated, needs review) per project and language.
-    var perLanguage: [PersistentIdentifier: [String: (Int, Int, Int)]] = [:]
-    for record in rows {
-      guard let project = record.project else { continue }
-      let id = project.persistentModelID
-      counts[id, default: 0] += 1
-      keys[id, default: []].insert(record.key)
-      let pending = record.state == .needs_review
-      if pending { review[id, default: 0] += 1 }
-      var stat = perLanguage[id, default: [:]][record.language] ?? (0, 0, 0)
-      stat.0 += 1
-      if record.state != .empty { stat.1 += 1 }
-      if pending { stat.2 += 1 }
-      perLanguage[id, default: [:]][record.language] = stat
-    }
-    var out: [PersistentIdentifier: BadgeCounts] = [:]
-    for (id, count) in counts {
-      let languages = (perLanguage[id] ?? [:]).reduce(into: [String: LanguageProgress]()) { result, entry in
-        result[entry.key] = LanguageProgress(
-          code: entry.key, total: entry.value.0, translated: entry.value.1, needsReview: entry.value.2)
-      }
-      out[id] = BadgeCounts(
-        keys: keys[id]?.count ?? 0, records: count, needsReview: review[id] ?? 0, languages: languages)
-    }
-    return out
   }
 
   // MARK: - removal
@@ -352,8 +310,7 @@ final class SidebarViewModel {
   /// report through `alert`.
   ///
   /// No-op when the project is already gone (a stale row's menu action).
-  func removeProject(id: PersistentIdentifier, localization: LocalizationStore) {
-    let context = TranslationStore.shared.context
+  func removeProject(id: Int64, localization: LocalizationStore) {
     guard let project = project(id: id) else { return }
 
     if localization.catalogURL == project.catalogURL {
@@ -373,15 +330,7 @@ final class SidebarViewModel {
     }
 
     let rootURL = project.rootURL
-    context.delete(project)
-    do {
-      try context.save()
-    } catch {
-      alert = SidebarAlert(
-        title: "Remove failed",
-        message: "Couldn't remove the project: \(error.localizedDescription)")
-      return
-    }
+    TranslationData.shared.deleteProject(id: id)
     // A removed row cannot stay selected: this drops the detail pane back to
     // its prompt and takes the project-bound toolbar picker with it.
     if selection == .project(id) {
@@ -417,7 +366,7 @@ final class SidebarViewModel {
   /// a single existence check inside the walk, so the common case stays as
   /// cheap as it was.
   @discardableResult
-  func importDroppedURLs(_ urls: [URL]) async -> PersistentIdentifier? {
+  func importDroppedURLs(_ urls: [URL]) async -> Int64? {
     guard !urls.isEmpty else { return nil }
     let fm = FileManager.default
 
@@ -456,37 +405,26 @@ final class SidebarViewModel {
     let skipped = scans.flatMap(\.skipped)
     let catalogByRoot = await Self.discoverCatalogs(in: scans.flatMap(\.repos))
 
-    let context = TranslationStore.shared.context
+    await TranslationData.shared.start()
     var resolved: [Project] = []
     for item in dropped {
       let projects: [Project]
       switch item {
       case .directory(let dropRoot):
         projects = (reposByDrop[dropRoot] ?? [dropRoot]).map { root in
-          Reconcile.resolveDirectoryProject(
-            rootDir: root, catalogURL: catalogByRoot[root] ?? nil, in: context)
+          Reconcile.resolveDirectoryProject(rootDir: root, catalogURL: catalogByRoot[root] ?? nil)
         }
       case .catalog(let fileURL):
-        projects = [resolveCatalogFileDrop(fileURL, in: context)]
+        projects = [resolveCatalogFileDrop(fileURL)]
       }
       resolved += projects
-    }
-    do {
-      try context.save()
-    } catch {
-      alert = SidebarAlert(
-        title: "Import failed",
-        message: "Couldn't save the imported project: \(error.localizedDescription)")
-      return nil
     }
     // The other v57 apps list the folder too, and the vault notes which are
     // Xcode projects: the others leave the list.
     VaultProjects.shared.publish(resolved.compactMap(\.rootURL))
     refresh()
-    // Read after the save: a new project's ID before it is temporary, and the
-    // rows never match it.
-    let shown = resolved.filter { project in projects.contains { $0.id == project.persistentModelID } }
-    let firstID = shown.first?.persistentModelID
+    let shown = resolved.filter { project in projects.contains { $0.id == project.id } }
+    let firstID = shown.first?.id
     if !resolved.isEmpty, shown.isEmpty {
       alert = SidebarAlert(
         title: "No Xcode project",
@@ -521,41 +459,28 @@ final class SidebarViewModel {
   /// Adds the suggested directories the reader picked, each as one project
   /// exactly as dropped — no repo search, because they hold none.
   @discardableResult
-  func addSuggestedDirectories(_ urls: [URL]) async -> PersistentIdentifier? {
+  func addSuggestedDirectories(_ urls: [URL]) async -> Int64? {
     importSuggestions = []
     guard !urls.isEmpty else { return nil }
     let catalogByRoot = await Self.discoverCatalogs(in: urls)
-    let context = TranslationStore.shared.context
+    await TranslationData.shared.start()
     let added = urls.map { root in
-      Reconcile.resolveDirectoryProject(
-        rootDir: root, catalogURL: catalogByRoot[root] ?? nil, in: context)
-    }
-    do {
-      try context.save()
-    } catch {
-      alert = SidebarAlert(
-        title: "Import failed",
-        message: "Couldn't save the imported projects: \(error.localizedDescription)")
-      return nil
+      Reconcile.resolveDirectoryProject(rootDir: root, catalogURL: catalogByRoot[root] ?? nil)
     }
     VaultProjects.shared.publish(added.compactMap(\.rootURL))
     refresh()
-    return added.first { project in projects.contains { $0.id == project.persistentModelID } }?.persistentModelID
+    return added.first { project in projects.contains { $0.id == project.id } }?.id
   }
 
   /// Removes the project at `rootPath` because the vault dropped it (removed in Git), unless it holds
   /// translation records or is selected. Returns whether it's gone.
   func removeUnusedProject(rootPath: String) -> Bool {
-    let context = TranslationStore.shared.context
-    let all = (try? context.fetch(FetchDescriptor<Project>())) ?? []
+    let all = TranslationData.shared.projects
     guard let project = all.first(where: { $0.rootURL?.standardizedFileURL.path == rootPath }) else { return true }
-    guard (project.records ?? []).isEmpty, selection != .project(project.persistentModelID) else { return false }
-    context.delete(project)
-    do {
-      try context.save()
-    } catch {
-      return false
-    }
+    // Records are counted by the store in the background: a project whose count is not in yet
+    // is kept, like one that has records.
+    guard badgeCounts[project.id]?.records == 0, selection != .project(project.id) else { return false }
+    TranslationData.shared.deleteProject(id: project.id)
     refresh()
     return true
   }
@@ -577,15 +502,16 @@ final class SidebarViewModel {
   ///  2. otherwise defer to `resolveDirectoryProject(parent)` — its
   ///     rootURL/catalogURL matching returns an existing project for that
   ///     folder (a Localizable.xcstrings drop re-hits the canonical row).
-  private func resolveCatalogFileDrop(_ fileURL: URL, in context: ModelContext) -> Project {
+  private func resolveCatalogFileDrop(_ fileURL: URL) -> Project {
     let parent = fileURL.deletingLastPathComponent()
-    if let existing = Reconcile.existingProject(catalogURL: fileURL, in: context) {
+    if var existing = Reconcile.existingProject(catalogURL: fileURL) {
       existing.rootURL = parent.standardizedFileURL
       existing.iconURL = parent
         .appendingPathComponent("Assets.xcassets", isDirectory: true)
         .appendingPathComponent("AppIcon.appiconset", isDirectory: true)
+      TranslationData.shared.update(existing)
       return existing
     }
-    return Reconcile.resolveDirectoryProject(rootDir: parent, in: context)
+    return Reconcile.resolveDirectoryProject(rootDir: parent)
   }
 }

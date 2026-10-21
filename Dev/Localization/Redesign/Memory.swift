@@ -13,7 +13,6 @@
 //
 
 import Foundation
-import SwiftData
 
 extension Translation {
   /// Per-key knowledge, in two grades. GLOBAL, not per project (6.2, reader
@@ -25,7 +24,8 @@ extension Translation {
   /// not a lesson — see `Imported`.
   @Observable @MainActor class Memory {
     let project: Project
-    /// SwiftData, so resolution and writes are synchronous fetches.
+    /// In memory (`TranslationData`, loaded before a run), so resolution and writes are
+    /// synchronous lookups.
     let store: Store
     init(project: Project) {
       self.project = project
@@ -123,17 +123,7 @@ extension Translation {
         projectTag: project.id,
         contextVersions: Store.persistable(entry.versions),
         confirmedAt: gold ? .now : nil)
-      switch existing {
-      case nil:
-        // Nothing for the pair at all, so nothing for the triple either.
-        try store.upsert(row, over: nil, saving: saving)
-      case let existing? where !existing.sourceLanguage.isEmpty:
-        try store.upsert(row, over: existing, saving: saving)
-      default:
-        // A legacy row with no source language: the triple was named by the default, which is
-        // not this row's, so the store looks the triple up itself.
-        try store.upsert(row, saving: saving)
-      }
+      try store.upsert(row, saving: saving)
     }
 
     /// Drops the hints of one language — used when a language document changes
@@ -160,16 +150,8 @@ extension Translation {
     /// both grades exist for the pair, which is `Store.memory`'s own rule kept while
     /// its project filter goes.
     ///
-    /// The rows are read through the store's context rather than `Store.memory`, which
-    /// still narrows by project: dropping the filter there would touch `Store.swift`,
-    /// another card's file. `Store.memory`'s filter and doc are drift against 6.2 and
-    /// are reported on its card.
     private func entry(source: String, language: String) throws -> TranslationMemoryEntry? {
-      let descriptor = FetchDescriptor<TranslationMemoryEntry>(
-        predicate: #Predicate { $0.sourceText == source && $0.targetLanguage == language })
-      let rows = try store.context.fetch(descriptor)
-        .sorted { ($0.confirmedAt ?? .distantPast) > ($1.confirmedAt ?? .distantPast) }
-      return rows.first { $0.state == .reviewed } ?? rows.first
+      store.memoryEntry(source: source, language: language)
     }
 
     /// The source language an entry is written with, when the redesign has none to
@@ -232,7 +214,17 @@ extension Translation {
       // No import, or a remembered file that is gone: nothing to resolve, and no
       // error — see `ImportedDB.handle()`.
       guard let database = try ImportedDB.handle() else { return [:] }
-      let appRowCounts = ImportedTranslationDB.shared.stats?.apps ?? [:]
+      return try resolve(
+        rows: rows, language: language, database: database,
+        appRowCounts: ImportedTranslationDB.shared.stats?.apps ?? [:])
+    }
+
+    /// The lookup itself, over a handle the caller opened — callable off the main actor, so an
+    /// open resolves every language without holding the main thread on the file reads.
+    nonisolated static func resolve(
+      rows: [LocalizationKey], language: String, database: ImportedDB.Connection,
+      appRowCounts: [String: Int64]
+    ) throws -> [String: String] {
       var resolved: [String: String] = [:]
       // One pick per SOURCE TEXT: several keys may carry the same source body, and
       // the pick depends on the language, never on the key.

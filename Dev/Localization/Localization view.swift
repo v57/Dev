@@ -8,7 +8,6 @@
 import AppKit
 import ComponentKit
 import Foundation
-import SwiftData
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -77,6 +76,9 @@ struct LocalizationView: View {
   /// The generate confirmation (the one flow here that creates a file in the
   /// user's project without an Open panel).
   @State private var isConfirmingGenerate = false
+  /// The source language a generated catalog would use, read off the main actor when the
+  /// prompt opens (it walks the project for its Xcode project): nil until then.
+  @State private var generateLanguage: String?
   /// True while the generate flow is mid-flight (file write + scan start), so
   /// the button cannot be double-fired.
   @State private var isGenerating = false
@@ -120,6 +122,13 @@ struct LocalizationView: View {
       Button("Generate") { Task { await generate() } }
     } message: {
       Text(generateMessage)
+    }
+    .task(id: isConfirmingGenerate) {
+      guard isConfirmingGenerate else { return }
+      let root = generateScanRoot
+      generateLanguage = await Task.detached(priority: .userInitiated) {
+        root.flatMap { ScanXcodeProject.developmentRegion(under: $0) } ?? "en"
+      }.value
     }
     // Scan Strings report (toolbar "Scan Strings", and the tail of Generate).
     .sheet(isPresented: Binding(
@@ -169,8 +178,7 @@ struct LocalizationView: View {
   /// The source language the generated catalog would be authored in — the
   /// project's own development region when it declares one.
   private var generateSourceLanguage: String {
-    guard let root = generateScanRoot else { return "en" }
-    return ScanXcodeProject.developmentRegion(under: root) ?? "en"
+    generateLanguage ?? "the project's own"
   }
 
   private var generateTitle: String {

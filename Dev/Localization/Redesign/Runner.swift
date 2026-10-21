@@ -26,7 +26,6 @@
 import CodeProgress
 import Foundation
 import Observation
-import SwiftData
 
 /// A request COMPARES by the two bodies and the prefix it carries, so a probe can ask whether
 /// what a page shows is the very request the runner built rather than comparing strings by hand.
@@ -499,10 +498,6 @@ extension Translation {
     /// The execution in flight, so pause and cancel can interrupt a batch (and a
     /// cooldown sleep) instead of waiting one out.
     private var task: Task<Void, Never>?
-    /// The store's slot records, keyed by (key, language, category), fetched once
-    /// per run — `Store.records` is one fetch for the whole project, so a per-write
-    /// fetch is not an option and neither is a per-batch one.
-    private var slotRecords: [SlotKey: TranslationRecord]?
     /// The open catalog's rows by key: what every result is applied by (1.2).
     private var rowPositions: [String: Int] = [:]
     /// How often a batch may publish its mid-flight state to the run's own copy. A page re-derives
@@ -738,7 +733,6 @@ extension Translation {
         run.tally = Run.Tally()
         // The telemetry is the client's, and a run's numbers are its own (5.7).
         router.resetTelemetry()
-        slotRecords = nil
         indexRows(run)
       }
       run.finishedAt = nil
@@ -1807,7 +1801,7 @@ extension Translation {
       if let versions = write.versions { slot.versions = versions }
       run.project.data[write.row].targets[write.slot] = slot
       for form in forms(of: write) {
-        let record = try slotRecord(
+        var record = try slotRecord(
           key: write.key, language: write.language, category: form.category)
         let before = record.value
         if let value = form.value {
@@ -1925,24 +1919,15 @@ extension Translation {
       return value.isEmpty ? nil : value
     }
 
-    /// The store's record for one (key, language, category), inserting one the store
-    /// does not hold yet.
-    ///
-    /// The records are fetched ONCE per run, not per write: `Store.records` is a
-    /// single fetch for the whole project (measured: 0.7 s for 48 420 rows, against
-    /// 4.2 s for the same rows through the faulted relationship), so a per-write
-    /// fetch is not an option and a per-batch one is not either.
+    /// The store's record for one (key, language, category), or a new one when the store
+    /// does not hold it yet — a lookup, the project's records being in memory.
     private func slotRecord(key: String, language: String, category: String?) throws -> TranslationRecord {
-      if slotRecords == nil {
-        var index: [SlotKey: TranslationRecord] = [:]
-        for record in try store.records(project: project.id) {
-          index[SlotKey(key: record.key, language: record.language, category: record.category ?? "")] = record
-        }
-        slotRecords = index
+      let slot = SlotKey(key: key, language: language, category: category)
+      if let record = store.record(project: project.id, slot: slot) { return record }
+      guard let owner = try store.projectRow(id: project.id)?.id else {
+        throw Store.MissingProject(id: project.id)
       }
-      let identifier = SlotKey(key: key, language: language, category: category ?? "")
-      if let record = slotRecords?[identifier] { return record }
-      let record = TranslationRecord(
+      return TranslationRecord(
         key: key,
         sourceText: project.row(key)?.content.catalogValue ?? key,
         language: language,
@@ -1951,18 +1936,8 @@ extension Translation {
         contextVersions: ContextVersions(),
         createdAt: .now,
         updatedAt: .now,
-        project: try store.projectRow(id: project.id),
+        projectID: owner,
         category: category)
-      slotRecords?[identifier] = record
-      return record
-    }
-
-    /// A slot's identity in the store: the model's own triple, which is what makes a
-    /// plural slot's forms separate rows.
-    private struct SlotKey: Hashable {
-      let key: String
-      let language: String
-      let category: String
     }
 
     /// The learn write-back: the reply IS the line(s) to append to the language
@@ -2047,7 +2022,6 @@ extension Translation {
     /// not apply.
     private func checkpoint(_ run: Run) async throws {
       try store.saveCursor(Run.Cursor(batchIndex: run.batchIndex), for: run.stage, project: project.id)
-      try store.context.save()
     }
 
     // MARK: - resolution helpers

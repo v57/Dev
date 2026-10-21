@@ -212,8 +212,9 @@ extension Translation {
     /// project's own initializer.
     func open(catalog: StringCatalog, from url: URL) async throws {
       catalogURL = url
-      try project.loadData(catalog: catalog)
-      try applyImported()
+      try await project.loadData(catalog: catalog)
+      try await applyImported()
+      Task { await project.loadJournal() }
       cursors = Run.plan(for: .vertical).reduce(into: [:]) { found, stage in
         found[stage] = try? store.cursor(for: stage, project: project.id)
       }
@@ -255,9 +256,19 @@ extension Translation {
     /// Only a slot with nothing in it is resolved: a value the app already holds is
     /// either the human's own (`.verified`) or machine output this project produced,
     /// and a shipped translation does not get to replace either.
-    private func applyImported() throws {
-      for language in project.languages.keys.sorted() {
-        let resolved = try Imported.resolve(rows: project.data, language: language)
+    private func applyImported() async throws {
+      // The lookups are SQLite reads of the imported file, one per distinct source text per
+      // language — off the main actor, over the rows as they are now.
+      guard let database = try ImportedDB.handle() else { return }
+      let counts = ImportedTranslationDB.shared.stats?.apps ?? [:]
+      let rows = project.data
+      let languages = project.languages.keys.sorted()
+      let lookups = try await Task.detached(priority: .userInitiated) {
+        try languages.map {
+          ($0, try Imported.resolve(rows: rows, language: $0, database: database, appRowCounts: counts))
+        }
+      }.value
+      for (language, resolved) in lookups {
         guard !resolved.isEmpty else { continue }
         for index in project.data.indices {
           guard let value = resolved[project.data[index].key],
@@ -298,6 +309,9 @@ extension Translation {
         error = Self.notConfigured
         throw BackendError.notConfigured(Self.notConfigured)
       }
+      // A run resolves slots from translation memory before it asks a model (6.2): the
+      // memory is loaded off the main actor the first time.
+      await store.data.loadMemory()
       do {
         try await runner.run(stage, mode: mode)
       } catch {
@@ -335,6 +349,7 @@ extension Translation {
       }
       switch run.state {
       case .paused, .idle:
+        await store.data.loadMemory()
         try await runner.resume(run)
         // The batches a resume landed are the run's results like any other: the app's
         // catalog is what a Save would write, so it learns about them now (5.8).
@@ -570,7 +585,7 @@ extension Translation {
         }
       }
       do {
-        for record in records {
+        for var record in records {
           record.note = text.isEmpty ? nil : text
           record.noteScope = text.isEmpty ? nil : (scope == .projectRule ? Self.ruleScope : Self.memoScope)
           // What the fold did, so the next edit re-folds and a clear retracts. The old
@@ -600,7 +615,7 @@ extension Translation {
       // surfaced rather than swallowed — a width the reviewer set and the pane shows as stored
       // is a promise the next run relies on.
       do {
-        for record in records(of: key).values.flatMap({ $0 }) {
+        for var record in records(of: key).values.flatMap({ $0 }) {
           record.maxWidth = width
           try store.upsert(record, saving: false)
         }
@@ -671,8 +686,8 @@ extension Translation {
     /// This project's records for one key, by language — `Store.records` is the one fetch a
     /// project's rows are read through, and it is filtered here rather than fetched per slot.
     private func records(of key: String) -> [String: [TranslationRecord]] {
-      let all = (try? store.records(project: project.id)) ?? []
-      return Dictionary(grouping: all.filter { $0.key == key }, by: \.language)
+      let all = (try? store.records(project: project.id).records(key: key)) ?? []
+      return Dictionary(grouping: all, by: \.language)
     }
     /// The status a slot returns to when its key is translatable again: the store's own record
     /// still says who wrote the value, because `.ignore` writes no state (2.1). The rule is the
@@ -825,7 +840,7 @@ extension Translation {
         return
       }
       do {
-        try project.saveData()
+        try await project.saveData()
       } catch {
         self.error = error.localizedDescription
         return

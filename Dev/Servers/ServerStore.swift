@@ -4,7 +4,6 @@
 //
 
 import Foundation
-import SwiftData
 
 // MARK: - Row value
 
@@ -74,19 +73,18 @@ final class ServerStore {
   /// losing an edit.
   var alert: String?
 
-  private var context: ModelContext { TranslationStore.shared.context }
+  private var data: TranslationData { .shared }
 
   // MARK: - reading
 
   func row(id: String) -> ServerRow? { servers.first { $0.id == id } }
 
   func connection(id: String) -> ServerConnection? {
-    ((try? context.fetch(FetchDescriptor<ServerConnection>())) ?? [])
-      .first { $0.id == id }
+    data.server(id: id)
   }
 
   func refresh() {
-    let fetched = (try? context.fetch(FetchDescriptor<ServerConnection>())) ?? []
+    let fetched = data.servers
     alert = nil
     servers = fetched
       .sorted {
@@ -113,11 +111,10 @@ final class ServerStore {
   @discardableResult
   func add(name: String, endpoint: String, key: String) -> String? {
     let server = ServerConnection(name: name, endpoint: endpoint)
-    context.insert(server)
+    data.update(server)
     if !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
       ServerKeychain.save(key, account: server.keyAccount)
     }
-    guard save() else { return nil }
     refresh()
     Task { await check(id: server.id) }
     return server.id
@@ -127,16 +124,16 @@ final class ServerStore {
   /// form only sends it when the field was edited); an empty string clears it,
   /// which puts the server back on the shared key.
   func update(id: String, name: String, endpoint: String, key: String?) {
-    guard let server = connection(id: id) else { return }
+    guard var server = connection(id: id) else { return }
     server.name = name
     server.endpoint = endpoint
+    data.update(server)
     if let key {
       ServerKeychain.save(key, account: server.keyAccount)
       if key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
         ServerKeychain.delete(account: server.keyAccount)
       }
     }
-    guard save() else { return }
     refresh()
     Task { await check(id: id) }
   }
@@ -147,21 +144,10 @@ final class ServerStore {
   func remove(id: String) {
     guard let server = connection(id: id) else { return }
     ServerKeychain.delete(account: server.keyAccount)
-    context.delete(server)
-    guard save() else { return }
+    data.deleteServer(id: id)
     statuses[id] = nil
     checkedAt[id] = nil
     refresh()
-  }
-
-  private func save() -> Bool {
-    do {
-      try context.save()
-      return true
-    } catch {
-      alert = "Couldn't save the server list: \(error.localizedDescription)"
-      return false
-    }
   }
 
   // MARK: - checks

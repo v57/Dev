@@ -6,7 +6,6 @@
 //
 
 import Foundation
-import SwiftData
 
 /// Translation memory: one remembered translation per (sourceText,
 /// sourceLanguage, targetLanguage), shared across projects. Gold is gold —
@@ -14,7 +13,7 @@ import SwiftData
 /// machine-only entries resolve as `needs_review` hints. Uniqueness over
 /// the (sourceText, sourceLanguage, targetLanguage) triple is enforced at
 /// the store level by the composite unique constraint below.
-@Model final class TranslationMemoryEntry {
+nonisolated struct TranslationMemoryEntry: Hashable, Sendable {
   /// Source text in the source language.
   var sourceText: String
   /// Source language, BCP-47.
@@ -54,6 +53,4 @@ import SwiftData
     self.confirmedAt = confirmedAt
     self.confidence = confidence
   }
-
-  #Unique<TranslationMemoryEntry>([\.sourceText, \.sourceLanguage, \.targetLanguage])
 }

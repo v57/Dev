@@ -5,7 +5,6 @@
 
 import Foundation
 import Security
-import SwiftData
 
 // MARK: - ServerConnection
 
@@ -19,16 +18,15 @@ import SwiftData
 /// code. So each row here is an HTTP endpoint plus a key, and the app speaks
 /// the API rather than any database.
 ///
-/// The KEY is never stored in SwiftData: the row keeps only the keychain
+/// The KEY is never stored in the database: the row keeps only the keychain
 /// ACCOUNT (`keyAccount`) to look it up under. A server with no own key falls
 /// back to a `LOCALIZE_KEY` in the process environment, which is what makes a
 /// local development server work with no setup at all.
-@Model
-final class ServerConnection {
+nonisolated struct ServerConnection: Hashable, Sendable, Identifiable {
   /// Stable identity: the sidebar selection, the status map and the keychain
   /// account are all keyed by it, so renaming or re-pointing a server never
   /// orphans its key or its status.
-  @Attribute(.unique) var id: String
+  var id: String
 
   /// What the sidebar shows. Free text; duplicates are allowed.
   var name: String
@@ -82,7 +80,7 @@ final class ServerConnection {
     return .missing
   }
 
-  enum KeySource: Hashable {
+  enum KeySource: Hashable, Sendable {
     /// The key typed into this server's form (its own keychain item).
     case server
     /// The shared `LOCALIZE_KEY` from the process environment.

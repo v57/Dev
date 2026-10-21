@@ -6,7 +6,6 @@
 //
 
 import Foundation
-import SwiftData
 
 // MARK: - Reconcile
 
@@ -44,22 +43,17 @@ import SwiftData
 ///
 /// Keep the file the artifact; the DB is the working/provenance store.
 ///
-/// `nonisolated`: the mirror is pure store work on models the caller hands in,
-/// and the OPEN/RELOAD path runs it on a background `ModelContext` — a large
-/// catalog's upsert is seconds of inserts (see `mirrorOffMainActor`). Marking
-/// the enum instead of each member keeps that path and the main-actor callers
-/// (edits, runs, the sidebar's import) on the same functions.
+/// `nonisolated`: the load's passes (the difference and shape scans, the mirror) are pure
+/// functions over a snapshot of the project's records, so the open/reload path runs them off
+/// the main thread and hands the result to `TranslationData` in one step. The per-key paths
+/// (an edit, a review, a note) are `@MainActor` and write through `TranslationData` directly.
 nonisolated enum Reconcile {
   // MARK: - state mapping
 
-  /// SwiftData on this SDK decomposes ContextVersions into nullable columns
-  /// and CRASHES re-faulting any row whose stored versions are all nil
-  /// ("Could not cast Optional<Any> to ContextVersions"). ContextDocs start
-  /// at version 1, so a stored 0 is a safe sentinel for "no doc existed at
-  /// the time": staleness math treats it exactly like nil ((v ?? -1) < doc
-  /// version, and 0 < 1 is always true once a doc exists). Every
-  /// ContextVersions Reconcile persists goes through this — nil members are
-  /// preserved, only the all-nil corner is lifted.
+  /// A stamp of three nils is stored as the sentinel `global: 0` ("no doc existed at the
+  /// time"): staleness math treats it exactly like nil ((v ?? -1) < doc version, and 0 < 1 is
+  /// always true once a doc exists). The rule dates from the SwiftData store, which crashed
+  /// re-faulting an all-nil row; it is kept so the stamps the app reads stay the ones it wrote.
   static func persistableVersions(_ versions: ContextVersions) -> ContextVersions {
     if versions.global == nil, versions.project == nil, versions.language == nil {
       return ContextVersions(global: 0)
@@ -138,8 +132,8 @@ nonisolated enum Reconcile {
   /// True when the app has worked on this record: a provider produced its value or an edit
   /// was journaled for it (a human's typing, a machine fill, a TM copy). The mirror's
   /// ownership test, in one place.
-  private static func isOwned(_ record: TranslationRecord) -> Bool {
-    record.provider != nil || record.edits?.isEmpty == false
+  static func isOwned(_ record: TranslationRecord) -> Bool {
+    record.provider != nil || record.hasEdits
   }
 
   /// True when the RECORD holds a value a PERSON vouched for.
@@ -169,79 +163,21 @@ nonisolated enum Reconcile {
 
   // MARK: - project
 
-  /// The project's records, materialized in ONE query.
-  ///
-  /// Never bulk-iterate `project.records`: SwiftData faults a to-many one
-  /// object at a time (measured 4.2 s to iterate 48,420 records, versus 0.7 s
-  /// for the same rows through this fetch — same lesson as the sidebar's
-  /// badges). Scoped by the project's identity, so a multi-project store pays
-  /// only for this project. Falls back to the relationship if the predicate is
-  /// ever unsupported, and returns nothing for a project that is not in the
-  /// store yet (nothing to mirror against).
-  static func records(of project: Project, in context: ModelContext) -> [TranslationRecord] {
-    let id = project.persistentModelID
-    let descriptor = FetchDescriptor<TranslationRecord>(
-      predicate: #Predicate { $0.project?.persistentModelID == id })
-    if let fetched = try? context.fetch(descriptor) { return fetched }
-    return project.records ?? []
-  }
-
-  /// ONE KEY's records of a project, by a scoped fetch.
-  ///
-  /// What every per-key path reads — a cell edit, a row review, a note, a width, a row
-  /// save — instead of walking `project.records` for the handful of rows it touches: the
-  /// relationship is the whole project (48,420 rows on a real catalog), and walking it per
-  /// edit was most of what an edit cost. A fetch also sees what other writers linked
-  /// meanwhile (a run's write-back), which an index kept on the side would not. Falls back
-  /// to the relationship for a project with no context or a predicate the store refuses.
-  static func records(ofKey key: String, in project: Project) -> [TranslationRecord] {
-    guard let context = project.modelContext else {
-      return (project.records ?? []).filter { $0.key == key }
-    }
-    let id = project.persistentModelID
-    let descriptor = FetchDescriptor<TranslationRecord>(
-      predicate: #Predicate { $0.key == key && $0.project?.persistentModelID == id })
-    if let fetched = try? context.fetch(descriptor) { return fetched }
-    return (project.records ?? []).filter { $0.key == key }
-  }
-
   /// The project whose catalog lives at `catalogURL`, or nil.
-  static func existingProject(
-    catalogURL: URL,
-    in context: ModelContext
-  ) -> Project? {
-    let descriptor = FetchDescriptor<Project>()
-    guard let projects = try? context.fetch(descriptor) else { return nil }
-    return projects.first { $0.catalogURL == catalogURL }
-  }
-
-  /// The project with this identity, or nil.
-  ///
-  /// A FETCH, not `context.model(for:)`: a fetch returns the store's current
-  /// values for the registered instance, which is what a caller needs after
-  /// another context wrote to the same rows (the mirror runs in its own
-  /// background context — verified: a registered instance keeps serving its
-  /// stale relationship snapshot until a fetch refreshes it).
-  static func project(id: PersistentIdentifier, in context: ModelContext) -> Project? {
-    let descriptor = FetchDescriptor<Project>()
-    return (try? context.fetch(descriptor))?.first { $0.persistentModelID == id }
+  @MainActor static func existingProject(catalogURL: URL) -> Project? {
+    TranslationData.shared.projects.first { $0.catalogURL == catalogURL }
   }
 
   /// Finds the project for a catalog URL, creating it on first sight. The
   /// name is the catalog's home directory (the merged catalog lives at the
   /// repo root, so this is the repo name) — stable per URL.
-  static func ensureProject(
-    catalogURL: URL,
-    in context: ModelContext
-  ) -> Project {
-    if let existing = existingProject(catalogURL: catalogURL, in: context) {
+  @MainActor static func ensureProject(catalogURL: URL) -> Project {
+    if let existing = existingProject(catalogURL: catalogURL) {
       return existing
     }
     let home = catalogURL.deletingLastPathComponent().lastPathComponent
     let name = home.isEmpty ? catalogURL.lastPathComponent : home
-    let project = Project(name: name, catalogURL: catalogURL)
-    context.insert(project)
-    return project
+    return TranslationData.shared.insertProject(name: name, catalogURL: catalogURL)
   }
 
   /// Resolves the project a DROPPED DIRECTORY imports as: name = the
@@ -256,13 +192,10 @@ nonisolated enum Reconcile {
   /// matched by rootURL first (an earlier directory drop), then by the
   /// resolved catalog URL (a row first seen via its .xcstrings file is
   /// adopted in place — records, contextDoc and name survive — and upgraded
-  /// to a directory-root project). The catalog-file path (`ensureProject`)
-  /// is untouched: LocalizationView reconcile still keys rows by catalog
-  /// URL alone.
-  static func resolveDirectoryProject(
+  /// to a directory-root project).
+  @MainActor static func resolveDirectoryProject(
     rootDir: URL,
-    catalogURL discoveredCatalog: URL? = nil,
-    in context: ModelContext
+    catalogURL discoveredCatalog: URL? = nil
   ) -> Project {
     let root = rootDir.standardizedFileURL
     let catalogURL = discoveredCatalog?.standardizedFileURL
@@ -270,22 +203,19 @@ nonisolated enum Reconcile {
     let iconURL = root
       .appendingPathComponent("Assets.xcassets", isDirectory: true)
       .appendingPathComponent("AppIcon.appiconset", isDirectory: true)
-    let projects = (try? context.fetch(FetchDescriptor<Project>())) ?? []
+    let data = TranslationData.shared
+    let projects = data.projects
     if let byRoot = projects.first(where: { $0.rootURL == root }) {
       return byRoot
     }
-    if let byCatalog = projects.first(where: { $0.catalogURL == catalogURL }) {
+    if var byCatalog = projects.first(where: { $0.catalogURL == catalogURL }) {
       byCatalog.rootURL = root
       byCatalog.iconURL = iconURL
+      data.update(byCatalog)
       return byCatalog
     }
-    let project = Project(
-      name: root.lastPathComponent,
-      catalogURL: catalogURL,
-      rootURL: root,
-      iconURL: iconURL)
-    context.insert(project)
-    return project
+    return data.insertProject(
+      name: root.lastPathComponent, catalogURL: catalogURL, rootURL: root, iconURL: iconURL)
   }
 
   // MARK: - load (file -> DB)
@@ -413,110 +343,6 @@ nonisolated enum Reconcile {
     case appWins
   }
 
-  /// What a background mirror wrote, in Sendable form: the model object itself
-  /// never crosses an actor boundary, only this identity plus the counts.
-  struct MirrorResult: Sendable {
-    let projectID: PersistentIdentifier
-    let stats: UpsertStats
-    /// Slots the pass had taken from the FILE and then gave back, because the app wrote
-    /// them while it ran — by the guard before the commit (`revertFileWrites`) or by the
-    /// repair after it. For the log.
-    let reverted: Int
-    /// Rows the pass's own commit dropped out of the project's membership and the pass put
-    /// back (`orphanedRows`) — for the log.
-    let repaired: Int
-  }
-
-  /// One write a pass made FROM the FILE, with what the slot held before it — enough to put
-  /// the slot back when it turns out the app wrote it while the pass was running.
-  ///
-  /// The pass is a SNAPSHOT: it decides who owns a slot from the records it fetched when it
-  /// started. The app keeps working beside it now (the pane is open and a run can be
-  /// started while the mirror catches up), so a slot the app saves mid-pass is invisible to
-  /// that snapshot — the pass would adopt the file over a value someone typed or a run just
-  /// produced, and for a record the pass CREATES it would leave two rows for one slot
-  /// (SwiftData has no unique constraint to stop it). `revertFileWrites` is what honours
-  /// the newer writer.
-  enum FileWrite {
-    /// A record this pass inserted — the whole row is the pass's, so giving it back is a
-    /// delete.
-    case created(TranslationRecord)
-    /// A record this pass re-mirrored or adopted from the file (unowned mirror, or the
-    /// `fileWins` answer over an owned one) — with the edit row `fileWins` appended, if it
-    /// did.
-    case adopted(TranslationRecord, before: PreSlot, edit: TranslationEdit?)
-
-    /// The record this write was about.
-    var record: TranslationRecord {
-      switch self {
-      case .created(let record): return record
-      case .adopted(let record, _, _): return record
-      }
-    }
-  }
-
-  /// The whole row a record held before a pass touched it, field by field — the fields a
-  /// slot upsert can write, and nothing else.
-  struct PreSlot {
-    let value: String?
-    let state: TranslationState
-    let provider: Provider?
-    let confidence: Double?
-    let autoReviewed: Bool
-    let reviewedAt: Date?
-    let contextVersions: ContextVersions
-    let sourceText: String
-    let updatedAt: Date
-
-    init(_ record: TranslationRecord) {
-      value = record.value
-      state = record.state
-      provider = record.provider
-      confidence = record.confidence
-      autoReviewed = record.autoReviewed
-      reviewedAt = record.reviewedAt
-      contextVersions = record.contextVersions
-      sourceText = record.sourceText
-      updatedAt = record.updatedAt
-    }
-
-    func restore(_ record: TranslationRecord) {
-      record.value = value
-      record.state = state
-      record.provider = provider
-      record.confidence = confidence
-      record.autoReviewed = autoReviewed
-      record.reviewedAt = reviewedAt
-      record.contextVersions = contextVersions
-      record.sourceText = sourceText
-      record.updatedAt = updatedAt
-    }
-  }
-
-  /// The log a pass keeps of its own file-driven writes, for `revertFileWrites`.
-  ///
-  /// A box rather than a returned array, because the pass that needs it is deep inside the
-  /// shared upsert and the two callers that do NOT need it (the per-key mutations, which
-  /// write and save in place on the main actor where nothing can interleave) must not pay
-  /// for it: they pass nil.
-  ///
-  /// `FileWrite`, `PreSlot` and this box are the pass's own bookkeeping and nothing else
-  /// reads them; they are internal only because the shared upsert takes them as parameters.
-  final class FileWriteLog {
-    private(set) var writes: [FileWrite] = []
-
-    /// The records this pass INSERTED — the repair after the commit matches orphans against
-    /// them (see `mirrorOffMainActor`).
-    var created: [TranslationRecord] {
-      writes.compactMap {
-        if case .created(let record) = $0 { return record }
-        return nil
-      }
-    }
-
-    func record(_ write: FileWrite) { writes.append(write) }
-  }
-
   /// The difference scan a load runs BEFORE it mirrors anything: every slot the file and a
   /// DB-owned record both fill with different values (`SlotDifference`), found WITHOUT
   /// writing a row.
@@ -529,16 +355,10 @@ nonisolated enum Reconcile {
   /// A project the store does not know yet has nothing to disagree with (a first open can
   /// only seed), and neither does one whose records are all unowned file mirrors.
   static func detectDifferences(
-    _ catalog: StringCatalog,
-    catalogURL: URL,
-    in container: ModelContainer
+    _ catalog: StringCatalog, existing: ProjectRecords
   ) async -> DifferenceReport {
     await Task.detached(priority: .userInitiated) {
-      let context = ModelContext(container)
-      guard let project = existingProject(catalogURL: catalogURL, in: context) else {
-        return DifferenceReport(count: 0, sample: [])
-      }
-      return differences(catalog, existing: records(of: project, in: context))
+      differences(catalog, existing: existing)
     }.value
   }
 
@@ -556,14 +376,8 @@ nonisolated enum Reconcile {
   /// every open) and a slot only the file fills (an unowned mirror, which the file already wins).
   static func differences(
     _ catalog: StringCatalog,
-    existing: [TranslationRecord]
+    existing bySlot: ProjectRecords
   ) -> DifferenceReport {
-    var bySlot: [SlotKey: TranslationRecord] = [:]
-    bySlot.reserveCapacity(existing.count)
-    for record in existing {
-      bySlot[SlotKey(
-        key: record.key, language: record.language, category: record.category ?? "")] = record
-    }
 
     var count = 0
     var sample: [SlotDifference] = []
@@ -623,14 +437,10 @@ nonisolated enum Reconcile {
   /// person), and a side with no value at all is not a shape (an empty form skeleton is the plural
   /// machinery's, not a translation).
   static func detectShapeConflicts(
-    _ catalog: StringCatalog,
-    catalogURL: URL,
-    in container: ModelContainer
+    _ catalog: StringCatalog, existing: ProjectRecords
   ) async -> [ShapeConflict] {
     await Task.detached(priority: .userInitiated) {
-      let context = ModelContext(container)
-      guard let project = existingProject(catalogURL: catalogURL, in: context) else { return [] }
-      return shapeConflicts(catalog, existing: records(of: project, in: context))
+      shapeConflicts(catalog, existing: existing)
     }.value
   }
 
@@ -642,14 +452,8 @@ nonisolated enum Reconcile {
   /// plural one, which is the app's own plural workflow's doing).
   static func shapeConflicts(
     _ catalog: StringCatalog,
-    existing: [TranslationRecord]
+    existing bySlot: ProjectRecords
   ) -> [ShapeConflict] {
-    var bySlot: [SlotKey: TranslationRecord] = [:]
-    bySlot.reserveCapacity(existing.count)
-    for record in existing {
-      bySlot[SlotKey(
-        key: record.key, language: record.language, category: record.category ?? "")] = record
-    }
 
     func hasValue(_ record: TranslationRecord?) -> Bool {
       record?.value?.isBlankOrEmpty == false
@@ -721,482 +525,156 @@ nonisolated enum Reconcile {
     return states.first { isReviewed(fileState: $0) } ?? states.first
   }
 
-  /// Mirrors `catalog` into the store on a BACKGROUND `ModelContext` — the open/reload
-  /// path for a catalog whose upsert is seconds of work (48,420 slots measured at ~6 s in
-  /// Debug, and the inserts cannot be moved off the main actor without moving the context
-  /// that owns them).
-  ///
-  /// The caller is responsible for what happens after: re-fetch the project in
-  /// the main context (`project(id:in:)`) before reading its records, because
-  /// the main context's copies are stale until then. Nothing here touches the
-  /// open catalog's in-memory state, so a failed write leaves the document
-  /// openable — the caller decides how to report it.
-  ///
-  /// This pass does NOT block the pane: the load adopts the parsed file first and submits
-  /// this behind it (`StoreWork.shared`), so the table is up while the store catches up. A
-  /// consequence worth naming: the app can now write a slot while this pass runs, and the
-  /// pass's own snapshot cannot see that. `revertFileWrites` is what keeps the newer writer
-  /// — and the only reason a pass needs to know when it started.
-  static func mirrorOffMainActor(
-    _ catalog: StringCatalog,
-    catalogURL: URL,
-    in container: ModelContainer,
-    policy: DifferencePolicy = .appWins,
-    shapeConflicts: [ShapeConflict] = []
-  ) async -> Result<MirrorResult, Error> {
-    await Task.detached(priority: .userInitiated) {
-      // The watermark for "the app wrote this slot while the pass was running".
-      let passStartedAt = Date()
-      let context = ModelContext(container)
-      let project = ensureProject(catalogURL: catalogURL, in: context)
-      // This context is COLD, so the records come from one scoped fetch —
-      // iterating the relationship here would fault every row one at a time
-      // (measured 4.2 s for 48,420 records, versus ~0.6 s for the fetch).
-      let existing = records(of: project, in: context)
-      let log = FileWriteLog()
-      var stats = upsertFromCatalog(
-        catalog, project: project, existing: existing, context: context,
-        policy: policy, fileWrites: log, liveWriters: true)
-      // THE SHAPE PASS' OTHER HALF. The file side of a shape conflict was already converted by the
-      // load (`LocalizationStore.land`), so what is left here is the records: the LOSING shape's
-      // rows go. Only the ones that carry a value and have nobody behind them — an empty form
-      // skeleton is the plural machinery's own (deleting it would break the key's plural workflow),
-      // and a reviewed record is a person's, which nothing in a load may overrule.
-      for conflict in shapeConflicts {
-        for record in existing
-        where record.key == conflict.key && record.language == conflict.language {
-          let isForm = record.category != nil
-          let losingShape = conflict.reviewedShape == .flat ? isForm : !isForm
-          guard losingShape, record.value?.isBlankOrEmpty == false, !isReviewed(record)
-          else { continue }
-          context.delete(record)
-          stats.dropped += 1
-        }
-      }
-      // THE APP'S OWN WRITES, read here — as late as the pass can read them and still act: they
-      // are the slots this pass gives back (`revertFileWrites`). What a read at this point
-      // cannot catch (a write committed between it and the commit) is the repair below's job.
-      let appWrites = appWrittenRows(
-        project: project, since: passStartedAt, excluding: log, in: context)
-      var reverted = revertFileWrites(
-        log.writes, writtenByApp: Set(appWrites.map(slotKey)), context: context, stats: &stats)
-      do {
-        try context.save()
-      } catch {
-        return .failure(error)
-      }
-      // THE COMMIT'S OWN CASUALTY, repaired AFTER it — because only the store can show it.
-      //
-      // Writing a to-many from this context's view of the project writes the membership as this
-      // context holds it, and every member it does not list has its inverse nullified: a row the
-      // app links while the pass runs comes out of the commit with `project = nil` — ORPHANED,
-      // invisible to every project-scoped reader in the app (found by the probe: an app edit
-      // landing beside the pass's own row for its slot). The guard above cannot see that last
-      // writer: it reads the app's writes a moment before the commit, and a write committed in
-      // between is invisible until the commit is on disk. So the orphan is read back from the
-      // store — the only place it is visible at all — and put where it belongs.
-      //
-      // Serial by construction, which is what makes this safe to do blind: only the mirror ever
-      // writes a membership (the other bulk passes go through the same queue), so a project-less
-      // row stamped inside this pass's window is this pass's doing, whatever slot it is.
-      //
-      // Paid only when the pass had something to link (no membership write, no casualty).
-      var repaired = 0
-      if !log.created.isEmpty {
-        var createdBySlot: [SlotKey: TranslationRecord] = [:]
-        for record in log.created { createdBySlot[slotKey(record)] = record }
-        for orphan in orphanedRows(since: passStartedAt, in: container) {
-          // The pass made its OWN row for that slot while the app was writing one — the guard
-          // above missed it in the same window. The app's write is the newer one (that is the
-          // guard's rule), so the pass's row goes.
-          if let rival = createdBySlot[slotKey(orphan)] {
-            context.delete(rival)
-            stats.created -= 1
-            // Counted as given back: that is what it is, only later than the guard could.
-            reverted.insert(ObjectIdentifier(rival))
-          }
-          guard
-            let row = context.model(for: orphan.persistentModelID) as? TranslationRecord,
-            row.project == nil
-          else { continue }
-          row.project = project
-          repaired += 1
-        }
-        if repaired > 0, (try? context.save()) == nil {
-          NSLog("[Reconcile] \(repaired) app row(s) could not be re-linked to their project")
-        }
-      }
-      return .success(MirrorResult(
-        projectID: project.persistentModelID, stats: stats, reverted: reverted.count,
-        repaired: repaired))
-    }.value
-  }
+  // MARK: - the mirror (file -> records), off the main thread
 
-  /// The slot a record occupies, in the form the passes compare by.
-  private static func slotKey(_ record: TranslationRecord) -> SlotKey {
-    SlotKey(key: record.key, language: record.language, category: record.category ?? "")
-  }
-
-  /// The rows the APP ITSELF wrote since `since`, read on the pass's own context (so the two
-  /// sets can be compared by identity) and with the pass's own writes removed — those are the
-  /// ones whose `updatedAt` this pass just moved.
-  ///
-  /// Project-scoped and time-bounded: a row the app wrote has both. An already-orphaned row is
-  /// NOT found here, which is why the repair below reads the store again with a time-only query.
-  private static func appWrittenRows(
-    project: Project,
-    since: Date,
-    excluding log: FileWriteLog,
-    in context: ModelContext
-  ) -> [TranslationRecord] {
-    let id = project.persistentModelID
-    let descriptor = FetchDescriptor<TranslationRecord>(
-      predicate: #Predicate {
-        $0.project?.persistentModelID == id && $0.updatedAt > since
-      })
-    guard let moved = try? context.fetch(descriptor) else { return [] }
-    let ours = Set(log.writes.map { ObjectIdentifier($0.record) })
-    return moved.filter { !ours.contains(ObjectIdentifier($0)) }
-  }
-
-  /// Every row saved since `since` that belongs to NO project — what a stale membership write
-  /// leaves behind. One query, no project scope (an orphan has no project to be scoped by).
-  private static func orphanedRows(
-    since: Date,
-    in container: ModelContainer
-  ) -> [TranslationRecord] {
-    let context = ModelContext(container)
-    let descriptor = FetchDescriptor<TranslationRecord>(
-      predicate: #Predicate { $0.updatedAt > since })
-    return ((try? context.fetch(descriptor)) ?? []).filter { $0.project == nil }
-  }
-
-  /// Gives back every write the pass made FROM THE FILE for a slot the app wrote while it
-  /// ran: the record the pass inserted is deleted, a re-mirrored or adopted one is restored
-  /// to the row it held before (and the edit row a `fileWins` adoption appended goes with
-  /// it).
-  ///
-  /// Without this the two writers race and the OLDER one wins, because the pass decides
-  /// ownership from a snapshot: an Xcode-side value would land over a translation a run had
-  /// just produced, or over the word someone had just typed, and a created record would sit
-  /// beside the app's own row for the same slot — two rows, one slot, SwiftData holding no
-  /// constraint that could have refused it.
-  ///
-  /// Returns WHICH records were given back (by identity: the caller must not put a deleted one
-  /// back into the project's member list). The counts in `stats` follow, so the log tells the
-  /// truth about what the pass actually left behind.
-  private static func revertFileWrites(
-    _ writes: [FileWrite],
-    writtenByApp: Set<SlotKey>,
-    context: ModelContext,
-    stats: inout UpsertStats
-  ) -> Set<ObjectIdentifier> {
-    guard !writtenByApp.isEmpty else { return [] }
-    var reverted: Set<ObjectIdentifier> = []
-    for write in writes {
-      let record: TranslationRecord
-      switch write {
-      case .created(let created):
-        record = created
-        let slot = SlotKey(
-          key: record.key, language: record.language, category: record.category ?? "")
-        guard writtenByApp.contains(slot) else { continue }
-        context.delete(record)
-        stats.created -= 1
-      case .adopted(let adopted, let before, let edit):
-        record = adopted
-        let slot = SlotKey(
-          key: record.key, language: record.language, category: record.category ?? "")
-        guard writtenByApp.contains(slot) else { continue }
-        before.restore(record)
-        if let edit {
-          record.edits?.removeAll { $0 === edit }
-          context.delete(edit)
-        }
-        stats.refreshed -= 1
-      }
-      reverted.insert(ObjectIdentifier(record))
-    }
-    return reverted
-  }
-
-  // MARK: - slot identity
-
-  /// One (key, language, form) slot, as a Set member — the per-form
-  /// existence check.
-  private struct SlotKey: Hashable {
-    let key: String
-    let language: String
-    let category: String
-  }
-
-  // MARK: - adding a language (off the main actor)
-
-  /// What one "add a language" pass produced. Only counts cross the actor
-  /// boundary — the document half of the add is the caller's own catalog,
-  /// mutated in place (see `LocalizationStore.addLanguage`), never a snapshot
-  /// from before the pass: a translation run or an edit can land while the
-  /// seeding runs, and adopting a stale document would drop it.
-  struct LanguageAddOutcome: Sendable {
-    /// Records created — one per translatable key, one per CLDR form for a
-    /// plural-source key.
-    let inserted: Int
-    /// Keys in scope when the pass ran (0 = an empty catalog, nothing to
-    /// seed).
-    let keyCount: Int
-  }
-
-  /// Seeds the records a freshly added `language` needs, OFF the main actor (a
-  /// big catalog's seeding is thousands of inserts).
-  ///
-  /// Pairs with `StringCatalog.addLanguage`, which gives the document the
-  /// language's nodes only. Those nodes are EMPTY, and an empty localization
-  /// node is a file error — `normalizeForWrite` prunes them on the way to disk
-  /// — so the added language is recognizable again after a reopen by its
-  /// RECORDS, never by the file: the browser reads the record set alongside
-  /// the catalog's own codes (see `LocalizationStore.browserLanguages`).
-  ///
-  /// Slot seeding follows the mirror's rule for a pair the file carries no unit
-  /// for (an `.empty` record the pipeline fills), with one deliberate
-  /// difference: a key whose SOURCE is plural-varied gets its per-form records
-  /// straight away, because a flat record on a plural slot is something the
-  /// merge refuses to write and nothing ever cleans up. The caller varies the
-  /// document's forms for that key in the same breath.
-  ///
-  /// Records the project already holds for these languages are left exactly as
-  /// they are (value, provenance, state), so re-adding a language costs nothing
-  /// and can never rewrite a translation.
-  static func addLanguage(
-    _ language: String,
-    catalog: StringCatalog,
-    projectID: PersistentIdentifier,
-    in container: ModelContainer
-  ) async -> Result<LanguageAddOutcome, Error> {
-    await addLanguages(
-      [language], catalog: catalog, projectID: projectID, in: container)
-  }
-
-  /// Same for a SET of languages — the Add Languages overlay adds everything it
-  /// was given in ONE pass: one background context, one slot set, one save, and
-  /// one walk of the catalog's keys rather than one per language.
-  static func addLanguages(
-    _ languages: [String],
-    catalog: StringCatalog,
-    projectID: PersistentIdentifier,
-    in container: ModelContainer
-  ) async -> Result<LanguageAddOutcome, Error> {
-    await Task.detached(priority: .userInitiated) {
-      let context = ModelContext(container)
-      guard let project = project(id: projectID, in: context) else {
-        // The project is gone (removed while the add was in flight): nothing
-        // to seed.
-        return .success(LanguageAddOutcome(inserted: 0, keyCount: 0))
-      }
-      // This context is COLD, so the existing slots come from one scoped
-      // fetch — iterating the relationship here would fault per row.
-      let existing = records(of: project, in: context)
-      var slots = Set<SlotKey>()
-      slots.reserveCapacity(existing.count)
-      for record in existing {
-        slots.insert(SlotKey(
-          key: record.key, language: record.language, category: record.category ?? ""))
-      }
-
-      var created: [TranslationRecord] = []
-      var keyCount = 0
-      for key in catalog.strings.keys {
-        // Non-translatable keys are hidden from the workflow entirely.
-        guard let entry = catalog.strings[key], entry.shouldTranslate != false else { continue }
-        keyCount += 1
-        let pluralSource = catalog.hasPlurals(for: key, language: catalog.sourceLanguage)
-        for language in languages {
-          if pluralSource {
-            for category in PluralRules.categories(for: language) {
-              let slot = SlotKey(key: key, language: language, category: category)
-              if slots.contains(slot) { continue }
-              let record = TranslationRecord(
-                key: key,
-                sourceText: catalog.sourcePluralDisplay(for: key, category: category),
-                language: language,
-                value: nil, provider: nil, state: .empty,
-                contextVersions: persistableVersions(ContextVersions()),
-                category: category)
-              context.insert(record)
-              created.append(record)
-              slots.insert(slot)
-            }
-            continue
-          }
-          let slot = SlotKey(key: key, language: language, category: "")
-          if slots.contains(slot) { continue }
-          let record = TranslationRecord(
-            key: key,
-            sourceText: catalog.sourceDisplay(for: key),
-            language: language,
-            value: nil, provider: nil, state: .empty,
-            contextVersions: persistableVersions(ContextVersions()))
-          context.insert(record)
-          created.append(record)
-          slots.insert(slot)
-        }
-      }
-
-      if !created.isEmpty {
-        // ONE bulk append instead of a to-one assignment per insert, read from the store NOW for
-        // the same reason as the plural pass above.
-        project.records = records(of: project, in: context) + created
-      }
-      do {
-        try context.save()
-      } catch {
-        return .failure(error)
-      }
-      return .success(LanguageAddOutcome(inserted: created.count, keyCount: keyCount))
-    }.value
-  }
-
-  /// Mirrors the parsed catalog into the project's TranslationRecords:
-  /// every (translatable key, non-source language) pair the catalog knows.
-  /// Pairs the file carries no unit for become `.empty` records (Stage 1
-  /// fills those). Plural forms get one record per (key, language, category)
-  /// — each form is a full translation slot the pipeline fills like a flat
-  /// row. A variation holder with NO plural (device-only) gets no record — a
-  /// device-varied key cannot carry a flat stringUnit, and the UI marks such
-  /// cells read-only.
-  ///
-  /// `existing` is the project's current records, supplied by the caller
-  /// because they are not free to obtain: fetching them is one query (~0.6 s
-  /// for 48k rows) where the relationship is already materialized, and
-  /// iterating `project.records` costs seconds where it is not (see
-  /// `records(of:in:)`). So the background mirror passes a fetch, the warm
-  /// main-actor paths pass the relationship.
-  ///
-  /// `policy` decides what a slot the file and an owned record disagree about does
-  /// (`DifferencePolicy`): the load's answer. `.appWins` is the default because it is
-  /// what every non-load caller wants — the per-key mutations (a scan merge, a plural
-  /// vary) mirror a catalog whose values the app itself just wrote, so there is
-  /// nothing for a user to decide.
-  ///
-  /// `fileWrites` is where the pass logs every write it makes FROM THE FILE, so a slot the
-  /// app saves while the pass runs can be given back (`revertFileWrites`). The in-place
-  /// callers pass nil: they write and save on the main actor, where nothing interleaves.
-  ///
-  /// `liveWriters` says the app itself may be writing records while this pass runs — true for
-  /// the background mirror, which no longer blocks the pane, false for the in-place callers.
-  /// It changes ONE thing: how the project's record list is written (see the bulk append at
-  /// the end of the walk). Read it as "this pass is not the only writer right now".
-  @discardableResult
-  static func upsertFromCatalog(
-    _ catalog: StringCatalog,
-    project: Project,
-    existing: [TranslationRecord],
-    context: ModelContext,
-    policy: DifferencePolicy = .appWins,
-    fileWrites: FileWriteLog? = nil,
-    liveWriters: Bool = false,
-    keys: Set<String>? = nil
-  ) -> UpsertStats {
+  /// What one mirror pass decided: the record set it leaves the project with, and the exact
+  /// difference from the set it started from — what `TranslationData` persists.
+  struct MirrorPlan: Sendable {
+    var records: ProjectRecords
+    var upserts: [SlotKey: TranslationRecord] = [:]
+    var deletions: Set<SlotKey> = []
+    var edits: [TranslationEdit] = []
     var stats = UpsertStats()
 
-    // Existing records of this project, indexed for O(1) lookups.
-    // Keyed (key, language, category-or-flat).
-    var bySlot: [String: [String: [String: TranslationRecord]]] = [:]
-    for record in existing {
-      bySlot[record.key, default: [:]][record.language, default: [:]][record.category ?? ""] = record
+    init(records: ProjectRecords) {
+      self.records = records
     }
 
+    mutating func put(_ record: TranslationRecord) {
+      let slot = record.slotKey
+      records[slot] = record
+      upserts[slot] = record
+      deletions.remove(slot)
+    }
+
+    mutating func remove(_ slot: SlotKey) {
+      records[slot] = nil
+      upserts[slot] = nil
+      deletions.insert(slot)
+    }
+
+    var isEmpty: Bool { upserts.isEmpty && deletions.isEmpty && edits.isEmpty }
+  }
+
+  /// Mirrors the parsed catalog into a project's records — PURE: it reads `existing` and returns
+  /// the records it would leave behind (`MirrorPlan`), so the open/reload path runs it off the
+  /// main thread over a snapshot and `apply` hands the result to the store.
+  ///
+  /// Every (translatable key, non-source language) pair the catalog knows gets a record. Pairs the
+  /// file carries no unit for become `.empty` records (Stage 1 fills those). Plural forms get one
+  /// record per (key, language, category) — each form is a full translation slot the pipeline
+  /// fills like a flat row. A variation holder with NO plural (device-only) gets no record — a
+  /// device-varied key cannot carry a flat stringUnit, and the UI marks such cells read-only.
+  ///
+  /// `policy` decides what a slot the file and an owned record disagree about does
+  /// (`DifferencePolicy`): the load's answer. `.appWins` is the default because it is what every
+  /// non-load caller wants — the per-key mutations (a scan merge, a plural vary) mirror a catalog
+  /// whose values the app itself just wrote, so there is nothing for a user to decide.
+  ///
+  /// `shapeConflicts` are the load's shape pass (`shapeConflicts`): the FILE side was converted by
+  /// the load already, so what is left here is the records — the LOSING shape's rows go. Only the
+  /// ones that carry a value and have nobody behind them: an empty form skeleton is the plural
+  /// machinery's own, and a reviewed record is a person's, which nothing in a load may overrule.
+  ///
+  /// `keys` scopes the walk to the keys a per-key mutation touched; the language set stays the
+  /// WHOLE catalog's, so a scoped pass seeds exactly what a whole one would for them.
+  static func mirror(
+    _ catalog: StringCatalog,
+    projectID: Int64,
+    existing: ProjectRecords,
+    policy: DifferencePolicy = .appWins,
+    shapeConflicts: [ShapeConflict] = [],
+    keys: Set<String>? = nil
+  ) -> MirrorPlan {
+    var plan = MirrorPlan(records: existing)
     let sourceLanguage = catalog.sourceLanguage
-    // Newly created records are linked to the project in ONE bulk append
-    // after the loop, never `record.project = project` per record: assigning
-    // the to-one inside the loop makes SwiftData run its inverse-maintenance
-    // bookkeeping once per insert, which is quadratic-ish on a big catalog —
-    // measured 46.1 s for 48,420 records that way versus 2.0 s for
-    // insert-then-`project.records.append(contentsOf:)` (7 MB / 1382-key
-    // large catalog, 37 languages; the assignment must not move back into
-    // the loop, and setting it BEFORE the insert is worse still: 455 s).
-    // `catalog.languages` is COMPUTED: it walks every entry of the catalog and
-    // sorts the result. Evaluating it inside the key loop made the reconcile
-    // quadratic in the key count (1382 x 1382 entry walks for a large
-    // catalog). Hoisted once, like `sourceLanguage`.
-    let sourceLanguages = catalog.languages
-    var created: [TranslationRecord] = []
-    // `keys` scopes the walk to the keys a per-key mutation touched; the language set stays
-    // the WHOLE catalog's, so a scoped pass seeds exactly what a whole one would for them.
+    // `catalog.languages` is COMPUTED: it walks every entry of the catalog and sorts the result,
+    // so it is hoisted out of the key loop.
+    let languages = catalog.languages
+    let now = Date()
     let scope: [(key: String, entry: StringCatalog.Entry)] = keys.map { wanted in
       wanted.compactMap { key in catalog.strings[key].map { (key, $0) } }
     } ?? catalog.strings.map { ($0.key, $0.value) }
     for (key, entry) in scope {
       // Non-translatable keys are hidden from the workflow entirely.
       if entry.shouldTranslate == false { continue }
-      for language in sourceLanguages where language != sourceLanguage {
-        let loc = entry.localizations?[language]
-        let variations = loc?.variations ?? [:]
+      for language in languages where language != sourceLanguage {
+        let variations = entry.localizations?[language]?.variations ?? [:]
         let deviceOnly = !variations.isEmpty && variations["plural"] == nil
         if deviceOnly { continue }
         if let plural = variations["plural"], !plural.isEmpty {
-          // Plural slot: one record per CLDR category of the target
-          // language. The per-form source text comes from the source
-          // language's matching form (fallback: source "other", then key).
+          // Plural slot: one record per CLDR category of the target language. The per-form
+          // source text comes from the source language's matching form (fallback: source
+          // "other", then key).
           for category in PluralRules.categories(for: language) {
             let form = fileForm(catalog, key: key, language: language, category: category)
-            upsertForm(
-              key: key, language: language, category: category,
+            upsert(
+              SlotKey(key: key, language: language, category: category), projectID: projectID,
               sourceText: catalog.sourcePluralDisplay(for: key, category: category),
-              value: form.value,
-              seedState: form.state,
-              context: context, bySlot: &bySlot, stats: &stats,
-              created: &created, policy: policy, fileWrites: fileWrites)
+              value: form.value, seedState: form.state, policy: policy, now: now, plan: &plan)
           }
           continue
         }
-        // Flat slot (unchanged).
         let unit = fileUnit(catalog, key: key, language: language)
-        upsertSlot(
-          key: key, language: language,
+        upsert(
+          SlotKey(key: key, language: language, category: ""), projectID: projectID,
           sourceText: catalog.sourceDisplay(for: key),
-          value: unit.value,
-          seedState: unit.state,
-          context: context, bySlot: &bySlot, stats: &stats,
-          created: &created, policy: policy, fileWrites: fileWrites)
+          value: unit.value, seedState: unit.state, policy: policy, now: now, plan: &plan)
       }
     }
-    if !created.isEmpty {
-      // ONE bulk append instead of a to-one assignment per record (see the note above).
-      //
-      // Either shape WRITES the whole membership, and that is what the mirror's repair step is
-      // about: a to-many written from a view that predates another writer's link drops that
-      // member and nullifies its inverse (probe: the app's mid-pass row came out `project = nil`
-      // with both shapes, and the to-one form costs 3x here). So this stays the cheap shape and
-      // `mirrorOffMainActor` re-links what the commit dropped.
-      //
-      // With live writers the membership is READ BACK from the store first, the way the
-      // plural and language passes do it: the relationship on this (cold, background)
-      // context is a snapshot that predates whatever the app linked meanwhile — and
-      // faulting it costs seconds on a big catalog. The pass's own inserts are not in
-      // the fetch (they are not linked yet), so nothing is listed twice.
-      if keys != nil {
-        // A per-key pass links its handful of rows one by one: the bulk append below writes
-        // the WHOLE membership, which means reading all of it — the cost a per-key mutation
-        // exists to avoid — while a to-one assignment per row is only slow in bulk.
-        for record in created { record.project = project }
-      } else {
-        let members = liveWriters ? records(of: project, in: context) : (project.records ?? [])
-        project.records = members + created
+    for conflict in shapeConflicts {
+      for record in plan.records.records(key: conflict.key) where record.language == conflict.language {
+        let isForm = record.category != nil
+        let losingShape = conflict.reviewedShape == .flat ? isForm : !isForm
+        guard losingShape, record.value?.isBlankOrEmpty == false, !isReviewed(record) else { continue }
+        plan.remove(record.slotKey)
+        plan.stats.dropped += 1
       }
     }
-    // The CALLER saves: the background mirror reports a failed write to the
-    // user, so the save cannot be a swallowed `try?` in here.
-    return stats
+    return plan
+  }
+
+  /// Hands a mirror's result to the store. In one step when nothing wrote the project since the
+  /// pass took its snapshot (`generation`); otherwise slot by slot, and only where the slot still
+  /// holds what the pass started from — a slot the app wrote meanwhile (a run's write-back, an
+  /// edit) keeps the newer writer's value.
+  @MainActor static func apply(
+    _ plan: MirrorPlan, projectID: Int64, base: ProjectRecords, generation: Int
+  ) {
+    let data = TranslationData.shared
+    defer { data.append(plan.edits) }
+    guard !plan.upserts.isEmpty || !plan.deletions.isEmpty else { return }
+    if data.replaceRecords(
+      project: projectID, generation: generation, with: plan.records,
+      upserts: Array(plan.upserts.values), deletions: Array(plan.deletions)) {
+      return
+    }
+    guard let current = data.records(project: projectID) else { return }
+    var upserts: [TranslationRecord] = []
+    for (slot, record) in plan.upserts where current[slot] == base[slot] {
+      upserts.append(record)
+    }
+    data.upsert(upserts)
+    data.delete(
+      project: projectID, slots: plan.deletions.filter { current[$0] == base[$0] && current[$0] != nil })
+  }
+
+  /// The mirror of a few keys, on the main actor: the per-key mutations (a plural vary, a scan
+  /// merge) touch a handful of rows, so they mirror and apply in place.
+  @MainActor static func mirror(_ catalog: StringCatalog, project: Project, keys: Set<String>) {
+    let data = TranslationData.shared
+    guard let existing = data.records(project: project.id) else { return }
+    let generation = data.generation(project: project.id)
+    let plan = mirror(catalog, projectID: project.id, existing: existing, keys: keys)
+    apply(plan, projectID: project.id, base: existing, generation: generation)
   }
 
   /// What the FILE says one slot should be — the target an unowned mirror
   /// must equal after a reconcile.
   ///
-  /// Exists so the upsert can COMPARE before writing. The previous version
-  /// rewrote every unowned mirror record on every open unconditionally
-  /// (measured: 45,306 records rewritten, 12.7 s on the 7 MB / 1382-key
-  /// large catalog) even when file and DB already agreed, and bumped
-  /// `updatedAt` on rows nothing had touched.
+  /// Exists so the upsert can COMPARE before writing: a mirror that rewrote every unowned
+  /// record on every open would rewrite the whole project (and bump `updatedAt` on rows
+  /// nothing had touched) even when file and DB already agree.
   private struct FileSlot {
     let value: String?
     let state: TranslationState
@@ -1217,7 +695,7 @@ nonisolated enum Reconcile {
 
     /// Adopts the file's slot: the value and mapped state, plus the provenance
     /// reset that marks the record an unowned mirror again.
-    func apply(to record: TranslationRecord) {
+    func apply(to record: inout TranslationRecord, now: Date) {
       record.value = value
       record.state = state
       record.provider = nil
@@ -1225,69 +703,11 @@ nonisolated enum Reconcile {
       record.reviewedAt = nil
       record.contextVersions = persistableVersions(ContextVersions())
       record.sourceText = sourceText
-      record.updatedAt = .now
+      record.updatedAt = now
     }
   }
 
-  /// Plural (key, language, category) slot. Same ownership rule as the flat
-  /// slot: DB-owned records keep value/provider/state, unowned file mirrors
-  /// adopt the file's current form value/state (or go empty when the form
-  /// vanished) — and a form both sides fill with different values is resolved by
-  /// the same `resolveOwnedSlot` the flat slot uses, under the load's policy.
-  private static func upsertForm(
-    key: String,
-    language: String,
-    category: String,
-    sourceText: String,
-    value: String?,
-    seedState: TranslationState?,
-    context: ModelContext,
-    bySlot: inout [String: [String: [String: TranslationRecord]]],
-    stats: inout UpsertStats,
-    created: inout [TranslationRecord],
-    policy: DifferencePolicy,
-    fileWrites: FileWriteLog?
-  ) {
-    if let record = bySlot[key]?[language]?[category] {
-      let fileSlot = FileSlot(
-        value: value, state: value != nil ? (seedState ?? .needs_review) : .empty,
-        sourceText: sourceText)
-      if isOwned(record) {
-        // DB-OWNED record: keep value/provider/state/versions, unless the file carries a
-        // different value for this very slot (see resolveOwnedSlot).
-        resolveOwnedSlot(
-          record: record, fileSlot: fileSlot, sourceText: sourceText,
-          policy: policy, context: context, stats: &stats, fileWrites: fileWrites)
-      } else if fileSlot.matches(record) {
-        stats.kept += 1
-      } else {
-        fileWrites?.record(.adopted(record, before: PreSlot(record), edit: nil))
-        fileSlot.apply(to: record)
-        stats.refreshed += 1
-      }
-      return
-    }
-
-    let record = TranslationRecord(
-      key: key,
-      sourceText: sourceText,
-      language: language,
-      value: value,
-      provider: nil,
-      state: value != nil ? (seedState ?? .needs_review) : .empty,
-      contextVersions: persistableVersions(ContextVersions()),
-      category: category
-    )
-    context.insert(record)
-    // The project link is applied by the caller in one bulk append — see
-    // upsertFromCatalog.
-    created.append(record)
-    fileWrites?.record(.created(record))
-    bySlot[key, default: [:]][language, default: [:]][category] = record
-    stats.created += 1
-  }
-
-  /// One (key, language) slot. Ownership rule on reload:
+  /// One slot, flat or a plural form. Ownership rule on reload:
   ///  - record is DB-OWNED (provider or edit history — human edits, machine
   ///    fills, TM copies) -> keep value/provider/state/versions untouched;
   ///    refresh sourceText only. DB provenance survives the reload even
@@ -1301,60 +721,41 @@ nonisolated enum Reconcile {
   ///    wins for rows nobody in this app has worked on (e.g. an Xcode-side
   ///    edit between sessions must not be reverted by the next commit).
   ///  - no record -> create one from the file (or as an `.empty` seed).
-  private static func upsertSlot(
-    key: String,
-    language: String,
+  private static func upsert(
+    _ slot: SlotKey,
+    projectID: Int64,
     sourceText: String,
     value: String?,
     seedState: TranslationState?,
-    context: ModelContext,
-    bySlot: inout [String: [String: [String: TranslationRecord]]],
-    stats: inout UpsertStats,
-    created: inout [TranslationRecord],
     policy: DifferencePolicy,
-    fileWrites: FileWriteLog?
+    now: Date,
+    plan: inout MirrorPlan
   ) {
-    if let record = bySlot[key]?[language]?[""] {
-      let fileSlot = FileSlot(
-        value: value, state: value != nil ? (seedState ?? .needs_review) : .empty,
-        sourceText: sourceText)
+    let fileSlot = FileSlot(
+      value: value, state: value != nil ? (seedState ?? .needs_review) : .empty,
+      sourceText: sourceText)
+    if var record = plan.records[slot] {
       if isOwned(record) {
-        // DB-OWNED record: keep value/provider/state/versions, unless the file carries a
-        // different value for this very slot (see resolveOwnedSlot).
-        resolveOwnedSlot(
-          record: record, fileSlot: fileSlot, sourceText: sourceText,
-          policy: policy, context: context, stats: &stats, fileWrites: fileWrites)
+        resolveOwnedSlot(&record, fileSlot: fileSlot, policy: policy, now: now, plan: &plan)
       } else if fileSlot.matches(record) {
-        stats.kept += 1
+        plan.stats.kept += 1
       } else {
-        fileWrites?.record(.adopted(record, before: PreSlot(record), edit: nil))
-        fileSlot.apply(to: record)
-        stats.refreshed += 1
+        fileSlot.apply(to: &record, now: now)
+        plan.put(record)
+        plan.stats.refreshed += 1
       }
       return
     }
-
-    let record = TranslationRecord(
-      key: key,
-      sourceText: sourceText,
-      language: language,
-      value: value,
-      provider: nil,
-      state: value != nil ? (seedState ?? .needs_review) : .empty,
-      contextVersions: persistableVersions(ContextVersions())
-    )
-    context.insert(record)
-    // The project link is applied by the caller in one bulk append — see
-    // upsertFromCatalog.
-    created.append(record)
-    fileWrites?.record(.created(record))
-    bySlot[key, default: [:]][language, default: [:]][""] = record
-    stats.created += 1
+    plan.put(TranslationRecord(
+      key: slot.key, sourceText: sourceText, language: slot.language, value: value,
+      provider: nil, state: fileSlot.state, contextVersions: persistableVersions(ContextVersions()),
+      createdAt: now, updatedAt: now, projectID: projectID,
+      category: slot.category.isEmpty ? nil : slot.category))
+    plan.stats.created += 1
   }
 
-  /// The DB-OWNED branch of one slot, shared by `upsertSlot` and `upsertForm` — one
-  /// definition, so a plural form can never be resolved differently from the flat row
-  /// beside it.
+  /// The DB-OWNED branch of one slot, flat or plural — one definition, so a plural form can
+  /// never be resolved differently from the flat row beside it.
   ///
   /// The record keeps everything (value, provider, state, context versions) and the
   /// file may only refresh its source text — EXCEPT when the file fills this very slot
@@ -1365,28 +766,31 @@ nonisolated enum Reconcile {
   /// (`stats`) and the policy — the user's answer to the load's question — decides:
   /// `fileWins` adopts the file's slot (`adoptFile`), anything else keeps the record.
   private static func resolveOwnedSlot(
-    record: TranslationRecord,
+    _ record: inout TranslationRecord,
     fileSlot: FileSlot,
-    sourceText: String,
     policy: DifferencePolicy,
-    context: ModelContext,
-    stats: inout UpsertStats,
-    fileWrites: FileWriteLog?
+    now: Date,
+    plan: inout MirrorPlan
   ) {
     // The source is the artifact's wherever it moved, whether or not the value is
     // contested: the file is where source text is authored.
-    if record.sourceText != sourceText { record.sourceText = sourceText }
+    var moved = false
+    if record.sourceText != fileSlot.sourceText {
+      record.sourceText = fileSlot.sourceText
+      moved = true
+    }
     guard let fileValue = fileSlot.value,
           let recordValue = record.value,
           recordValue != fileValue
     else {
-      stats.kept += 1
+      if moved { plan.put(record) }
+      plan.stats.kept += 1
       return
     }
 
-    stats.differing += 1
-    if stats.differenceSample.count < DifferenceReport.sampleLimit {
-      stats.differenceSample.append(SlotDifference(
+    plan.stats.differing += 1
+    if plan.stats.differenceSample.count < DifferenceReport.sampleLimit {
+      plan.stats.differenceSample.append(SlotDifference(
         key: record.key, language: record.language, category: record.category,
         fileValue: fileValue, recordValue: recordValue,
         // The mapped state carries the same answer as the raw one: `translated` is the only file
@@ -1395,10 +799,11 @@ nonisolated enum Reconcile {
         recordIsReviewed: isReviewed(record)))
     }
     if policy == .fileWins {
-      adoptFile(fileSlot, into: record, context: context, fileWrites: fileWrites)
-      stats.refreshed += 1
+      adoptFile(fileSlot, into: &record, now: now, plan: &plan)
+      plan.stats.refreshed += 1
     } else {
-      stats.kept += 1
+      if moved { plan.put(record) }
+      plan.stats.kept += 1
     }
   }
 
@@ -1408,37 +813,100 @@ nonisolated enum Reconcile {
   ///
   /// The edit row is what keeps the app's own corpus honest: the value the record held
   /// was produced by a run or an import and the file's is a person's, so the
-  /// before->after pair is exactly the correction Stage 0 learns from. Without it the
-  /// app's value would be gone with no trace of who replaced it, which is the loss this
-  /// whole path exists to make deliberate. `editor: .human` and `isUserConfirmed: true`
-  /// say the truth about it: a person edited this catalog, and the app read it back.
-  /// It also leaves the record DB-OWNED (`edits` is no longer empty), so the value the
+  /// before->after pair is exactly the correction Stage 0 learns from. `editor: .human` and
+  /// `isUserConfirmed: true` say the truth about it: a person edited this catalog, and the app
+  /// read it back. It also leaves the record DB-OWNED (it now has an edit), so the value the
   /// user just chose is what survives the reloads that follow.
   private static func adoptFile(
     _ fileSlot: FileSlot,
-    into record: TranslationRecord,
-    context: ModelContext,
-    fileWrites: FileWriteLog?
+    into record: inout TranslationRecord,
+    now: Date,
+    plan: inout MirrorPlan
   ) {
-    let edit = TranslationEdit(
+    plan.edits.append(TranslationEdit(
       record: record,
       fromValue: record.value,
       toValue: fileSlot.value ?? "",
       editor: .human,
       reason: "Adopted from the catalog file on reload",
       contextVersions: persistableVersions(ContextVersions()),
-      isUserConfirmed: true)
-    record.edits = (record.edits ?? []) + [edit]
-    context.insert(edit)
-    // Logged BEFORE the slot is overwritten: the row to restore is the one it holds now.
-    fileWrites?.record(.adopted(record, before: PreSlot(record), edit: edit))
-    fileSlot.apply(to: record)
+      isUserConfirmed: true,
+      createdAt: now))
+    fileSlot.apply(to: &record, now: now)
+    record.hasEdits = true
+    plan.put(record)
+  }
+
+  // MARK: - adding a language
+
+  /// What one "add a language" pass produced.
+  struct LanguageAddOutcome: Sendable {
+    /// Records created — one per translatable key, one per CLDR form for a
+    /// plural-source key.
+    let inserted: Int
+    /// Keys in scope when the pass ran (0 = an empty catalog, nothing to
+    /// seed).
+    let keyCount: Int
+  }
+
+  /// The records freshly added `languages` need — PURE, so a big catalog's seeding (thousands of
+  /// records) runs off the main thread.
+  ///
+  /// Pairs with `StringCatalog.addLanguage`, which gives the document the
+  /// language's nodes only. Those nodes are EMPTY, and an empty localization
+  /// node is a file error — `normalizeForWrite` prunes them on the way to disk
+  /// — so the added language is recognizable again after a reopen by its
+  /// RECORDS, never by the file: the browser reads the record set alongside
+  /// the catalog's own codes (see `LocalizationStore.browserLanguages`).
+  ///
+  /// Slot seeding follows the mirror's rule for a pair the file carries no unit
+  /// for (an `.empty` record the pipeline fills), with one deliberate
+  /// difference: a key whose SOURCE is plural-varied gets its per-form records
+  /// straight away, because a flat record on a plural slot is something the
+  /// merge refuses to write and nothing ever cleans up. The caller varies the
+  /// document's forms for that key in the same breath.
+  ///
+  /// Records the project already holds for these languages are left exactly as
+  /// they are (value, provenance, state), so re-adding a language costs nothing
+  /// and can never rewrite a translation.
+  static func seedLanguages(
+    _ languages: [String],
+    catalog: StringCatalog,
+    projectID: Int64,
+    existing: ProjectRecords
+  ) -> (records: [TranslationRecord], outcome: LanguageAddOutcome) {
+    var created: [TranslationRecord] = []
+    var keyCount = 0
+    let now = Date()
+    for (key, entry) in catalog.strings {
+      // Non-translatable keys are hidden from the workflow entirely.
+      guard entry.shouldTranslate != false else { continue }
+      keyCount += 1
+      let pluralSource = catalog.hasPlurals(for: key, language: catalog.sourceLanguage)
+      for language in languages {
+        let categories = pluralSource ? PluralRules.categories(for: language) : [""]
+        for category in categories {
+          let slot = SlotKey(key: key, language: language, category: category)
+          if existing[slot] != nil { continue }
+          created.append(TranslationRecord(
+            key: key,
+            sourceText: category.isEmpty
+              ? catalog.sourceDisplay(for: key)
+              : catalog.sourcePluralDisplay(for: key, category: category),
+            language: language, value: nil, provider: nil, state: .empty,
+            contextVersions: persistableVersions(ContextVersions()),
+            createdAt: now, updatedAt: now, projectID: projectID,
+            category: category.isEmpty ? nil : category))
+        }
+      }
+    }
+    return (created, LanguageAddOutcome(inserted: created.count, keyCount: keyCount))
   }
 
   // MARK: - single record lookup
 
   /// The record for a (key, language) flat slot of a project, or nil.
-  static func record(
+  @MainActor static func record(
     key: String,
     language: String,
     in project: Project
@@ -1448,13 +916,19 @@ nonisolated enum Reconcile {
 
   /// The record for a (key, language, category) slot, or nil. Category nil =
   /// the flat slot.
-  static func record(
+  @MainActor static func record(
     key: String,
     language: String,
     category: String?,
     in project: Project
   ) -> TranslationRecord? {
-    records(ofKey: key, in: project).first { $0.language == language && $0.category == category }
+    TranslationData.shared.record(
+      project: project.id, slot: SlotKey(key: key, language: language, category: category))
+  }
+
+  /// ONE KEY's records of a project.
+  @MainActor static func records(ofKey key: String, in project: Project) -> [TranslationRecord] {
+    TranslationData.shared.records(project: project.id, key: key)
   }
 
   // MARK: - human edit (DB side)
@@ -1466,45 +940,28 @@ nonisolated enum Reconcile {
   ///  - value unchanged (pure confirmation of an existing machine value) ->
   ///    the producing provider is kept — provenance survives — and the
   ///    record is promoted to .reviewed without an edit row.
-  /// Never touches the file; call `commit` to write it back.
+  /// Never touches the file.
   @discardableResult
-  static func applyHumanEdit(
+  @MainActor static func applyHumanEdit(
     key: String,
     language: String,
     value: String,
     sourceText: String,
     project: Project,
-    context: ModelContext,
     category: String? = nil
   ) -> TranslationRecord {
-    let record = record(key: key, language: language, category: category, in: project)
-      ?? {
-        let record = TranslationRecord(
-          key: key, sourceText: sourceText, language: language,
-          value: nil, provider: nil, state: .empty,
-          contextVersions: persistableVersions(ContextVersions()),
-          category: category)
-        context.insert(record)
-        // Deliberately NOT linked here: the link is what makes the save write the project's whole
-        // membership, so it is made below, AFTER the membership has been read back.
-        return record
-      }()
-
-    // THE MEMBERSHIP IS WRITTEN BY THIS SAVE, so it must be read NOW. Linking the record below
-    // makes SwiftData dirty the project's to-many, and the save then writes it as this CONTEXT
-    // holds it: a record another writer linked in the meantime (a mirror pass, a plural skeleton,
-    // an add-language seeding — all of them run behind the pane now) would be replaced out of the
-    // membership and its inverse nullified, i.e. orphaned and invisible to every reader in the app.
-    // One scoped fetch, only on the path that INSERTES a record, which is the only path here that
-    // touches the relationship at all.
-    if record.project == nil {
-      project.records = records(of: project, in: context)
-      record.project = project
-    }
+    let data = TranslationData.shared
+    var record = self.record(key: key, language: language, category: category, in: project)
+      ?? TranslationRecord(
+        key: key, sourceText: sourceText, language: language,
+        value: nil, provider: nil, state: .empty,
+        contextVersions: persistableVersions(ContextVersions()),
+        projectID: project.id, category: category)
 
     let valueChanged = record.value != value
+    var edit: TranslationEdit?
     if valueChanged {
-      let edit = TranslationEdit(
+      edit = TranslationEdit(
         record: record,
         fromValue: record.value,
         toValue: value,
@@ -1512,12 +969,11 @@ nonisolated enum Reconcile {
         contextVersions: persistableVersions(ContextVersions()),
         isUserConfirmed: true
       )
-      record.edits = (record.edits ?? []) + [edit]
-      context.insert(edit)
       record.value = value
       // The human authored this value; the machine is no longer the writer.
       record.provider = .manual
       record.confidence = nil
+      record.hasEdits = true
     }
     record.sourceText = sourceText
     record.state = .reviewed
@@ -1526,7 +982,8 @@ nonisolated enum Reconcile {
     record.updatedAt = .now
     let userName = ProcessInfo.processInfo.fullUserName
     record.lastEditor = userName.isEmpty ? "Manual" : userName
-    try? context.save()
+    data.upsert(record)
+    if let edit { data.append(edit) }
     return record
   }
 
@@ -1536,10 +993,9 @@ nonisolated enum Reconcile {
   /// confirmed. Entries are unique per (sourceText, sourceLanguage,
   /// targetLanguage): an existing machine hint is upgraded in place, and an
   /// existing gold entry with a different value is overwritten — the newer
-  /// confirmation wins. The caller saves.
+  /// confirmation wins.
   @discardableResult
-  static func upsertGoldMemory(
-    in context: ModelContext,
+  @MainActor static func upsertGoldMemory(
     sourceText: String,
     sourceLanguage: String,
     targetLanguage: String,
@@ -1547,24 +1003,15 @@ nonisolated enum Reconcile {
     contextVersions: ContextVersions,
     projectTag: String?
   ) -> TranslationMemoryEntry {
-    let descriptor = FetchDescriptor<TranslationMemoryEntry>(
-      predicate: #Predicate {
-        $0.sourceText == sourceText
-          && $0.sourceLanguage == sourceLanguage
-          && $0.targetLanguage == targetLanguage
-      })
-    let entry: TranslationMemoryEntry
-    if let existing = try? context.fetch(descriptor).first {
-      entry = existing
-    } else {
-      entry = TranslationMemoryEntry(
+    let data = TranslationData.shared
+    var entry = data.memoryEntry(
+      source: sourceText, sourceLanguage: sourceLanguage, targetLanguage: targetLanguage)
+      ?? TranslationMemoryEntry(
         sourceText: sourceText,
         sourceLanguage: sourceLanguage,
         targetLanguage: targetLanguage,
         value: value,
         contextVersions: contextVersions)
-      context.insert(entry)
-    }
     entry.value = value
     entry.provider = .manual  // a human vouched for this value
     entry.state = .reviewed
@@ -1572,6 +1019,7 @@ nonisolated enum Reconcile {
     entry.contextVersions = contextVersions
     entry.confirmedAt = .now
     entry.confidence = nil
+    data.upsert(entry)
     return entry
   }
 
@@ -1584,19 +1032,18 @@ nonisolated enum Reconcile {
   /// no value to confirm, and committing one would write a bogus
   /// "translated" unit into the file. Pure confirmation of an existing value
   /// appends NO TranslationEdit (that is the learning signal for a value
-  /// *change*; here nothing changed). Never touches the file; call `commit`
-  /// to write it back. Returns how many records changed.
+  /// *change*; here nothing changed). Never touches the file. Returns how many
+  /// records changed.
   @discardableResult
-  static func applyReviewState(
+  @MainActor static func applyReviewState(
     key: String,
     state: TranslationState,
     project: Project,
-    context: ModelContext,
     language: String? = nil
   ) -> Int {
     let userName = ProcessInfo.processInfo.fullUserName
-    var touched = 0
-    for record in records(ofKey: key, in: project) where language == nil || record.language == language {
+    var changed: [TranslationRecord] = []
+    for var record in records(ofKey: key, in: project) where language == nil || record.language == language {
       guard let value = record.value,
             !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
         continue
@@ -1613,10 +1060,10 @@ nonisolated enum Reconcile {
       } else {
         record.reviewedAt = nil
       }
-      touched += 1
+      changed.append(record)
     }
-    try? context.save()
-    return touched
+    TranslationData.shared.upsert(changed)
+    return changed.count
   }
 
   // MARK: - reviewer note (DB side)
@@ -1649,15 +1096,14 @@ nonisolated enum Reconcile {
   /// The project version is stamped on records for provenance; it
   /// deliberately does NOT auto-enqueue records.
   @discardableResult
-  static func applyNote(
+  @MainActor static func applyNote(
     key: String,
     note: String,
     scope: NoteScope,
-    project: Project,
-    context: ModelContext
+    project: Project
   ) -> Int {
     let trimmed = note.trimmingCharacters(in: .whitespacesAndNewlines)
-    let records = Reconcile.records(ofKey: key, in: project)
+    var records = Reconcile.records(ofKey: key, in: project)
     // The line folded by a previous save — retracted or replaced, if any.
     let previous = records.compactMap(\.noteFoldedText).first { !$0.isEmpty }
     // The line this note owns in the project doc: empty for a memo and for a
@@ -1668,26 +1114,20 @@ nonisolated enum Reconcile {
     // again to replace or retract.
     let rule = scope == .project ? ruleLine(trimmed) : ""
 
-    for record in records {
-      record.note = trimmed.isEmpty ? nil : trimmed
-      record.noteScope = trimmed.isEmpty ? nil : scope.rawValue
-      record.updatedAt = .now
-    }
-
     if rule != (previous ?? "") {
       // A rule another key still owns stays in the doc: two notes can say the same
       // thing, and retracting one must not silently drop the other.
-      let shared = previous.map { isFolded($0, byAnotherKeyThan: key, in: project, context: context) }
-        ?? false
-      foldProjectRule(
-        line: rule, previous: shared ? nil : previous, key: key, project: project,
-        context: context)
+      let shared = previous.map { isFolded($0, byAnotherKeyThan: key, in: project) } ?? false
+      foldProjectRule(line: rule, previous: shared ? nil : previous, key: key, project: project)
     }
-    for record in records {
-      record.noteFoldedText = rule.isEmpty ? nil : rule
-      record.noteFoldedAt = rule.isEmpty ? nil : .now
+    for index in records.indices {
+      records[index].note = trimmed.isEmpty ? nil : trimmed
+      records[index].noteScope = trimmed.isEmpty ? nil : scope.rawValue
+      records[index].updatedAt = .now
+      records[index].noteFoldedText = rule.isEmpty ? nil : rule
+      records[index].noteFoldedAt = rule.isEmpty ? nil : .now
     }
-    try? context.save()
+    TranslationData.shared.upsert(records)
     return records.count
   }
 
@@ -1701,36 +1141,33 @@ nonisolated enum Reconcile {
   }
 
   /// True when some record of a key OTHER than `key` still carries `line` as its
-  /// folded rule. One scoped fetch of at most one row, not a walk of the project.
-  private static func isFolded(
-    _ line: String, byAnotherKeyThan key: String, in project: Project, context: ModelContext
+  /// folded rule.
+  @MainActor private static func isFolded(
+    _ line: String, byAnotherKeyThan key: String, in project: Project
   ) -> Bool {
-    let id = project.persistentModelID
-    let folded: String? = line
-    var descriptor = FetchDescriptor<TranslationRecord>(
-      predicate: #Predicate {
-        $0.noteFoldedText == folded && $0.key != key && $0.project?.persistentModelID == id
-      })
-    descriptor.fetchLimit = 1
-    guard let count = try? context.fetchCount(descriptor) else {
-      return (project.records ?? []).contains { $0.key != key && $0.noteFoldedText == line }
-    }
-    return count > 0
+    guard let records = TranslationData.shared.records(project: project.id) else { return false }
+    return records.values.contains { $0.key != key && $0.noteFoldedText == line }
+  }
+
+  /// The project's own context document (its project-scope ContextDoc), or nil.
+  @MainActor static func projectDoc(of project: Project) -> ContextDoc? {
+    let documents = TranslationData.shared.documents.filter { $0.scope == .project }
+    return documents.first { $0.projectID == project.id }
+      ?? documents.first { $0.projectID == nil && $0.identifier == project.name }
   }
 
   /// Applies ONE rule line to the project doc: replaces the previously folded
   /// line in place, appends a new one, or drops it when the note was cleared
   /// (a retraction). No-op when the doc already reads exactly like this, so a
   /// re-save never churns the version.
-  private static func foldProjectRule(
+  @MainActor private static func foldProjectRule(
     line: String,
     previous: String?,
     key: String,
-    project: Project,
-    context: ModelContext
+    project: Project
   ) {
     let old = (previous ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-    let doc = project.contextDoc
+    let doc = projectDoc(of: project)
     let current = doc?.content ?? ""
     var lines = current
       .split(separator: "\n", omittingEmptySubsequences: false)
@@ -1756,58 +1193,40 @@ nonisolated enum Reconcile {
     let reason = line.isEmpty
       ? "Reviewer note retracted on \(key) — rule removed from the project context"
       : "Reviewer note on \(key) — project rule"
-    let audit: ContextEdit
-    if let doc {
-      doc.content = revised
+    writeProjectDoc(revised, before: doc, project: project, reason: reason)
+  }
+
+  /// Writes the project doc's new body — a version bump on the existing document, or the
+  /// document itself — with its audit row.
+  @MainActor private static func writeProjectDoc(
+    _ content: String, before doc: ContextDoc?, project: Project, reason: String
+  ) {
+    let data = TranslationData.shared
+    if var doc {
+      let before = doc.content
+      doc.content = content
       doc.version += 1
       doc.updatedAt = .now
-      audit = ContextEdit(
-        contextDoc: doc, before: current, after: revised, reason: reason, author: .manual)
+      data.update(doc)
+      data.append(ContextEdit(docID: doc.id, before: before, after: content, reason: reason, author: .manual))
     } else {
-      let created = ContextDoc(
-        scope: .project, identifier: project.name, version: 1,
-        content: revised, createdAt: .now, updatedAt: .now, project: project)
-      context.insert(created)
-      project.contextDoc = created
-      audit = ContextEdit(
-        contextDoc: created, before: nil, after: revised, reason: reason, author: .manual)
+      let created = data.insertDocument(
+        scope: .project, identifier: project.name, content: content, projectID: project.id)
+      data.append(ContextEdit(docID: created.id, before: nil, after: content, reason: reason, author: .manual))
     }
-    context.insert(audit)
   }
 
   /// Replaces the project's context body wholesale — the human editor's save
   /// path (trim, audit, ONE version bump; no-op when the text is unchanged).
   /// This is also where a rule is retracted by hand.
   @discardableResult
-  static func applyProjectDoc(
-    content: String,
-    project: Project,
-    context: ModelContext
-  ) -> Bool {
+  @MainActor static func applyProjectDoc(content: String, project: Project) -> Bool {
     let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
-    let doc = project.contextDoc
+    let doc = projectDoc(of: project)
     guard trimmed != (doc?.content ?? "") else { return false }
-    let audit: ContextEdit
-    if let doc {
-      let before = doc.content
-      doc.content = trimmed
-      doc.version += 1
-      doc.updatedAt = .now
-      audit = ContextEdit(
-        contextDoc: doc, before: before, after: trimmed,
-        reason: "Project context edited by hand", author: .manual)
-    } else {
-      let created = ContextDoc(
-        scope: .project, identifier: project.name, version: 1,
-        content: trimmed, createdAt: .now, updatedAt: .now, project: project)
-      context.insert(created)
-      project.contextDoc = created
-      audit = ContextEdit(
-        contextDoc: created, before: nil, after: trimmed,
-        reason: "Project context created by hand", author: .manual)
-    }
-    context.insert(audit)
-    try? context.save()
+    writeProjectDoc(
+      trimmed, before: doc, project: project,
+      reason: doc == nil ? "Project context created by hand" : "Project context edited by hand")
     return true
   }
 
@@ -1823,20 +1242,14 @@ nonisolated enum Reconcile {
   /// lives on the review side: the browser flags an over-width value for the
   /// human, and the paid verification gate may shorten one.
   @discardableResult
-  static func applyMaxWidth(
-    key: String,
-    width: Int?,
-    project: Project,
-    context: ModelContext
-  ) -> Int {
-    var touched = 0
-    for record in records(ofKey: key, in: project) {
-      record.maxWidth = width
-      record.updatedAt = .now
-      touched += 1
+  @MainActor static func applyMaxWidth(key: String, width: Int?, project: Project) -> Int {
+    var records = records(ofKey: key, in: project)
+    for index in records.indices {
+      records[index].maxWidth = width
+      records[index].updatedAt = .now
     }
-    try? context.save()
-    return touched
+    TranslationData.shared.upsert(records)
+    return records.count
   }
 
   // MARK: - merge (DB -> in-memory catalog)
@@ -1877,20 +1290,27 @@ nonisolated enum Reconcile {
   /// sync) plus whether any unit actually changed — a no-op merge never
   /// churns the artifact.
   @discardableResult
-  static func merge(
+  @MainActor static func merge(
     _ catalog: StringCatalog,
     project: Project,
     keys: Set<String>? = nil
   ) -> (catalog: StringCatalog, changed: Bool) {
+    let data = TranslationData.shared
+    let records = keys.map { wanted in
+      wanted.flatMap { data.records(project: project.id, key: $0) }
+    } ?? data.records(project: project.id).map { Array($0.values) } ?? []
+    return merge(catalog, records: records)
+  }
+
+  /// The merge itself, over the records the caller hands in — pure, so a whole project's merge
+  /// can run off the main thread.
+  static func merge(
+    _ catalog: StringCatalog,
+    records: [TranslationRecord]
+  ) -> (catalog: StringCatalog, changed: Bool) {
     var updated = catalog
     var changed = false
     let sourceLanguage = catalog.sourceLanguage
-
-    // A scoped fetch per key for a row save; the whole relationship only for a walk of the
-    // whole project.
-    let records = keys.map { wanted in
-      wanted.flatMap { Reconcile.records(ofKey: $0, in: project) }
-    } ?? (project.records ?? [])
     for record in records {
       guard let value = record.value,
             !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {

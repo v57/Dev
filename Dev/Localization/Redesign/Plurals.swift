@@ -13,7 +13,7 @@
 /// set, and the slot's status covers all of its forms — Xcode treats a plural like
 /// any other string, so a form is empty or filled and the slot is reviewed or not.
 /// There is no per-form status.
-struct Plurals: Hashable {
+nonisolated struct Plurals: Hashable, Sendable {
   var isEmpty: Bool {
     !values.contains(where: { !$0.value.isEmpty })
   }
@@ -38,11 +38,11 @@ struct Plurals: Hashable {
     values[index].value = value
   }
 }
-struct Plural: Hashable, Identifiable {
+nonisolated struct Plural: Hashable, Identifiable, Sendable {
   var rule: Rule
   var value: String
   var id: Rule { rule }
-  enum Rule: String {
+  enum Rule: String, Sendable {
     case zero, one, two, few, many, other
   }
   /// The categories a language actually uses.

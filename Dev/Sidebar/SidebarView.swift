@@ -80,6 +80,7 @@ struct SidebarView: View {
     // First sight of the sidebar: build the rows, then ask every server how it
     // is doing. Nothing polls after this — a check is a reader action.
     .task {
+      await TranslationData.shared.start()
       servers.refresh()
       await servers.checkAll()
     }

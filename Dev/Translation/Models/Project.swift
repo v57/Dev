@@ -7,7 +7,6 @@
 
 import AppKit
 import Foundation
-import SwiftData
 
 /// A translation project: one merged .xcstrings catalog being translated.
 /// A project owns its project-scope ContextDoc and the TranslationRecords
@@ -24,7 +23,9 @@ import SwiftData
 ///    placeholder whether or not the file exists yet ('no catalog' is derived
 ///    at display time). `iconURL` is <root>/Assets.xcassets/AppIcon.appiconset
 ///    when present.
-@Model final class Project {
+nonisolated struct Project: Hashable, Sendable, Identifiable {
+  /// The row id (assigned by `TranslationData` on insert; kept from the SwiftData store).
+  var id: Int64
   /// Display name of the project (e.g. the repo name).
   var name: String
   /// File URL of the project's merged .xcstrings catalog.
@@ -40,31 +41,6 @@ import SwiftData
   var iconURL: URL?
   /// When the project was first seen.
   var createdAt: Date
-
-  // MARK: - relationships
-
-  /// The project-scope context document (scope == .project); nil until the
-  /// pipeline first learns from this project's confirmed edits.
-  @Relationship(deleteRule: .cascade, inverse: \ContextDoc.project)
-  var contextDoc: ContextDoc?
-
-  /// Every translation record reconciled from this project's catalog.
-  ///
-  /// OPTIONAL (`[TranslationRecord]?`) on purpose — the relationship's shape is
-  /// load-bearing for the store clear, and a non-optional array here is what
-  /// makes the clear cost minutes-to-hours instead of a second (Design notes 7.5,
-  /// measured). SwiftData derives the
-  /// CHILD's to-one `project` from this array's optionality: a non-optional
-  /// inverse generates `TranslationRecord/project` as a MANDATORY to-one, and
-  /// CoreData then REFUSES the store-level form of a delete —
-  /// `context.delete(model: TranslationRecord.self)` throws "Constraint trigger
-  /// violation: Batch delete failed due to mandatory OTO nullify inverse on
-  /// TranslationRecord/project" and deletes nothing — leaving the object form,
-  /// which pays SwiftData's inverse maintenance for every row (N^2 on a table this
-  /// size). Optional, the batch delete is legal and the clear is a store-level
-  /// DELETE. Read it as `project.records ?? []`; empty and nil are the same state.
-  @Relationship(deleteRule: .cascade, inverse: \TranslationRecord.project)
-  var records: [TranslationRecord]? = []
 
   // MARK: - display conveniences
 
@@ -116,16 +92,14 @@ import SwiftData
   }
 
   init(
-    name: String, catalogURL: URL, createdAt: Date = .now,
-    rootURL: URL? = nil, iconURL: URL? = nil,
-    contextDoc: ContextDoc? = nil, records: [TranslationRecord] = []
+    id: Int64, name: String, catalogURL: URL, createdAt: Date = .now,
+    rootURL: URL? = nil, iconURL: URL? = nil
   ) {
+    self.id = id
     self.name = name
     self.catalogURL = catalogURL
     self.rootURL = rootURL
     self.iconURL = iconURL
     self.createdAt = createdAt
-    self.contextDoc = contextDoc
-    self.records = records
   }
 }

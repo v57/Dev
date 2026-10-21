@@ -93,6 +93,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
   }
 
+  /// Everything the translation store still holds for its writer lands before the app goes.
+  @MainActor
+  func applicationWillTerminate(_ notification: Notification) {
+    TranslationData.shared.flushBeforeTerminating()
+  }
+
   @MainActor
   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
     guard let store = LocalizationStore.active, store.hasUnsavedChanges else {

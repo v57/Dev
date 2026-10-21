@@ -163,7 +163,7 @@ func storeClearBlocker(localization: LocalizationStore, shell: Translation.Shell
 /// main-actor turn: an open pane's rows carry the record objects themselves, and
 /// the redesign's workspaces were built from them, so rows deleted under a live
 /// cache leave this window reading values that no longer exist. Then the rows go
-/// — one delete per row, in `TranslationStore.clear()` — and then both halves
+/// — in `TranslationData.clearTranslationState()` — and then both halves
 /// rebuild what they can: the browser re-reads its open artifact (no mirror, or
 /// the records would come straight back), and the redesign's workspaces are rebuilt
 /// from those artifacts. What
@@ -179,15 +179,9 @@ func clearTranslationStore(
   }
   localization.dropStoreMirror()
   shell.dropStoreCaches()
-  let outcome: StoreClearOutcome
-  do {
-    let counts = try TranslationStore.shared.clear()
-    outcome = counts.isEmpty ? .alreadyEmpty : .cleared(counts)
-  } catch {
-    outcome = .failed(error.localizedDescription)
-  }
-  // Whatever the store did — a save that failed can still have taken the rows out
-  // of the context — the app-side halves come back over it rather than keep the
+  let counts = await TranslationData.shared.clearTranslationState()
+  let outcome: StoreClearOutcome = counts.isEmpty ? .alreadyEmpty : .cleared(counts)
+  // The app-side halves come back over the emptied store rather than keep the
   // readings they had.
   await localization.reloadAfterStoreClear()
   shell.rebuildAfterStoreClear()

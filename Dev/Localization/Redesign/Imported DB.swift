@@ -69,7 +69,7 @@ extension Translation {
     /// project's languages share their sources, and `Imported.resolve` is called
     /// once per language over the SAME rows, so the first column pays the index
     /// seeks and every later column is a memory read.
-    final class Connection {
+    nonisolated final class Connection: @unchecked Sendable {
       /// The file this handle reads.
       let path: String
       /// What the file looked like when it was opened, so a rewritten database is

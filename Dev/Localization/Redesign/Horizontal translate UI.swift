@@ -64,19 +64,16 @@ extension Translation.HorizontalTranslate {
 
   /// One project's journal, oldest first, as this page reads it.
   ///
-  /// A synchronous main-actor fetch (7.1) of the whole edit table, so it is read ONCE per
-  /// project session (`Project.journal`) and kept current from then on by the runner's own
-  /// write-back — never per page, and never per redraw. Machine writes only
+  /// A query of the project's journal, read ONCE per project session (`Project.loadJournal`)
+  /// and kept current from then on by the runner's own write-back — never per page, and never
+  /// per redraw. Machine writes only
   /// (`editor == .provider`): what the page reports is what this PASS did, and a human's
   /// edit is not its work.
-  static func journal(of project: Translation.Project) -> [Write] {
-    let edits = (try? project.global.store.edits(project: project.id, confirmedOnly: false)) ?? []
+  static func journal(of project: Translation.Project) async -> [Write] {
+    let edits = (try? await project.global.store.edits(project: project.id, confirmedOnly: false)) ?? []
     return edits.compactMap { edit in
-      guard edit.editor == .provider,
-        let key = edit.record?.key,
-        let language = edit.record?.language
-      else { return nil }
-      return Write(key: key, language: language, from: edit.fromValue ?? "", to: edit.toValue)
+      guard edit.editor == .provider else { return nil }
+      return Write(key: edit.key, language: edit.language, from: edit.fromValue ?? "", to: edit.toValue)
     }
   }
 

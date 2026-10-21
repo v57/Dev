@@ -1,5 +1,4 @@
 import Foundation
-import SwiftData
 import VaultKit
 
 /// The Projects section's arrangement: the vault's project tree (the groups made in Git, shared with the other v57
@@ -19,7 +18,7 @@ struct ProjectGroupsLayout {
 
     enum ID: Hashable {
       case group(String)
-      case project(PersistentIdentifier)
+      case project(Int64)
     }
 
     var id: ID {

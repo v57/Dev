@@ -1,7 +1,6 @@
 import AppKit
 import ComponentKit
 import DevScreenshots
-import SwiftData
 import SwiftUI
 
 /// Thin host for the project-centric split view: owns the ONE sidebar view
@@ -20,7 +19,7 @@ struct ContentView: View {
   @State private var settingsRequests = 0
   @State private var model = SidebarViewModel()
   /// The demo project a screenshot launch imported: scenes that open a tool come back to it.
-  @State private var demoProject: PersistentIdentifier?
+  @State private var demoProject: Int64?
   @State private var createIcon = CreateIcon()
   @State private var localizationStore = LocalizationStore()
   /// The localize servers the sidebar lists and the server pane reads: one
@@ -320,11 +319,14 @@ struct ContentView: View {
       case "save": Task { await workspace?.save() }
       case "savefile": Task { await localizationStore.save() }
       case "status":
-        let status = workspace?.status
+        let run = workspace?.status
+        let state = run?.state.map { "\($0)" } ?? "-"
+        let progress = run.map { "\($0.done)/\($0.total)" } ?? "-"
+        let catalog = localizationStore.catalogURL?.lastPathComponent ?? "-"
         MainThreadWatchdog.mark(
-          "status loading=\(localizationStore.isLoading) catalog=\(localizationStore.catalogURL?.lastPathComponent ?? "-") "
-            + "workspace=\(workspace != nil) run=\(status.map { "\($0.state.map { "\($0)" } ?? "-") \($0.done)/\($0.total)" } ?? "-")"
-            + " busy=\(StoreWork.shared.isBusy) dirty=\(localizationStore.hasUnsavedChanges)")
+          "status loading=\(localizationStore.isLoading) catalog=\(catalog) workspace=\(workspace != nil) "
+            + "run=\(state) \(progress) rows=\(localizationStore.visibleRows.count) "
+            + "dirty=\(localizationStore.hasUnsavedChanges)")
       default: break
       }
     }

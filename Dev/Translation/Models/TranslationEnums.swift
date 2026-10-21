@@ -12,7 +12,7 @@ import Foundation
 /// Which producer wrote a translation value. `manual` is a human; the rest
 /// are the machine backends plus the imported translation DB. Persisted as
 /// raw values — do not rename.
-enum Provider: String, Codable, CaseIterable {
+nonisolated enum Provider: String, Codable, CaseIterable, Sendable {
   case manual
   /// Retired: Apple Translation. Kept so historical records still decode.
   case apple
@@ -34,7 +34,7 @@ enum Provider: String, Codable, CaseIterable {
 /// App-wide translation state. `empty` = no value yet; `needs_review` =
 /// machine produced the value (never auto-promoted); `reviewed` = a human
 /// confirmed it. Persisted as raw values — do not rename.
-enum TranslationState: String, Codable, CaseIterable {
+nonisolated enum TranslationState: String, Codable, CaseIterable, Sendable {
   case empty
   case needs_review
   case reviewed
@@ -44,7 +44,7 @@ enum TranslationState: String, Codable, CaseIterable {
 
 /// Scope of a ContextDoc: one global document, one per project, one per
 /// language. Persisted as raw values — do not rename.
-enum ContextScope: String, Codable, CaseIterable {
+nonisolated enum ContextScope: String, Codable, CaseIterable, Sendable {
   case global
   case project
   case language
@@ -55,7 +55,7 @@ enum ContextScope: String, Codable, CaseIterable {
 /// Who made a TranslationEdit. Machine edits carry their rationale in
 /// `reason`; the producing backend lives on the record/TM provider at the
 /// time of the edit. Persisted as raw values — do not rename.
-enum Editor: String, Codable, CaseIterable {
+nonisolated enum Editor: String, Codable, CaseIterable, Sendable {
   case human
   case provider
 }

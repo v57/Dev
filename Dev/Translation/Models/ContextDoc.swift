@@ -6,7 +6,6 @@
 //
 
 import Foundation
-import SwiftData
 
 /// A versioned context document the pipeline reads when translating: one
 /// global (identifier nil), one per project (identifier = project's own id),
@@ -14,7 +13,9 @@ import SwiftData
 /// glossary entries, key+comment+value lessons. Growth is fully autonomous
 /// with OVERRIDE authority; every change appends a ContextEdit audit row and
 /// bumps `version` so stale translations become detectable.
-@Model final class ContextDoc {
+nonisolated struct ContextDoc: Hashable, Sendable, Identifiable {
+  /// The row id (assigned by `TranslationData` on insert).
+  var id: Int64
   /// global / project / language.
   var scope: ContextScope
   /// Project id for scope == .project, BCP-47 code for scope == .language,
@@ -29,32 +30,22 @@ import SwiftData
   /// When the document was last changed (version bump included).
   var updatedAt: Date
 
-  // MARK: - relationships
-
-  /// The owning project; set only when scope == .project.
-  var project: Project?
-  /// Audit trail of every change (before -> after + reason + author).
-  ///
-  /// OPTIONAL for the same reason as `Project.records` (read that comment): a
-  /// non-optional array here generates `ContextEdit/contextDoc` as a MANDATORY
-  /// to-one, which is what makes CoreData refuse the store-level
-  /// `context.delete(model: ContextEdit.self)` the clear uses. Read it as
-  /// `doc.edits ?? []`.
-  @Relationship(deleteRule: .cascade, inverse: \ContextEdit.contextDoc)
-  var edits: [ContextEdit]? = []
+  /// The project whose project-scope document this is (`Project.id`); nil for the global and
+  /// language documents.
+  var projectID: Int64?
 
   init(
-    scope: ContextScope, identifier: String? = nil, version: Int = 1,
+    id: Int64, scope: ContextScope, identifier: String? = nil, version: Int = 1,
     content: String = "", createdAt: Date = .now, updatedAt: Date = .now,
-    project: Project? = nil, edits: [ContextEdit] = []
+    projectID: Int64? = nil
   ) {
+    self.id = id
     self.scope = scope
     self.identifier = identifier
     self.version = version
     self.content = content
     self.createdAt = createdAt
     self.updatedAt = updatedAt
-    self.project = project
-    self.edits = edits
+    self.projectID = projectID
   }
 }

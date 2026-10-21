@@ -6,15 +6,33 @@
 //
 
 import Foundation
-import SwiftData
+
+/// A slot's identity inside one project: (key, language, plural category). `category` is ""
+/// for a flat slot, so the triple is a plain dictionary key.
+nonisolated struct SlotKey: Hashable, Sendable {
+  let key: String
+  let language: String
+  let category: String
+
+  init(key: String, language: String, category: String) {
+    self.key = key
+    self.language = language
+    self.category = category
+  }
+
+  init(key: String, language: String, category: String?) {
+    self.init(key: key, language: language, category: category ?? "")
+  }
+}
 
 /// One translation slot: a catalog key in one target language, plus full
 /// provenance (who wrote the current value, against which context versions).
-/// The logical unique key is (key, language) WITHIN a project — two projects
-/// may legitimately hold the same key+language with different values — so
-/// there is deliberately no global DB unique constraint; deduplication is a
-/// project-scoped fetch-first upsert by the reconcile layer.
-@Model final class TranslationRecord {
+/// A VALUE: the store (`TranslationData`) holds the project's records in memory and persists
+/// them in the background, so a change is a copy written back with `TranslationData.upsert`.
+/// Unique per (project, key, language, category) — the database's key.
+nonisolated struct TranslationRecord: Hashable, Sendable {
+  /// The project this slot belongs to (`Project.id`).
+  var projectID: Int64
   /// Catalog key (the .xcstrings dictionary key).
   var key: String
   /// Source-language text for the key at reconcile time.
@@ -92,26 +110,19 @@ import SwiftData
   /// new to learn. nil until a human confirms. Additive with an inline default.
   var reviewed: String? = nil
 
-  // MARK: - relationships
+  /// True when the journal holds an edit for this slot: the mirror's ownership test reads it
+  /// (a record nobody in the app has touched is a passive copy of the file).
+  var hasEdits: Bool = false
 
-  /// The project whose catalog this record was reconciled from.
-  var project: Project?
-  /// Full before->after history — the learning corpus for Stage 0.
-  ///
-  /// OPTIONAL for the same reason as `Project.records` (read that comment): a
-  /// non-optional array here generates `TranslationEdit/record` as a MANDATORY
-  /// to-one, which is what makes CoreData refuse
-  /// `context.delete(model: TranslationEdit.self)` and forces the clear's
-  /// per-row object form. Read it as `record.edits ?? []`.
-  @Relationship(deleteRule: .cascade, inverse: \TranslationEdit.record)
-  var edits: [TranslationEdit]? = []
+  /// The slot's identity inside its project.
+  var slotKey: SlotKey { SlotKey(key: key, language: language, category: category) }
 
   init(
     key: String, sourceText: String, language: String, value: String? = nil,
     provider: Provider? = nil, state: TranslationState = .empty,
     confidence: Double? = nil, contextVersions: ContextVersions = ContextVersions(),
     createdAt: Date = .now, updatedAt: Date = .now, reviewedAt: Date? = nil,
-    lastEditor: String? = nil, project: Project? = nil, edits: [TranslationEdit] = [],
+    lastEditor: String? = nil, projectID: Int64, hasEdits: Bool = false,
     category: String? = nil, autoReviewed: Bool = false,
     note: String? = nil, noteScope: String? = nil, noteFoldedAt: Date? = nil,
     noteFoldedText: String? = nil, maxWidth: Int? = nil,
@@ -138,7 +149,7 @@ import SwiftData
     self.maxWidth = maxWidth
     self.machine = machine
     self.reviewed = reviewed
-    self.project = project
-    self.edits = edits
+    self.projectID = projectID
+    self.hasEdits = hasEdits
   }
 }

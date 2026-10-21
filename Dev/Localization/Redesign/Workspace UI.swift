@@ -808,7 +808,7 @@ extension Translation {
   /// never stopped by that — it keeps its own state and keeps reporting through its own
   /// bar. Nothing here writes the `.xcstrings` (Save is the only writer, 5.8).
   @Observable @MainActor final class Shell {
-    /// The app's one SwiftData context, seen from the redesign.
+    /// The app's translation store, seen from the redesign.
     private let store: Store
     /// The registry every workspace is built through: the cross-project document and the
     /// resident projects.
@@ -839,7 +839,7 @@ extension Translation {
     var error: String?
 
     init() {
-      store = Store(context: TranslationStore.shared.context)
+      store = Store()
     }
 
     /// A shell over a store the caller already holds. The app's own shell is `init()`;
@@ -886,7 +886,12 @@ extension Translation {
     /// used to exist for.
     @discardableResult
     func focus(catalogURL: URL, catalog: StringCatalog) async -> Workspace? {
+      await store.data.start()
       guard let row = try? store.projectRow(id: catalogURL.path) else { return nil }
+      // The project's records, loaded off the main actor the first time: every read below is
+      // a lookup in them.
+      _ = await store.data.loadRecords(project: row.id)
+      store.bind(row.name, to: row.id)
       projects[catalogURL.path] = row.name
       catalogs[catalogURL.path] = catalog
       if let workspace = workspaces[row.name] {
@@ -1049,7 +1054,7 @@ private extension Translation.Run.State {
 /// four pages on live batches — is what the probe drives instead; a preview must not
 /// spend a real call to show it.
 #Preview("Workspace") {
-  let store = Translation.Store(context: TranslationStore.shared.context)
+  let store = Translation.Store()
   let global = try! Translation.Global(store: store)
   let project = try! global.loadProject(id: "Dev")
   Translation.WorkspaceView(workspace: Translation.Workspace(project: project, store: store))

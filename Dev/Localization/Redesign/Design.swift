@@ -8,7 +8,6 @@
 //  behaviour. Semantics are in docs/Translation design notes.md.
 //
 
-import SwiftData
 import SwiftUI
 
 enum Translation {
@@ -419,7 +418,7 @@ enum Translation {
   // MARK: - global
 
   @Observable @MainActor class Global {
-    /// The one store every object below borrows: SwiftData, main actor, sync.
+    /// The one store every object below borrows: in memory, main actor, sync.
     let store: Store
     /// The cross-project document.
     var context: Context
@@ -446,15 +445,9 @@ enum Translation {
     }
     /// Persists the registry (ids and titles) — never a project's rows.
     ///
-    /// The registry IS the app's own `Project` rows: name (the title), catalog URL and
-    /// root URL are what the app already stores, and the redesign deliberately adds no
-    /// table for them (7.2, 10.16). A project that is not open is not resident here, so
-    /// there is nothing of the redesign's own to write — this is the container's flush,
-    /// which is what makes a rename or a newly seen project durable before the next
-    /// open reads it back.
-    func save() throws {
-      try store.context.save()
-    }
+    /// The registry IS the app's own `Project` rows, which the store persists as they are
+    /// written, so there is nothing of the redesign's own left to write here.
+    func save() throws {}
   }
 
   // MARK: - project
@@ -491,23 +484,33 @@ enum Translation {
     private var catalog: StringCatalog?
     /// The machine-write journal the row pass's page reads (`HorizontalTranslate.Journal`).
     ///
-    /// Read from the store ONCE, on first use — the read is a fetch of the whole edit table
-    /// (`HorizontalTranslate.journal(of:)`) — and kept current from then on by the runner's
-    /// write-back (`recordJournal`), which is the only writer of machine edits. Not observed:
-    /// the page takes a copy with the rest of its page models, so a write does not repaint it
-    /// on its own (see `Run.frame`).
+    /// Read from the store ONCE (`loadJournal`, off the main actor, when the workspace opens)
+    /// and kept current from then on by the runner's write-back (`recordJournal`), which is the
+    /// only writer of machine edits — the writes that land before the read are in what it
+    /// reads. Not observed: the page takes a copy with the rest of its page models, so a write
+    /// does not repaint it on its own (see `Run.frame`).
     @ObservationIgnored private var journalCache: HorizontalTranslate.Journal?
+    @ObservationIgnored private var pendingJournal: [HorizontalTranslate.Write] = []
     var journal: HorizontalTranslate.Journal {
-      if let journalCache { return journalCache }
-      let loaded = HorizontalTranslate.Journal(HorizontalTranslate.journal(of: self))
-      journalCache = loaded
-      return loaded
+      journalCache ?? HorizontalTranslate.Journal(pendingJournal)
     }
-    /// Machine writes that just landed, in order. A journal nobody has read yet is left
-    /// unloaded: its first read fetches the store, which already holds these.
+    /// Reads the journal from the store, once.
+    func loadJournal() async {
+      guard journalCache == nil else { return }
+      let loaded = await HorizontalTranslate.journal(of: self)
+      guard journalCache == nil else { return }
+      // Writes recorded while the read ran are in the store already, so the read has them.
+      pendingJournal = []
+      journalCache = HorizontalTranslate.Journal(loaded)
+    }
+    /// Machine writes that just landed, in order.
     func recordJournal(_ writes: [HorizontalTranslate.Write]) {
       guard !writes.isEmpty else { return }
-      journalCache?.append(contentsOf: writes)
+      if journalCache != nil {
+        journalCache?.append(contentsOf: writes)
+      } else {
+        pendingJournal += writes
+      }
     }
     init(id: String, global: Global) throws {
       self.id = id
@@ -584,19 +587,65 @@ enum Translation {
     func loadData() throws {
       guard let catalog else { return }
       guard data.isEmpty else { return }
+      let built = Self.rows(
+        catalog: catalog, records: try global.store.records(project: id),
+        languages: languages.keys.sorted())
+      adopt(built)
+    }
+
+    /// The same, built OFF the main actor — the open path: every catalog key × every language
+    /// in play is real work on a big catalog.
+    func loadData(catalog: StringCatalog) async throws {
+      self.catalog = catalog
+      loads += 1
+      let load = loads
+      guard data.isEmpty else { return }
       let records = try global.store.records(project: id)
-      let byKey = Dictionary(grouping: records, by: \.key)
+      let languages = languages.keys.sorted()
+      let built = await Task.detached(priority: .userInitiated) {
+        Self.rows(catalog: catalog, records: records, languages: languages)
+      }.value
+      // A newer catalog handed over meanwhile builds its own rows.
+      guard data.isEmpty, load == loads else { return }
+      adopt(built)
+    }
+    /// Bumped by every `loadData(catalog:)`, so only the latest one's rows are adopted.
+    @ObservationIgnored private var loads = 0
+
+    /// Takes a built row set, and starts listening for what moves under it.
+    private func adopt(_ built: (rows: [LocalizationKey], positions: [String: Int])) {
+      data = built.rows
+      rowIndex = built.positions
+      // The stamp a foreign write is read against (`adoptForeignWrites`): from here on, every
+      // key the store writes is noted.
+      loadedAt = .now
+      movedKeys = []
+      if recordObservation == nil, let owner = try? global.store.projectRow(id: id)?.id {
+        recordObservation = global.store.data.observeRecords { [weak self] project, slots in
+          guard let self, project == owner else { return }
+          if slots.isEmpty { self.movedKeys = nil } else { self.movedKeys?.formUnion(slots.map(\.key)) }
+        }
+      }
+    }
+
+    /// The keys the store wrote since the rows were built (nil: the whole project moved), for
+    /// `adoptForeignWrites`.
+    @ObservationIgnored private var movedKeys: Set<String>? = []
+    @ObservationIgnored private var recordObservation: ObservationToken?
+
+    /// One row per CATALOG key, sorted by key — PURE, so the open path builds them off the
+    /// main actor.
+    nonisolated private static func rows(
+      catalog: StringCatalog, records: ProjectRecords, languages: [String]
+    ) -> (rows: [LocalizationKey], positions: [String: Int]) {
       var rows: [LocalizationKey] = []
       var positions: [String: Int] = [:]
+      rows.reserveCapacity(catalog.strings.count)
       for key in catalog.strings.keys.sorted() {
         positions[key] = rows.count
-        rows.append(row(key: key, records: byKey[key] ?? [], catalog: catalog))
+        rows.append(row(key: key, records: records.records(key: key), catalog: catalog, languages: languages))
       }
-      data = rows
-      rowIndex = positions
-      // The stamp a foreign write is read against (`adoptForeignWrites`): the moment the
-      // snapshot above was taken.
-      loadedAt = .now
+      return (rows, positions)
     }
 
     /// Adopts the store's own version of every slot whose RECORDS moved after this session
@@ -626,9 +675,12 @@ enum Translation {
     @discardableResult
     func adoptForeignWrites() throws -> Int {
       let records = try global.store.records(project: id)
-      let byKey = Dictionary(grouping: records, by: \.key)
+      // Only the keys the store wrote since the rows were built can differ from them.
+      let moved = movedKeys ?? Set(records.keys)
+      movedKeys = []
       var adopted = 0
-      for (key, ofKey) in byKey {
+      for key in moved {
+        let ofKey = records.records(key: key)
         guard let row = rowIndex[key], data.indices.contains(row) else { continue }
         for (language, ofLanguage) in Dictionary(grouping: ofKey, by: \.language) {
           let ofLanguage = Self.records(ofLanguage, shapedBy: catalog, key: key, language: language)
@@ -636,7 +688,7 @@ enum Translation {
             let at = data[row].index(of: language)
           else { continue }
           let current = data[row].targets[at]
-          var stored = slot(language: language, records: ofLanguage)
+          var stored = Self.slot(language: language, records: ofLanguage)
           guard stored.target != current.target || stored.status != current.status else {
             continue  // the session already says what the store says
           }
@@ -665,18 +717,18 @@ enum Translation {
     /// the store holds records for the pair they ARE the slot; where it holds none the slot
     /// is the artifact's own. `maxWidth` is key-scoped in the store — every record of the key
     /// carries the same guideline — so taking the first non-nil one is exact, not a guess.
-    private func row(
-      key: String, records: [TranslationRecord], catalog: StringCatalog
+    nonisolated private static func row(
+      key: String, records: [TranslationRecord], catalog: StringCatalog, languages: [String]
     ) -> LocalizationKey {
       let translatable = catalog.entry(for: key)?.shouldTranslate != false
       let byLanguage = Dictionary(grouping: records, by: \.language)
       var targets: [LocalizationString] = []
-      for language in languages.keys.sorted() {
+      for language in languages {
         var slot: LocalizationString
         if let ofLanguage = byLanguage[language].map({
           Self.records($0, shapedBy: catalog, key: key, language: language)
         }), !ofLanguage.isEmpty {
-          slot = self.slot(language: language, records: ofLanguage)
+          slot = Self.slot(language: language, records: ofLanguage)
         } else {
           slot = Self.slot(language: language, key: key, catalog: catalog)
         }
@@ -709,7 +761,7 @@ enum Translation {
     /// than one form's text, because the prompt and the write-back both read the whole set —
     /// and a source the file has no unit for reads as the key, which is what the artifact
     /// itself shows (4.3).
-    private static func source(of key: String, in catalog: StringCatalog) -> StringBody {
+    nonisolated private static func source(of key: String, in catalog: StringCatalog) -> StringBody {
       guard catalog.hasPlurals(for: key, language: catalog.sourceLanguage) else {
         return .value(catalog.sourceDisplay(for: key))
       }
@@ -732,7 +784,7 @@ enum Translation {
     /// slot and nobody has confirmed one — which is exactly what makes it WORK like any other
     /// row. The stamp is `.none`: no document was in play when the file was written, so a
     /// document that exists marks the slot stale (3.4).
-    private static func slot(
+    nonisolated private static func slot(
       language: String, key: String, catalog: StringCatalog
     ) -> LocalizationString {
       var slot = LocalizationString(language: language)
@@ -759,7 +811,7 @@ enum Translation {
     /// forms are read as one: the `other` form's state when the file states one, else the
     /// first state any form carries, in category order so the answer never depends on a
     /// Dictionary's iteration order. A node that states none leaves the status to the value.
-    private static func state(of units: [String: StringCatalog.StringUnit]) -> String? {
+    nonisolated private static func state(of units: [String: StringCatalog.StringUnit]) -> String? {
       if let other = units["other"]?.state { return other }
       return units.keys.sorted().compactMap { units[$0]?.state }.first
     }
@@ -779,7 +831,7 @@ enum Translation {
     /// nothing but a human produces `.verified` (2.2). `.imported` is never produced here: it
     /// is app-side knowledge the file cannot carry, and the imported-database resolve is what
     /// writes it (`Workspace.applyImported`, 6.3).
-    private static func status(state: String?, value: StringBody) -> LocalizationString.Status {
+    nonisolated private static func status(state: String?, value: StringBody) -> LocalizationString.Status {
       guard !value.isEmpty else { return .needsTranslate }
       switch state {
       case "new": return .needsTranslate
@@ -796,7 +848,7 @@ enum Translation {
     /// left behind, and the slot reads flat: projected as plural, the write-back (`apply`)
     /// would clear the flat unit and put the forms back into the file. Empty when the store
     /// holds no flat record for the pair, so the slot is the artifact's own.
-    private static func records(
+    nonisolated private static func records(
       _ records: [TranslationRecord], shapedBy catalog: StringCatalog?, key: String,
       language: String
     ) -> [TranslationRecord] {
@@ -816,7 +868,7 @@ enum Translation {
     /// empty form is exactly the skeleton a prompt asks to be filled (4.3). `machine`
     /// and `reviewed` are parallel plural bodies too, because the store keeps one row
     /// per form for all three of them.
-    private func slot(
+    nonisolated private static func slot(
       language: String, records: [TranslationRecord]
     ) -> LocalizationString {
       let owner = records.first { $0.category == nil } ?? records[0]
@@ -862,7 +914,7 @@ enum Translation {
     /// decision 10.11 — a project-document bump deliberately enqueues nothing (2.3).
     /// What this projection does carry is the INPUT to that comparison: every slot keeps
     /// the stamp it was produced against.
-    private static func status(
+    nonisolated private static func status(
       of records: [TranslationRecord], value: StringBody
     ) -> LocalizationString.Status {
       guard !value.isEmpty, let record = records.first else { return .needsTranslate }
@@ -884,60 +936,76 @@ enum Translation {
     /// confirmation moment (`Reconcile` is the precedent, read and not called) — and this
     /// method lifts only what it can tell for itself: a value that arrived from a human,
     /// and the confirmation a `.verified` slot is.
-    func saveData() throws {
-      guard !data.isEmpty else { return }
-      // ONE save for the whole session, and all-or-nothing. Every write below goes
-      // through WITHOUT saving: each `context.save()` is its own transaction, and this
-      // loop can touch thousands of records — which is why the session save took minutes
-      // on a real project. A throw rolls the batch back instead of leaving a
-      // half-applied session for the next, unrelated save to flush.
+    func saveData() async throws {
+      guard !data.isEmpty, let owner = try global.store.projectRow(id: id)?.id else { return }
+      let rows = data
+      let records = try global.store.records(project: id)
+      let userName = Self.userName
+      // The walk is the whole session — every row × slot × form — so it runs off the main
+      // actor over a snapshot and comes back as the writes to make.
+      let writes = await Task.detached(priority: .userInitiated) {
+        Self.sessionWrites(rows: rows, records: records, projectID: owner, userName: userName)
+      }.value
+      // ONE landing for the whole session, and only over records nobody wrote meanwhile: a
+      // slot the store moved since the snapshot (a run's write-back) keeps the newer writer.
       let store = global.store
-      var committed = false
-      defer { if !committed { store.rollback() } }
-      var records: [RecordKey: TranslationRecord] = [:]
-      for record in try global.store.records(project: id) {
-        records[RecordKey(
-          key: record.key, language: record.language,
-          category: record.category ?? "")] = record
+      let current = try store.records(project: id)
+      var landed: Set<SlotKey> = []
+      for (record, before) in writes.records where current[record.slotKey] == before {
+        try store.upsert(record, saving: false)
+        landed.insert(record.slotKey)
       }
-      for row in data {
+      for edit in writes.edits where landed.contains(edit.slotKey) {
+        try store.append(edit, saving: false)
+      }
+      try store.save()
+    }
+
+    /// What saving the session writes — PURE: every slot whose record does not already say
+    /// what the session says, with the record as it was (nil: none yet), plus the journal
+    /// rows for the values a human settled that MOVED.
+    ///
+    /// The change gate is the same as a document's: a save is a walk of the whole project,
+    /// so a slot that already says exactly what the session says is skipped — and
+    /// `updatedAt` keeps meaning when the slot last MOVED.
+    nonisolated private static func sessionWrites(
+      rows: [LocalizationKey], records: ProjectRecords, projectID: Int64, userName: String
+    ) -> (records: [(TranslationRecord, TranslationRecord?)], edits: [TranslationEdit]) {
+      var writes: [(TranslationRecord, TranslationRecord?)] = []
+      var edits: [TranslationEdit] = []
+      for row in rows {
         for slot in row.targets {
-          for form in Self.forms(of: slot) {
-            let record = try record(for: row, slot: slot, form: form, of: records)
-            // The change gate, for the same reason a document has one: a save is a walk
-            // of the whole project, so a slot that already says exactly what the session
-            // says is skipped — and `updatedAt` keeps meaning when the slot last MOVED.
+          for form in forms(of: slot) {
+            let existing = records[SlotKey(key: row.key, language: slot.language, category: form.category)]
+            var record = existing ?? newRecord(for: row, slot: slot, form: form, projectID: projectID)
             guard !unchanged(form, of: slot, record) else { continue }
             let before = record.value
-            write(form, of: slot, to: record)
-            try store.upsert(record, saving: false)
+            write(form, of: slot, to: &record, userName: userName)
+            writes.append((record, existing))
             // The journal, which is the learning corpus (7.2, 2.5). The ONE edit
             // recorded here is a value a human settled that MOVED: a machine write-back
             // journals itself at the run's write-back, a pure confirmation records
             // nothing (the model agreeing with the human is not a lesson), and the
             // imported resolve is not a lesson about our model at all (6.3).
             if slot.status == .verified, before != record.value {
-              try store.append(
-                TranslationEdit(
-                  record: record,
-                  fromValue: before,
-                  toValue: record.value ?? "",
-                  editor: .human,
-                  reason: "Confirmed in review: the human's value replaced the stored one",
-                  contextVersions: Store.persistable(slot.versions),
-                  isUserConfirmed: true),
-                saving: false)
+              edits.append(TranslationEdit(
+                record: record,
+                fromValue: before,
+                toValue: record.value ?? "",
+                editor: .human,
+                reason: "Confirmed in review: the human's value replaced the stored one",
+                contextVersions: Store.persistable(slot.versions),
+                isUserConfirmed: true))
             }
           }
         }
       }
-      try store.save()
-      committed = true
+      return (writes, edits)
     }
     /// True when the record already carries exactly what the session says, so writing it
     /// again would be a no-op with a side effect. The mirror of `write(_:of:to:)`: every
     /// field that write sets is compared here, and the two have to agree.
-    private func unchanged(
+    nonisolated private static func unchanged(
       _ form: Form, of slot: LocalizationString, _ record: TranslationRecord
     ) -> Bool {
       let value = form.value.isEmpty ? nil : form.value
@@ -955,15 +1023,8 @@ enum Translation {
       case .stale, .ignore: return true
       }
     }
-    /// A slot's identity in the store: the model's own triple. `Runner` has the same
-    /// three fields for the same reason — a plural slot's forms ARE separate records.
-    private struct RecordKey: Hashable {
-      let key: String
-      let language: String
-      let category: String
-    }
     /// One form of a slot, as the store keeps it.
-    private struct Form {
+    nonisolated private struct Form: Sendable {
       let category: String?
       let value: String
       let machine: String
@@ -972,7 +1033,7 @@ enum Translation {
     /// The forms one slot writes: one record with no category for a flat value, one per
     /// category for a plural one. The bodies are read per form, so a slot's three bodies
     /// stay parallel exactly as they were projected.
-    private static func forms(of slot: LocalizationString) -> [Form] {
+    nonisolated private static func forms(of slot: LocalizationString) -> [Form] {
       switch slot.target {
       case .value(let text):
         return [
@@ -992,32 +1053,26 @@ enum Translation {
     }
     /// One form of a body as text: a flat body is its whole text, a plural body answers
     /// with the form the rule names (empty when it does not carry it).
-    private static func form(_ body: StringBody, _ rule: Plural.Rule) -> String {
+    nonisolated private static func form(_ body: StringBody, _ rule: Plural.Rule) -> String {
       guard case .plural(let plural) = body else { return body.catalogValue }
       return plural.value(for: rule)
     }
-    /// The store's record for one form, or the row the store does not hold yet — a
-    /// language added in this session has no records until its first save. The new
-    /// record carries `.empty` and no value: what the session says is written onto it
-    /// by `write(_:of:to:)`, so nothing here is a second guess at the row's state. Its
-    /// stamp starts as the SENTINEL (all-zero), never three nils: SwiftData on this SDK
-    /// traps re-faulting an all-nil versions row, which is the whole reason the sentinel
-    /// exists (7.3).
-    private func record(
-      for row: LocalizationKey, slot: LocalizationString, form: Form,
-      of records: [RecordKey: TranslationRecord]
-    ) throws -> TranslationRecord {
-      let identity = RecordKey(
-        key: row.key, language: slot.language, category: form.category ?? "")
-      if let record = records[identity] { return record }
-      return TranslationRecord(
+    /// The row the store does not hold yet for one form — a language added in this session
+    /// has no records until its first save. The new record carries `.empty` and no value:
+    /// what the session says is written onto it by `write(_:of:to:)`, so nothing here is a
+    /// second guess at the row's state. Its stamp starts as the SENTINEL (all-zero), never
+    /// three nils (7.3).
+    nonisolated private static func newRecord(
+      for row: LocalizationKey, slot: LocalizationString, form: Form, projectID: Int64
+    ) -> TranslationRecord {
+      TranslationRecord(
         key: row.key,
         sourceText: row.source.catalogValue,
         language: slot.language,
         value: nil,
         state: .empty,
         contextVersions: Store.persistable(.none),
-        project: try global.store.projectRow(id: id),
+        projectID: projectID,
         category: form.category,
         maxWidth: row.maxWidth > 0 ? row.maxWidth : nil)
     }
@@ -1030,7 +1085,9 @@ enum Translation {
     /// vouched for it. A `.verified` slot is a human's: the confirmation moment is
     /// recorded once, and a value that differs from the stored one makes the human the
     /// writer, so no model's confidence stays attached to it.
-    private func write(_ form: Form, of slot: LocalizationString, to record: TranslationRecord) {
+    nonisolated private static func write(
+      _ form: Form, of slot: LocalizationString, to record: inout TranslationRecord, userName: String
+    ) {
       let value = form.value.isEmpty ? nil : form.value
       let authored = record.value != value
       let confirmed = record.state == .reviewed && !record.autoReviewed
@@ -1049,11 +1106,12 @@ enum Translation {
         record.autoReviewed = false
         if authored || !confirmed {
           record.reviewedAt = .now
-          record.lastEditor = Self.userName
+          record.lastEditor = userName
         }
         if authored {
           record.provider = .manual
           record.confidence = nil
+          record.hasEdits = true
         }
       case .imported:
         record.state = .reviewed
@@ -1148,7 +1206,7 @@ enum Translation {
   // MARK: - rows
 
   /// One catalog key and its slots.
-  struct LocalizationKey: Hashable, Identifiable {
+  nonisolated struct LocalizationKey: Hashable, Identifiable, Sendable {
     /// The `strings` dictionary key. This — not the array position — is the
     /// identity the artifact, the imported database and the memory all address.
     let key: String
@@ -1315,7 +1373,7 @@ enum Translation {
   /// treats a plural like any other string, so "reviewed" and "needs translation"
   /// are properties of the (key, language) pair and not of an individual form.
   /// There is deliberately no per-form status map.
-  struct LocalizationString: Hashable, Identifiable {
+  nonisolated struct LocalizationString: Hashable, Identifiable, Sendable {
     var id: String { language }
     let language: String
     /// What the machine produced. Written by prelearn and by the translate
@@ -1360,7 +1418,7 @@ enum Translation {
     var needsMachineTranslate: Bool {
       status == .needsTranslate || status == .stale
     }
-    enum Status {
+    enum Status: Sendable {
       /// The value predates the documents that govern it. Also what the artifact
       /// says when it knows a source changed under a value. App-side knowledge:
       /// we never write `stale` back.
@@ -1385,7 +1443,7 @@ enum Translation {
   }
 
   /// The text of a slot in one language: a flat value, or a plural set.
-  enum StringBody: Hashable {
+  nonisolated enum StringBody: Hashable, Sendable {
     case value(String)
     case plural(Plurals)
     static var empty: StringBody { .value("") }

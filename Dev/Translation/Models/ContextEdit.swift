@@ -6,16 +6,15 @@
 //
 
 import Foundation
-import SwiftData
 
 /// Audit row for every ContextDoc change. The autonomous learning engine
 /// rewrites/extends context with OVERRIDE authority; each such change MUST
 /// write a ContextEdit carrying the model's reason, keeping human-curated
 /// glossary recoverable. Human glossary edits are recorded with
 /// author == .manual.
-@Model final class ContextEdit {
-  /// The context document this edit belongs to.
-  var contextDoc: ContextDoc?
+nonisolated struct ContextEdit: Hashable, Sendable {
+  /// The context document this edit belongs to (`ContextDoc.id`).
+  var docID: Int64
   /// Content before the change; nil when the document was just created.
   var before: String?
   /// Content after the change.
@@ -28,10 +27,10 @@ import SwiftData
   var createdAt: Date
 
   init(
-    contextDoc: ContextDoc? = nil, before: String? = nil, after: String = "",
+    docID: Int64, before: String? = nil, after: String = "",
     reason: String = "", author: Provider = .manual, createdAt: Date = .now
   ) {
-    self.contextDoc = contextDoc
+    self.docID = docID
     self.before = before
     self.after = after
     self.reason = reason

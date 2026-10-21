@@ -7,7 +7,6 @@
 
 import AppKit
 import Foundation
-import SwiftData
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -51,7 +50,7 @@ enum RowFilter: String, CaseIterable, Identifiable {
 // MARK: - Row model
 
 /// One table row = one catalog key, with override-aware display values.
-struct CatalogRow: Identifiable {
+nonisolated struct CatalogRow: Identifiable, Sendable {
   let key: String
   /// shouldTranslate == false keys get a glyph and no editable cells.
   let isTranslatable: Bool
@@ -86,7 +85,7 @@ struct CatalogRow: Identifiable {
 }
 
 /// Display state of one language cell (missing, edited, variation…).
-struct LangCell {
+nonisolated struct LangCell: Sendable {
   let text: String
   /// Parsed file state — display only, never flipped by edits. For plural
   /// cells the aggregate across forms (needs_review wins, then new).
@@ -99,12 +98,13 @@ struct LangCell {
   /// the plural editor instead of the flat TextEditor.
   let hasPlurals: Bool
   let isEditable: Bool
-  /// Live SwiftData record of the (key, language) slot — the cell's dot,
-  /// provenance tooltip and mid-run text read it directly. Nil for
-  /// plural holders (see pluralRecords), device holders and
-  /// non-translatable keys, which reconcile does not model flat.
+  /// The (key, language) slot's record when the row was built — the cell's dot,
+  /// provenance tooltip and mid-run text read it. The row is rebuilt when the
+  /// record moves (`LocalizationStore.recordsChanged`). Nil for plural holders
+  /// (see pluralRecords), device holders and non-translatable keys, which
+  /// reconcile does not model flat.
   let record: TranslationRecord?
-  /// Live per-form records (category -> record) for plural slots; empty for
+  /// Per-form records (category -> record) for plural slots; empty for
   /// flat cells. Each form is a full translation slot with its own value,
   /// state and provenance.
   let pluralRecords: [String: TranslationRecord]
@@ -406,7 +406,13 @@ final class LocalizationStore {
 
   init() {
     Self.retained = self
+    recordObservation = TranslationData.shared.observeRecords { [weak self] project, slots in
+      self?.recordsChanged(project: project, slots: slots)
+    }
   }
+
+  /// The subscription to the store's record changes (`recordsChanged`).
+  @ObservationIgnored private var recordObservation: ObservationToken?
 
   // MARK: in-memory edits
 
@@ -555,30 +561,21 @@ final class LocalizationStore {
       selectedLanguages.append(codes[0])
     }
     buildRows()
-    let projectID = project.persistentModelID
+    let projectID = project.id
     isAddingLanguage = true
-    // The seeding is bulk store work (one insert per slot per language), so it goes through
-    // the app's ONE queue: it must not race a whole-catalog mirror for the same slots, and
-    // the load path may well have one in flight behind the pane.
+    let data = TranslationData.shared
     Task {
-      let result = await StoreWork.shared.enqueue {
-        await Reconcile.addLanguages(
-          codes, catalog: catalog, projectID: projectID,
-          in: TranslationStore.container)
-      }
+      let base = await data.loadRecords(project: projectID)
+      let generation = data.generation(project: projectID)
+      let seeded = await Task.detached(priority: .userInitiated) {
+        var plan = Reconcile.MirrorPlan(records: base)
+        let seed = Reconcile.seedLanguages(codes, catalog: catalog, projectID: projectID, existing: base)
+        for record in seed.records { plan.put(record) }
+        return (plan, seed.outcome)
+      }.value
+      Reconcile.apply(seeded.0, projectID: projectID, base: base, generation: generation)
       isAddingLanguage = false
-      switch result {
-      case .success(let outcome):
-        note("Added \(codes.count) language(s): \(outcome.inserted) slot(s) ready to translate")
-        // Another catalog may have been opened while the pass ran: its rows are
-        // not this project's. The records it seeded are durable either way, and
-        // the next open/adopt picks them up.
-        guard self.project?.persistentModelID == projectID else { return }
-        rebuildRecordIndex()
-        buildRows()
-      case .failure(let error):
-        saveError = "Couldn't add \(codes.count) language(s): \(error.localizedDescription)"
-      }
+      note("Added \(codes.count) language(s): \(seeded.1.inserted) slot(s) ready to translate")
     }
   }
 
@@ -612,11 +609,6 @@ final class LocalizationStore {
 
   // MARK: - SwiftData working store (records)
 
-  /// Live SwiftData records of the open project, indexed (key, language,
-  /// form-or-flat). Rebuilt on every reconcile (open/reload); record objects
-  /// are mutated in place by edits and pipeline runs, so the refs stay
-  /// valid. The "" form key is the flat slot; named keys are plural forms.
-  private var recordIndex: [String: [String: [String: TranslationRecord]]] = [:]
 
   /// Drives Scan Strings — live progress, cancel, the finished report and
   /// the merge it proposes. One instance per store, so the toolbar button
@@ -703,7 +695,6 @@ final class LocalizationStore {
     if let keys {
       refreshKeys(keys)
     } else {
-      rebuildRecordIndex()
       buildRows()
     }
     markDirty()
@@ -737,11 +728,9 @@ final class LocalizationStore {
   func removePlurals(key: String) {
     guard var catalog, let project else { return }
     catalog.removePlurals(key: key)
-    let context = TranslationStore.shared.context
-    for record in Reconcile.records(ofKey: key, in: project) where record.category != nil {
-      context.delete(record)
-    }
-    try? context.save()
+    TranslationData.shared.delete(
+      project: project.id,
+      slots: Reconcile.records(ofKey: key, in: project).filter { $0.category != nil }.map(\.slotKey))
     self.catalog = catalog
     saveError = nil
     markDirty()
@@ -762,11 +751,8 @@ final class LocalizationStore {
     entry.shouldTranslate = translatable ? nil : false
     catalog.strings[key] = entry
     if !translatable {
-      let context = TranslationStore.shared.context
-      for record in Reconcile.records(ofKey: key, in: project) {
-        context.delete(record)
-      }
-      try? context.save()
+      TranslationData.shared.delete(
+        project: project.id, slots: Reconcile.records(ofKey: key, in: project).map(\.slotKey))
     }
     self.catalog = catalog
     saveError = nil
@@ -779,8 +765,7 @@ final class LocalizationStore {
   /// to the artifact. Empty slots are left untouched.
   func setRowState(_ key: String, _ state: TranslationState) {
     guard let project else { return }
-    let context = TranslationStore.shared.context
-    Reconcile.applyReviewState(key: key, state: state, project: project, context: context)
+    Reconcile.applyReviewState(key: key, state: state, project: project)
     saveRow(key)
   }
 
@@ -788,8 +773,7 @@ final class LocalizationStore {
   /// `needs_review`: the inspector's per-language review.
   func setCellState(_ key: String, language: String, _ state: TranslationState) {
     guard let project else { return }
-    let context = TranslationStore.shared.context
-    Reconcile.applyReviewState(key: key, state: state, project: project, context: context, language: language)
+    Reconcile.applyReviewState(key: key, state: state, project: project, language: language)
     saveRow(key)
   }
 
@@ -809,7 +793,7 @@ final class LocalizationStore {
   /// across every record of the key, so the first one that carries one is
   /// authoritative). Empty text + `.project` when the row has no note.
   func note(for key: String) -> (text: String, scope: Reconcile.NoteScope) {
-    let all = recordIndex[key]?.values.flatMap { $0.values } ?? []
+    let all = currentRecords.records(key: key)
     guard let record = all.first(where: { $0.note?.isBlankOrEmpty == false }) else {
       return ("", .project)
     }
@@ -821,28 +805,24 @@ final class LocalizationStore {
   /// DB. No catalog write: the note is app-local metadata.
   func setNote(key: String, note: String, scope: Reconcile.NoteScope) {
     guard let project else { return }
-    let context = TranslationStore.shared.context
-    Reconcile.applyNote(
-      key: key, note: note, scope: scope, project: project, context: context)
+    Reconcile.applyNote(key: key, note: note, scope: scope, project: project)
     refreshKeys([key])
   }
 
   /// The project context body — the human-authored rule set the translator
   /// follows (prompt rule 4: context sections are authoritative).
-  var projectContextText: String { project?.contextDoc?.content ?? "" }
+  var projectContextText: String { project.flatMap(Reconcile.projectDoc(of:))?.content ?? "" }
 
   /// Saves the hand-edited project context (audit + one version bump; a no-op
   /// when unchanged).
   func setProjectContext(_ text: String) {
     guard let project else { return }
-    let context = TranslationStore.shared.context
-    Reconcile.applyProjectDoc(content: text, project: project, context: context)
+    Reconcile.applyProjectDoc(content: text, project: project)
   }
 
   /// The row's max-width guideline (nil = none), read from the live records.
   func maxWidth(for key: String) -> Int? {
-    let all = recordIndex[key]?.values.flatMap { $0.values } ?? []
-    return all.compactMap(\.maxWidth).first
+    currentRecords.records(key: key).compactMap(\.maxWidth).first
   }
 
   /// Sets (nil clears) the row's max-width guideline across every record of
@@ -850,9 +830,7 @@ final class LocalizationStore {
   /// app-local metadata, and Save stays the only catalog writer.
   func setMaxWidth(key: String, width: Int?) {
     guard let project else { return }
-    Reconcile.applyMaxWidth(
-      key: key, width: width, project: project,
-      context: TranslationStore.shared.context)
+    Reconcile.applyMaxWidth(key: key, width: width, project: project)
     refreshKeys([key])
   }
 
@@ -878,20 +856,19 @@ final class LocalizationStore {
           let value = record.value,
           !value.isBlankOrEmpty
     else { return false }
-    let context = TranslationStore.shared.context
+    var record = record
     record.autoReviewed = false
     record.reviewedAt = .now
     record.updatedAt = .now
+    TranslationData.shared.upsert(record)
     // Gold is gold: the human vouched for this (sourceText, target) triple.
     Reconcile.upsertGoldMemory(
-      in: context,
       sourceText: record.sourceText,
       sourceLanguage: catalog.sourceLanguage,
       targetLanguage: record.language,
       value: value,
       contextVersions: Reconcile.persistableVersions(record.contextVersions),
       projectTag: project.name)
-    try? context.save()
     return true
   }
 
@@ -945,11 +922,10 @@ final class LocalizationStore {
   /// via pluralValue(for:language:category:).
   func value(for key: String, language: String) -> String {
     if let override = valueOverrides[key]?[language] { return override }
-    // Working-store value first: pipeline fills land in the DB record
-    // mid-run and only reach the .xcstrings file at the end-of-run commit,
-    // so cells must read the record (not the parsed file) to update as the
-    // run writes them.
-    if let record = recordIndex[key]?[language]?[""],
+    // Working-store value first: pipeline fills land in the record mid-run and only
+    // reach the .xcstrings file when a run publishes, so cells must read the record (not
+    // the parsed file) to update as the run writes them.
+    if let record = currentRecords[SlotKey(key: key, language: language, category: "")],
        let recordValue = record.value,
        !recordValue.isBlankOrEmpty {
       return recordValue
@@ -958,67 +934,24 @@ final class LocalizationStore {
   }
 
   /// Live value of one plural form: per-form record first (mid-run fills),
-  /// else the parsed file, else the source form (AI/reference context).
+  /// else the parsed file.
   func pluralValue(for key: String, language: String, category: String) -> String {
-    if let record = recordIndex[key]?[language]?[category],
-       let recordValue = record.value,
-       !recordValue.isBlankOrEmpty {
-      return recordValue
-    }
-    return catalog?.pluralValue(for: key, language: language, category: category) ?? ""
+    rowBuilder?.pluralValue(key: key, language: language, category: category) ?? ""
   }
 
-  /// Live per-form records for a plural slot (category -> record).
+  /// Per-form records for a plural slot (category -> record).
   func pluralRecords(for key: String, language: String) -> [String: TranslationRecord] {
-    recordIndex[key]?[language]?.filter { $0.key != "" } ?? [:]
-  }
-
-  /// Parsed aggregate state across a plural slot's forms (needs_review wins,
-  /// then new, then translated) — display only, never flipped by edits.
-  func pluralAggregateState(for key: String, language: String) -> String? {
-    guard let catalog else { return nil }
-    let categories = PluralRules.categories(for: language)
-    var seen: [String] = []
-    for category in categories {
-      if let state = catalog.pluralState(for: key, language: language, category: category),
-         !seen.contains(state) {
-        seen.append(state)
-      }
-      if let record = recordIndex[key]?[language]?[category],
-         record.value != nil {
-        // A DB-owned form carries a live state even when the file has no
-        // unit yet — map it back to the file vocabulary for the dot.
-        let mapped = record.state == .reviewed ? "translated"
-          : record.state == .empty ? nil : "needs_review"
-        if let mapped, !seen.contains(mapped) {
-          seen.append(mapped)
-        }
-      }
-    }
-    if seen.contains("needs_review") { return "needs_review" }
-    if seen.contains("new") { return "new" }
-    return seen.first
+    rowBuilder?.pluralRecords(key: key, language: language) ?? [:]
   }
 
   /// One-line plural summary for a cell ("one: 1 file / other: %d files").
   func pluralSummary(for key: String, language: String) -> String {
-    let categories = PluralRules.categories(for: language)
-    let parts = categories.map { category in
-      "\(category): \(pluralValue(for: key, language: language, category: category))"
-    }
-    return parts.joined(separator: " / ")
+    rowBuilder?.pluralSummary(key: key, language: language) ?? ""
   }
 
   /// Source plural summary ("one: … / other: …"), empty for flat keys.
-  /// Live: human source-form edits write straight to the file, so the parsed
-  /// source forms ARE the current values.
   func sourcePluralSummary(for key: String) -> String {
-    guard let catalog, catalog.hasPlurals(for: key, language: catalog.sourceLanguage) else { return "" }
-    let categories = PluralRules.categories(for: catalog.sourceLanguage)
-    let parts = categories.map { category in
-      "\(category): \(catalog.sourcePluralDisplay(for: key, category: category))"
-    }
-    return parts.joined(separator: " / ")
+    rowBuilder?.sourcePluralSummary(key: key) ?? ""
   }
 
   /// Source reference text for one target form ("Source one: 1 file"):
@@ -1088,20 +1021,19 @@ final class LocalizationStore {
       markDirty()
       return
     }
-    let context = TranslationStore.shared.context
     let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
     if trimmed.isEmpty {
       // Clear: drop the file unit, mark the form record empty (keeps its
       // provenance history for Stage 0 to ignore — empty forms learn nothing).
       catalog.setPluralValue("", state: nil, key: key, language: language, category: category)
-      if let record = Reconcile.record(key: key, language: language, category: category, in: project) {
+      if var record = Reconcile.record(key: key, language: language, category: category, in: project) {
         record.value = nil
         record.state = .empty
         record.provider = nil
         record.confidence = nil
         record.reviewedAt = nil
         record.updatedAt = .now
-        try? context.save()
+        TranslationData.shared.upsert(record)
       }
       self.catalog = catalog
       saveError = nil
@@ -1112,8 +1044,7 @@ final class LocalizationStore {
     let sourceText = catalog.sourcePluralDisplay(for: key, category: category)
     Reconcile.applyHumanEdit(
       key: key, language: language, value: trimmed,
-      sourceText: sourceText, project: project, context: context,
-      category: category)
+      sourceText: sourceText, project: project, category: category)
     saveRow(key)
   }
 
@@ -1147,11 +1078,10 @@ final class LocalizationStore {
       saveError = "No catalog open"
       return
     }
-    let context = TranslationStore.shared.context
     let sourceText = catalog.sourceDisplay(for: key)
     Reconcile.applyHumanEdit(
       key: key, language: language, value: text,
-      sourceText: sourceText, project: project, context: context)
+      sourceText: sourceText, project: project)
     saveRow(key)
   }
 
@@ -1394,9 +1324,10 @@ final class LocalizationStore {
     addedLanguages = []
     // A blank catalog has no values to disagree about, so it never asks: it is opened at
     // once and its (empty) mirror goes to the queue behind the pane like any other load.
-    let project = Reconcile.ensureProject(catalogURL: url, in: TranslationStore.shared.context)
+    await TranslationData.shared.start()
+    let project = Reconcile.ensureProject(catalogURL: url)
+    _ = await TranslationData.shared.loadRecords(project: project.id)
     adopt(blank, project: project, url: url)
-    submitMirror(blank, url: url, generation: loadGeneration, policy: .appWins)
     scan.begin(store: self, root: scanRoot)
     return true
   }
@@ -1461,16 +1392,14 @@ final class LocalizationStore {
 
   /// Full (re)load: parse + reset everything. Used by Open….
   /// No language is selected by default; the user picks via the buttons.
-  /// The decode runs off the main actor and the pane is opened in ONE main-actor
-  /// step afterwards, so it never shows a half-opened catalog; the mirror into
-  /// SwiftData is submitted behind it (`openCatalog`) and lands later.
+  /// Every step of the load runs off the main actor — the parse, the project's records, the
+  /// scans, the mirror and the rows — and the pane is opened in ONE main-actor step at the
+  /// end, so it never shows a half-opened catalog and never waits on the main thread.
   private func performOpen(_ url: URL) async {
     loadGeneration += 1
     let generation = loadGeneration
     pendingLoad = generation
-    CatalogFileIO.flush()
-    // Off the main actor: a real detached decode, not the no-op
-    // `MainActor.run` hop this used to be (see `loadOffMainActor`).
+    await CatalogFileIO.flushed()
     let result = await StringCatalog.loadOffMainActor(url)
     // A newer open/reload supersedes this one — never adopt a stale parse.
     guard generation == loadGeneration else { return }
@@ -1481,13 +1410,10 @@ final class LocalizationStore {
   /// load go through (an open and a reload differ only in what they reset, see
   /// `finishLoad`).
   ///
-  /// Two things stand between the parse and the table, and both are cheap: the DIFFERENCE
-  /// scan (one scoped fetch plus a walk, no writes), and — only when it finds something to
-  /// ask about — the versions prompt, which holds the parse with `pendingLoad` still set so
-  /// a newer open/reload, a close or a store clear takes the question down with the load it
-  /// belongs to. The MIRROR is not one of them: it is submitted behind the pane
-  /// (`openCatalog`), because it is seconds of inserts on a big catalog and the table does
-  /// not need a single one of them to be usable.
+  /// One thing stands between the parse and the table: the DIFFERENCE scan — and, only
+  /// when it finds something to ask about, the versions prompt, which holds the parse with
+  /// `pendingLoad` still set so a newer open/reload, a close or a store clear takes the
+  /// question down with the load it belongs to.
   private func land(
     _ result: Result<StringCatalog, Error>,
     url: URL,
@@ -1496,10 +1422,12 @@ final class LocalizationStore {
   ) async {
     switch result {
     case .success(let catalog):
-      let differences = await Reconcile.detectDifferences(
-        catalog, catalogURL: url, in: TranslationStore.container)
-      // The scan is a fetch: a newer open/reload may have started and finished in the
-      // meantime, so re-check before this one takes over the pane.
+      let data = TranslationData.shared
+      await data.start()
+      let project = Reconcile.ensureProject(catalogURL: url)
+      let records = await data.loadRecords(project: project.id)
+      // A newer open/reload may have started and finished in the meantime, so re-check
+      // before this one takes over the pane.
       guard generation == loadGeneration else { return }
       // THE SHAPE PASS, file half: where the file and the records disagree about the SHAPE of a
       // slot (one plural, one flat) and a person stands behind one of them, the REVIEWED side's
@@ -1508,9 +1436,12 @@ final class LocalizationStore {
       // reviewed value decides the shape, either way (a plural slot translated flat, or a flat slot
       // that a person filled form by form, is a slot the two halves of the app would otherwise
       // never agree about).
-      let shapeConflicts = await Reconcile.detectShapeConflicts(
-        catalog, catalogURL: url, in: TranslationStore.container)
+      let scans = await Task.detached(priority: .userInitiated) {
+        (Reconcile.differences(catalog, existing: records),
+         Reconcile.shapeConflicts(catalog, existing: records))
+      }.value
       guard generation == loadGeneration else { return }
+      let (differences, shapeConflicts) = scans
       var parsed = catalog
       var reshaped = false
       for conflict in shapeConflicts where conflict.fileShape != conflict.reviewedShape {
@@ -1545,15 +1476,9 @@ final class LocalizationStore {
     }
   }
 
-  /// Opens a parsed catalog: the pane gets the document and the rows the file already
-  /// describes, and the store catches up behind it.
-  ///
-  /// The project row is find-or-create on the main context (one fetch of the registry), and
-  /// it must NOT wait for the mirror: the pane's rows, the redesign's workspace and a run's
-  /// first read all hang off it. The mirror is then SUBMITTED to the app's one store queue
-  /// (`StoreWork.shared`) instead of awaited — that is the whole point of the split: an open
-  /// that waits for 48,420 inserts is a window that reads "Opening catalog…" while the user
-  /// is looking at a table the artifact could already have filled.
+  /// Opens a parsed catalog: the mirror (file -> records), the document's language top-up and
+  /// the rows are prepared together off the main actor, then the store and the pane take the
+  /// result in one step.
   private func openCatalog(
     _ catalog: StringCatalog,
     url: URL,
@@ -1563,84 +1488,38 @@ final class LocalizationStore {
     shapeConflicts: [Reconcile.ShapeConflict] = [],
     reshaped: Bool = false
   ) async {
-    let context = TranslationStore.shared.context
-    let project = Reconcile.ensureProject(catalogURL: url, in: context)
-    // SAVED before the mirror is submitted, and that is load-bearing: the project row is what
-    // the mirror's own background context finds-or-creates by URL, and a row this context has
-    // only INSERTED is invisible to it — the pass would make a SECOND row for the same file and
-    // write the catalog into that one (found by the probe: 6001 rows and two projects for one
-    // URL). One save of the registry here is cheaper than a reconciliation later.
-    try? context.save()
-    finishLoad(catalog, project: project, url: url, purpose: purpose)
+    let data = TranslationData.shared
+    let project = Reconcile.ensureProject(catalogURL: url)
+    let base = await data.loadRecords(project: project.id)
+    let baseGeneration = data.generation(project: project.id)
+    let added = purpose == .open ? [] : addedLanguages
+    let prepared = await Task.detached(priority: .userInitiated) {
+      let plan = Reconcile.mirror(
+        catalog, projectID: project.id, existing: base, policy: policy,
+        shapeConflicts: shapeConflicts)
+      let document = Self.toppedUp(catalog, with: plan.records)
+      let languages = RowBuilder.languages(catalog: document, records: plan.records, added: added)
+      let built = RowBuilder(
+        catalog: document, records: plan.records, overrides: [:], languages: languages
+      ).build()
+      return (plan: plan, document: document, languages: languages, built: built)
+    }.value
+    guard generation == loadGeneration else { return }
+    Reconcile.apply(prepared.plan, projectID: project.id, base: base, generation: baseGeneration)
+    let stats = prepared.plan.stats
+    NSLog(
+      "[Localization] mirrored %@: %d created, %d refreshed, %d kept, %d differing, %d dropped by shape",
+      url.lastPathComponent, stats.created, stats.refreshed, stats.kept, stats.differing, stats.dropped)
+    finishLoad(prepared.document, project: project, url: url, purpose: purpose)
+    applyRows(
+      languages: prepared.languages, rows: prepared.built.rows, positions: prepared.built.positions,
+      recordGeneration: data.generation(project: project.id))
     // A reshaped document is NOT a fresh parse any more: the pane holds an edit the file does not
     // have (the load changed a slot's shape), so Save is live and the unsaved-changes prompt will
     // say so — `finishLoad`/`adopt` clear the flag for a freshly parsed catalog, and this is the
     // one case where that would be a lie.
     if reshaped { markDirty() }
-    submitMirror(
-      catalog, url: url, generation: generation, policy: policy,
-      shapeConflicts: shapeConflicts)
     if pendingLoad == generation { pendingLoad = nil }
-  }
-
-  /// Hands the whole-catalog mirror to the store queue, to run after whatever bulk work is
-  /// already ahead of it (another catalog's mirror, a plural skeleton, a language seeding —
-  /// they all write the same slots, so they are serial BY the queue).
-  ///
-  /// Nothing waits for this. What it lands with is the store's own rows, and
-  /// `mirrorLanded` is where they become the table's: the badges, the needs-review counts
-  /// and the provenance are the store's readings, so they arrive late rather than keeping
-  /// the pane shut.
-  private func submitMirror(
-    _ catalog: StringCatalog,
-    url: URL,
-    generation: Int,
-    policy: Reconcile.DifferencePolicy,
-    shapeConflicts: [Reconcile.ShapeConflict] = []
-  ) {
-    StoreWork.shared.submit { [weak self] in
-      let result = await Reconcile.mirrorOffMainActor(
-        catalog, catalogURL: url, in: TranslationStore.container, policy: policy,
-        shapeConflicts: shapeConflicts)
-      self?.mirrorLanded(result, url: url, generation: generation)
-    }
-  }
-
-  /// Applies a mirror that landed behind the pane.
-  ///
-  /// The generation guard is the load's own: a mirror submitted for a catalog that is no
-  /// longer the open one (another project, a closed pane) must not rebuild this pane's
-  /// rows. The records are durable either way — they belong to the project row, and the
-  /// next open adopts them with everything else.
-  private func mirrorLanded(
-    _ result: Result<Reconcile.MirrorResult, Error>,
-    url: URL,
-    generation: Int
-  ) {
-    switch result {
-    case .success(let mirror):
-      NSLog(
-        "[Localization] mirrored %@ behind the pane: %d created, %d refreshed, %d kept, "
-          + "%d differing, %d given back, %d re-linked, %d dropped by shape",
-        url.lastPathComponent, mirror.stats.created, mirror.stats.refreshed,
-        mirror.stats.kept, mirror.stats.differing, mirror.reverted, mirror.repaired,
-        mirror.stats.dropped)
-      guard generation == loadGeneration, catalogURL == url else { return }
-      // The mirror wrote on its OWN context, so this one's copies of those rows are stale
-      // — fetch by identity, then re-read the records it wrote (see `rebuildRecordIndex`).
-      let context = TranslationStore.shared.context
-      if let landed = Reconcile.project(id: mirror.projectID, in: context) {
-        project = landed
-      }
-      guard let project else { return }
-      rebuildRecordIndex(from: Reconcile.records(of: project, in: context))
-      buildRows()
-      // The scan's merge preview is a diff against the catalog — keep it current while its
-      // sheet is open.
-      if scan.isPresented { scan.refreshPlan() }
-    case .failure(let error):
-      saveError = "Couldn't save the catalog's records: \(error.localizedDescription)"
-    }
   }
 
   /// Opens a finished, mirrored parse: the view state and the document.
@@ -1664,7 +1543,7 @@ final class LocalizationStore {
       selectedLanguages = []
       addedLanguages = []
     }
-    adopt(catalog, project: project, url: url)
+    adopt(catalog, project: project, url: url, buildsRows: false)
   }
 
   /// Applies a failed parse. An OPEN that failed leaves nothing open — a pane showing
@@ -1676,7 +1555,6 @@ final class LocalizationStore {
     guard purpose == .open else { return }
     catalog = nil
     catalogURL = nil
-    recordIndex = [:]
     rows = []
     visibleRows = []
     isDirty = false
@@ -1700,7 +1578,6 @@ final class LocalizationStore {
     project = nil
     loadError = nil
     saveError = nil
-    recordIndex = [:]
     rows = []
     visibleRows = []
     valueOverrides = [:]
@@ -1735,7 +1612,6 @@ final class LocalizationStore {
   /// in-memory form and Save is its only writer — `rebuildAfterStoreClear`
   /// re-derives the rows from it in the same turn.
   func dropStoreMirror() {
-    recordIndex = [:]
     rows = []
     visibleRows = []
     valueOverrides = [:]
@@ -1778,7 +1654,7 @@ final class LocalizationStore {
     loadGeneration += 1
     let generation = loadGeneration
     pendingLoad = generation
-    CatalogFileIO.flush()
+    await CatalogFileIO.flushed()
     let result = await StringCatalog.loadOffMainActor(url)
     guard generation == loadGeneration else { return }
     switch result {
@@ -1809,7 +1685,7 @@ final class LocalizationStore {
     loadGeneration += 1
     let generation = loadGeneration
     pendingLoad = generation
-    CatalogFileIO.flush()
+    await CatalogFileIO.flushed()
     let result = await StringCatalog.loadOffMainActor(url)
     guard generation == loadGeneration else { return }
     await land(result, url: url, generation: generation, purpose: .reload)
@@ -1889,11 +1765,11 @@ final class LocalizationStore {
       policy: policy, shapeConflicts: held.shapeConflicts, reshaped: held.reshaped)
   }
 
-  /// Opens a catalog that has already been mirrored into the DB: the document,
-  /// the project row the mirror wrote and the rows derived from both. The ONE
-  /// place the store's open state changes, so `catalog`, `catalogURL` and
-  /// `project` are never published half-set.
-  private func adopt(_ catalog: StringCatalog, project: Project?, url: URL) {
+  /// Opens a catalog that has already been mirrored into the store: the document,
+  /// the project row and the rows derived from both. The ONE place the store's open
+  /// state changes, so `catalog`, `catalogURL` and `project` are never published
+  /// half-set. `buildsRows: false` is for a caller that brings rows it built itself.
+  private func adopt(_ catalog: StringCatalog, project: Project?, url: URL, buildsRows: Bool = true) {
     self.catalog = catalog
     catalogURL = url
     valueOverrides = [:]
@@ -1904,18 +1780,7 @@ final class LocalizationStore {
     isUnsavedPromptPresented = false
     loadError = nil
     self.project = project
-    if let project {
-      // ONE query for the records the mirror just wrote: this context is cold,
-      // so the relationship would fault per row (4.2 s for 48k) and this fetch
-      // is what makes the table's cells live (0.6 s).
-      rebuildRecordIndex(from: Reconcile.records(of: project, in: TranslationStore.shared.context))
-    } else {
-      rebuildRecordIndex(from: [])
-    }
-    // The document must name every language the records carry before the rows
-    // are derived from it (see `topUpCatalogLanguages`).
-    topUpCatalogLanguages()
-    buildRows()
+    if buildsRows { buildRows() }
     // The scan's merge preview is a diff against the catalog — keep it
     // current while its sheet is open.
     if scan.isPresented {
@@ -1923,78 +1788,39 @@ final class LocalizationStore {
     }
   }
 
-  /// True while the STORE is still catching up with the pane: the app's one work queue has
-  /// bulk writes to run (a whole-catalog mirror, a plural skeleton, a language seeding).
-  ///
-  /// Nothing the user does with the table waits for this — that is the point of the queue
-  /// — but the operations that need a SETTLED store say so: the clear (7.5) refuses while
-  /// one is running, and a run's own reads are the run's own business (`adoptForeignWrites`
-  /// is how a session picks up what landed behind it).
-  var isSyncing: Bool { StoreWork.shared.isBusy }
+  /// True while the store is still writing a load's mirror behind the pane. With the store in
+  /// memory the mirror lands with the load itself, so nothing waits on this any more.
+  var isSyncing: Bool { false }
 
-  /// Re-mirrors the OPEN catalog into the DB on the main actor and refreshes
-  /// the derived rows — the per-key mutations' path (plural vary/remove,
-  /// don't-translate: `keys` names the one key, so only its slots are upserted
-  /// and only its row is rebuilt) and the scan merge's (new keys anywhere, so
-  /// the whole catalog).
+  /// Re-mirrors the OPEN catalog into the store and refreshes the derived rows — the per-key
+  /// mutations' path (plural vary/remove, don't-translate: `keys` names the one key, so only
+  /// its slots are upserted and only its row is rebuilt) and the scan merge's (new keys
+  /// anywhere: the whole catalog, mirrored off the main actor).
   private func mirrorOpenCatalog(_ catalog: StringCatalog, url: URL, keys: Set<String>? = nil) {
-    let context = TranslationStore.shared.context
     // The open project owns this catalog; a URL that does not match it (a
-    // stale caller) falls back to the find-or-create the mirror path uses.
+    // stale caller) falls back to the find-or-create the load uses.
     let project = (self.project?.catalogURL == url ? self.project : nil)
-      ?? Reconcile.ensureProject(catalogURL: url, in: context)
+      ?? Reconcile.ensureProject(catalogURL: url)
+    self.project = project
+    let data = TranslationData.shared
     if let keys {
-      _ = Reconcile.upsertFromCatalog(
-        catalog, project: project,
-        existing: keys.flatMap { Reconcile.records(ofKey: $0, in: project) },
-        context: context, keys: keys)
-      try? context.save()
-      self.project = project
+      Reconcile.mirror(catalog, project: project, keys: keys)
       refreshKeys(keys)
-    } else {
-      // One scoped fetch for the existing rows and for the membership write
-      // (`liveWriters`): the relationship is not kept warm by anything, and a cold
-      // walk of it is seconds — see `rebuildRecordIndex`.
-      _ = Reconcile.upsertFromCatalog(
-        catalog, project: project, existing: Reconcile.records(of: project, in: context),
-        context: context, liveWriters: true)
-      try? context.save()
-      self.project = project
-      rebuildRecordIndex()
-      buildRows()
+    } else if let base = data.records(project: project.id) {
+      let generation = data.generation(project: project.id)
+      Task {
+        let plan = await Task.detached(priority: .userInitiated) {
+          Reconcile.mirror(catalog, projectID: project.id, existing: base)
+        }.value
+        Reconcile.apply(plan, projectID: project.id, base: base, generation: generation)
+        buildRows()
+      }
     }
     // The scan's merge preview is a diff against the catalog — keep it
     // current while its sheet is open.
     if scan.isPresented {
       scan.refreshPlan()
     }
-  }
-
-  /// Re-indexes the project's live records by (key, language, form) for O(1)
-  /// per-cell lookups — the WHOLE-project rebuild, for the events that touch the
-  /// whole project (a run's results, a language seeding, a scan merge). Row edits
-  /// re-read only their own key (`refreshKeys`).
-  ///
-  /// ONE scoped fetch (`Reconcile.records(of:in:)`), never `project.records`: no
-  /// per-edit path walks the relationship any more, so nothing keeps it warm, and
-  /// a cold walk faults every row one at a time — 4.2 s ON THE MAIN ACTOR for a
-  /// 48,420-record catalog, against ~0.6 s for the fetch.
-  private func rebuildRecordIndex() {
-    guard let project else {
-      recordIndex = [:]
-      return
-    }
-    rebuildRecordIndex(from: Reconcile.records(of: project, in: TranslationStore.shared.context))
-  }
-
-  /// Same, from records the caller already holds.
-  private func rebuildRecordIndex(from records: [TranslationRecord]) {
-    var index: [String: [String: [String: TranslationRecord]]] = [:]
-    index.reserveCapacity(records.count)
-    for record in records {
-      index[record.key, default: [:]][record.language, default: [:]][record.category ?? ""] = record
-    }
-    recordIndex = index
   }
 
   // MARK: - background file I/O
@@ -2063,82 +1889,109 @@ final class LocalizationStore {
     visibleRows = shown.sorted(using: sort)
   }
 
-  /// (Re)builds `rows` from the open catalog — the strings -> rows
-  /// conversion — then re-applies the current filters. Called from
-  /// reconcile (every load) and after every commit/save, so `rows` always
-  /// mirrors the artifact that was just written.
+  /// The project's records as the store holds them now (empty before the project is loaded).
+  private var currentRecords: ProjectRecords {
+    project.flatMap { TranslationData.shared.records(project: $0.id) } ?? ProjectRecords()
+  }
+
+  /// The row builder over the current document, records and overrides.
+  private var rowBuilder: RowBuilder? {
+    catalog.map {
+      RowBuilder(
+        catalog: $0, records: currentRecords, overrides: valueOverrides, languages: browserLanguages)
+    }
+  }
+
+  /// Bumped by every whole-table build; a build that finishes after a newer one started is
+  /// dropped.
+  private var rowsGeneration = 0
+  /// The store generation (`TranslationData.generation`) the rows were last built against: a
+  /// change notification for writes the rows already show needs no rebuild.
+  private var rowsRecordGeneration = -1
+
+  /// (Re)builds `rows` from the open catalog and the project's records, OFF the main thread —
+  /// every key × every language is real work on a big catalog — then re-applies the current
+  /// filters. The rows on screen stay until the new ones land.
   private func buildRows() {
-    browserLanguages = computeBrowserLanguages()
+    rowsGeneration += 1
+    let generation = rowsGeneration
     guard let catalog else {
       rows = []
       visibleRows = []
+      browserLanguages = []
       return
     }
-    var built: [CatalogRow] = []
-    var positions: [String: Int] = [:]
-    built.reserveCapacity(catalog.strings.count)
-    positions.reserveCapacity(catalog.strings.count)
-    for (key, entry) in catalog.strings {
-      positions[key] = built.count
-      built.append(makeRow(catalog: catalog, key: key, entry: entry))
+    let records = currentRecords
+    let recordGeneration = project.map { TranslationData.shared.generation(project: $0.id) } ?? -1
+    let overrides = valueOverrides
+    let added = addedLanguages
+    Task {
+      let built = await Task.detached(priority: .userInitiated) {
+        let languages = RowBuilder.languages(catalog: catalog, records: records, added: added)
+        let builder = RowBuilder(
+          catalog: catalog, records: records, overrides: overrides, languages: languages)
+        return (languages, builder.build())
+      }.value
+      guard generation == rowsGeneration else { return }
+      applyRows(languages: built.0, rows: built.1.rows, positions: built.1.positions,
+                recordGeneration: recordGeneration)
     }
-    rows = built
+  }
+
+  /// Puts a finished build on screen.
+  private func applyRows(
+    languages: [String], rows: [CatalogRow], positions: [String: Int], recordGeneration: Int
+  ) {
+    browserLanguages = languages
+    browserLanguageSet = Set(languages)
+    self.rows = rows
     rowPositions = positions
+    rowsRecordGeneration = recordGeneration
     recomputeVisibleRows()
   }
+
+  /// `browserLanguages` as a set, for the per-change "is this a new language" check.
+  private var browserLanguageSet: Set<String> = []
 
   /// key -> its position in `rows`, kept by `buildRows` for the row-scoped rebuild.
   private var rowPositions: [String: Int] = [:]
 
-  /// Rebuilds ONLY the rows of `keys` — an edit touches one row, and rebuilding every row
-  /// of the catalog for it (every language cell, every search haystack folded again) was
-  /// most of what an edit cost on a big catalog. Falls back to `buildRows` whenever the
-  /// shape around the rows moved: the browser's language set (a cell per language), or a
-  /// key the rows do not have yet or that the catalog no longer has.
+  /// Rebuilds ONLY the rows of `keys`, in place — an edit touches one row, and rebuilding
+  /// every row of the catalog for it is not an edit's cost. Falls back to a whole build when
+  /// the shape around the rows moved: a key the rows do not have yet or that the catalog no
+  /// longer has.
   private func rebuildRows(_ keys: Set<String>) {
-    guard let catalog, !rows.isEmpty else { return buildRows() }
-    let languages = computeBrowserLanguages()
-    guard languages == browserLanguages else { return buildRows() }
+    guard let builder = rowBuilder, !rows.isEmpty else { return buildRows() }
     for key in keys {
-      guard let entry = catalog.strings[key], let position = rowPositions[key],
+      guard let entry = builder.catalog.strings[key], let position = rowPositions[key],
         rows.indices.contains(position), rows[position].key == key
       else { return buildRows() }
-      rows[position] = makeRow(catalog: catalog, key: key, entry: entry)
+      rows[position] = builder.row(key: key, entry: entry)
     }
     recomputeVisibleRows()
   }
 
-  /// Re-reads `keys`' records into the index (one scoped fetch per key — an edit may have
-  /// created a record, and a run may have written one meanwhile), then rebuilds their rows.
+  /// The rows of `keys` again — their records may have moved (an edit, a run's write-back).
   private func refreshKeys(_ keys: Set<String>) {
-    guard let project else { return rebuildRows(keys) }
-    for key in keys {
-      var byLanguage: [String: [String: TranslationRecord]] = [:]
-      for record in Reconcile.records(ofKey: key, in: project) {
-        byLanguage[record.language, default: [:]][record.category ?? ""] = record
-      }
-      recordIndex[key] = byLanguage.isEmpty ? nil : byLanguage
+    rebuildRows(keys)
+  }
+
+  /// What the store's change stream says moved: the rows of those keys are rebuilt (a whole
+  /// build for a large change, a new language, or a whole-project change).
+  private func recordsChanged(project changed: Int64, slots: Set<SlotKey>) {
+    guard let project, project.id == changed, catalog != nil else { return }
+    // Writes the rows were already built with (this store's own mirror, say) need nothing.
+    guard TranslationData.shared.generation(project: changed) != rowsRecordGeneration else { return }
+    let keys = Set(slots.map(\.key))
+    if slots.isEmpty || keys.count > 200
+      || slots.contains(where: { !browserLanguageSet.contains($0.language) }) {
+      buildRows()
+      return
     }
     rebuildRows(keys)
   }
 
-  /// Recomputes `browserLanguages`: the open catalog's codes, the languages
-  /// added in this window, and the ones this project's records carry (an
-  /// added language lives in the DB before the file knows it — see
-  /// `addLanguage`). Sorted, source excluded.
-  private func computeBrowserLanguages() -> [String] {
-    var seen = Set(catalog?.languages ?? [])
-    seen.formUnion(addedLanguages)
-    for byLanguage in recordIndex.values {
-      seen.formUnion(byLanguage.keys)
-    }
-    if let source = catalog?.sourceLanguage {
-      seen.remove(source)
-    }
-    return seen.sorted()
-  }
-
-  /// Gives the open document every language this project's records carry.
+  /// Gives a document every language `records` carry.
   ///
   /// A language added in an earlier session is in the RECORDS only (its empty
   /// file nodes are pruned on save), while the engine's own language list —
@@ -2147,36 +2000,207 @@ final class LocalizationStore {
   /// from disagreeing: a whole-catalog run varies plural keys for every
   /// language the catalog names, so an added language missing from the
   /// document would silently get no plural forms at all.
-  private func topUpCatalogLanguages() {
-    guard let catalog else { return }
+  nonisolated private static func toppedUp(_ catalog: StringCatalog, with records: ProjectRecords) -> StringCatalog {
     let known = Set(catalog.languages)
-    var missing = Set<String>()
-    for byLanguage in recordIndex.values {
-      for language in byLanguage.keys where !known.contains(language) {
-        missing.insert(language)
-      }
-    }
-    guard !missing.isEmpty else { return }
+    let missing = records.languages.subtracting(known)
+    guard !missing.isEmpty else { return catalog }
     var updated = catalog
     for language in missing.sorted() {
       updated.addLanguage(language)
     }
-    self.catalog = updated
+    return updated
   }
 
-  private func makeRow(
-    catalog: StringCatalog,
-    key: String,
-    entry: StringCatalog.Entry
-  ) -> CatalogRow {
+  /// Filter across the VISIBLE non-source language columns only: a key
+  /// matches when the chosen state occurs in at least one SELECTED column.
+  /// `cells` now holds every language, so the match is scoped to
+  /// `selectedLanguages` — a hidden language never drives the filters.
+  private func matchesFilter(_ row: CatalogRow) -> Bool {
+    switch filter {
+    case .all:
+      return true
+    case .needsReview:
+      return selectedLanguages.contains { row.cells[$0]?.state == "needs_review" }
+    case .missing:
+      return selectedLanguages.contains { row.cells[$0]?.isMissing == true }
+    case .translated:
+      return selectedLanguages.contains { row.cells[$0]?.state == "translated" }
+    case .new:
+      return selectedLanguages.contains { row.cells[$0]?.state == "new" }
+    case .tooWide:
+      guard let limit = row.maxWidth else { return false }
+      return selectedLanguages.contains { row.cells[$0]?.isOverWidth(limit) == true }
+    }
+  }
+
+  /// Missing count for one language over the base key set (respects the
+  /// non-translatable toggle, ignores search/filter). Reads the same
+  /// `LangCell.isMissing` the Missing filter does, so a plural slot counts by
+  /// its forms and the footer and the filter cannot disagree.
+  func missingCount(for language: String) -> Int {
+    rows.reduce(0) { count, row in
+      guard includeNonTranslatable || row.isTranslatable else { return count }
+      return row.cells[language]?.isMissing ?? true ? count + 1 : count
+    }
+  }
+}
+
+// MARK: - Folding helper
+
+/// Case- and diacritic-insensitive folding used by search.
+nonisolated func folded(_ string: String) -> String {
+  string.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+}
+
+// MARK: - Catalog file I/O
+
+/// Serial worker for .xcstrings writes. It has exactly ONE caller — the
+/// store's `save()` — because nothing in this app writes the artifact
+/// implicitly: no edit, no run, no skeleton. The queue keeps a save off the
+/// main thread and `flush()` lets a reader block until an in-flight write has
+/// landed (open/reload, and a run that reads the file when no catalog is
+/// open).
+enum CatalogFileIO {
+  private static let queue = DispatchQueue(
+    label: "dev.v57.dev.catalog-fileio", qos: .userInitiated)
+
+  /// Writes `catalog` to `url` off the main thread. Throws the encode/write
+  /// failure to the caller, which turns it into the save alert.
+  static func write(_ catalog: StringCatalog, to url: URL) async throws {
+    try await withCheckedThrowingContinuation { continuation in
+      queue.async {
+        do {
+          try catalog.save(to: url)
+          continuation.resume(returning: ())
+        } catch {
+          continuation.resume(throwing: error)
+        }
+      }
+    }
+  }
+
+  /// Synchronous variant for the quit prompt, where no runloop is left to
+  /// await on. Throws so the caller can refuse to terminate.
+  static func writeSync(_ catalog: StringCatalog, to url: URL) throws {
+    try queue.sync { try catalog.save(to: url) }
+  }
+
+  /// Waits — without blocking the caller's thread — until every previously requested write
+  /// has landed (an open/reload reads the file after it).
+  static func flushed() async {
+    await withCheckedContinuation { continuation in
+      queue.async { continuation.resume() }
+    }
+  }
+}
+
+// MARK: - Row builder
+
+/// Builds the table's rows from the catalog and a snapshot of the project's records — PURE, so
+/// a whole catalog's rows (every key × every language) are built off the main thread, and the
+/// few rows an edit touches are built in place with the same code.
+nonisolated struct RowBuilder: Sendable {
+  let catalog: StringCatalog
+  let records: ProjectRecords
+  let overrides: [String: [String: String]]
+  /// Every language the browser projects a cell for (`LocalizationStore.browserLanguages`).
+  let languages: [String]
+
+  /// The browser's languages: the catalog's own codes, the ones added in this window, and the
+  /// ones the project's records carry (an added language lives in the records before the file
+  /// knows it). Sorted, source excluded. Walks the records — for background passes.
+  static func languages(
+    catalog: StringCatalog, records: ProjectRecords, added: [String]
+  ) -> [String] {
+    var seen = Set(catalog.languages)
+    seen.formUnion(added)
+    seen.formUnion(records.languages)
+    seen.remove(catalog.sourceLanguage)
+    return seen.sorted()
+  }
+
+  /// Every row, with each key's position.
+  func build() -> (rows: [CatalogRow], positions: [String: Int]) {
+    var built: [CatalogRow] = []
+    var positions: [String: Int] = [:]
+    built.reserveCapacity(catalog.strings.count)
+    positions.reserveCapacity(catalog.strings.count)
+    for (key, entry) in catalog.strings {
+      positions[key] = built.count
+      built.append(row(key: key, entry: entry))
+    }
+    return (built, positions)
+  }
+
+  private func record(_ key: String, _ language: String, _ category: String) -> TranslationRecord? {
+    records[SlotKey(key: key, language: language, category: category)]
+  }
+
+  /// Per-form records for a plural slot (category -> record).
+  func pluralRecords(key: String, language: String) -> [String: TranslationRecord] {
+    var forms: [String: TranslationRecord] = [:]
+    for record in records.records(key: key) where record.language == language {
+      if let category = record.category { forms[category] = record }
+    }
+    return forms
+  }
+
+  /// Live value of one plural form: per-form record first (mid-run fills),
+  /// else the parsed file.
+  func pluralValue(key: String, language: String, category: String) -> String {
+    if let value = record(key, language, category)?.value, !value.isBlankOrEmpty {
+      return value
+    }
+    return catalog.pluralValue(for: key, language: language, category: category) ?? ""
+  }
+
+  /// One-line plural summary for a cell ("one: 1 file / other: %d files").
+  func pluralSummary(key: String, language: String) -> String {
+    PluralRules.categories(for: language).map { category in
+      "\(category): \(pluralValue(key: key, language: language, category: category))"
+    }.joined(separator: " / ")
+  }
+
+  /// Parsed aggregate state across a plural slot's forms (needs_review wins,
+  /// then new, then translated) — display only, never flipped by edits.
+  func pluralAggregateState(key: String, language: String) -> String? {
+    var seen: [String] = []
+    for category in PluralRules.categories(for: language) {
+      if let state = catalog.pluralState(for: key, language: language, category: category),
+         !seen.contains(state) {
+        seen.append(state)
+      }
+      if let record = record(key, language, category), record.value != nil {
+        // A DB-owned form carries a live state even when the file has no
+        // unit yet — map it back to the file vocabulary for the dot.
+        let mapped = record.state == .reviewed ? "translated"
+          : record.state == .empty ? nil : "needs_review"
+        if let mapped, !seen.contains(mapped) {
+          seen.append(mapped)
+        }
+      }
+    }
+    if seen.contains("needs_review") { return "needs_review" }
+    if seen.contains("new") { return "new" }
+    return seen.first
+  }
+
+  /// Source plural summary ("one: … / other: …"), empty for flat keys.
+  /// Live: human source-form edits write straight to the file, so the parsed
+  /// source forms ARE the current values.
+  func sourcePluralSummary(key: String) -> String {
+    guard catalog.hasPlurals(for: key, language: catalog.sourceLanguage) else { return "" }
+    return PluralRules.categories(for: catalog.sourceLanguage).map { category in
+      "\(category): \(catalog.sourcePluralDisplay(for: key, category: category))"
+    }.joined(separator: " / ")
+  }
+
+  func row(key: String, entry: StringCatalog.Entry) -> CatalogRow {
     let translatable = entry.shouldTranslate != false
     let rowHasPlurals = catalog.hasPlurals(for: key)
     // Cells for EVERY language the browser shows, selected or not — a
     // language column toggle only re-projects `visibleRows`, never re-derives
-    // rows. `browserLanguages` (catalog codes + added/record-carried ones,
-    // see `computeBrowserLanguages`) is what the strip lists, so a language
-    // the file does not know yet still gets its missing cells.
-    // The same per-language pass feeds each LangCell AND the row review
+    // rows. The same per-language pass feeds each LangCell AND the row review
     // flags (all languages, flat + plural forms).
     var cells: [String: LangCell] = [:]
     var filled = 0
@@ -2199,46 +2223,42 @@ final class LocalizationStore {
         else if fileState == "needs_review" { needsReview += 1 }
       }
     }
-    for language in browserLanguages {
+    for language in languages {
       let loc = entry.localizations?[language]
       let plural = catalog.hasPlurals(for: key, language: language)
       let device = !plural && (loc?.variations?.isEmpty == false)
       if plural {
         // Plural slot: tally every form, then one LangCell carrying the form
-        // summary + per-form live records (it opens the plural editor).
+        // summary + per-form records (it opens the plural editor).
         let units = catalog.pluralUnits(for: key, language: language)
         for category in PluralRules.categories(for: language) {
           tally(
-            record: recordIndex[key]?[language]?[category],
+            record: record(key, language, category),
             fileValue: units?[category]?.value,
             fileState: units?[category]?.state)
         }
-        let forms = pluralRecords(for: key, language: language)
         cells[language] = LangCell(
-          text: pluralSummary(for: key, language: language),
-          state: pluralAggregateState(for: key, language: language),
+          text: pluralSummary(key: key, language: language),
+          state: pluralAggregateState(key: key, language: language),
           hasParsed: units != nil,
           hasOverride: false,
           hasVariations: true,
           hasPlurals: true,
           isEditable: translatable,
           record: nil,
-          pluralRecords: forms,
+          pluralRecords: pluralRecords(key: key, language: language),
           fileForms: (units ?? [:]).compactMapValues(\.value))
         continue
       }
       // Flat slot: tally + one cell in the same pass.
       let unit = loc?.stringUnit
-      let flatRecord = recordIndex[key]?[language]?[""]
-      tally(
-        record: flatRecord,
-        fileValue: unit?.value,
-        fileState: unit?.state)
+      let flatRecord = record(key, language, "")
+      tally(record: flatRecord, fileValue: unit?.value, fileState: unit?.state)
       cells[language] = LangCell(
-        text: valueOverrides[key]?[language] ?? unit?.value ?? "",
+        text: overrides[key]?[language] ?? unit?.value ?? "",
         state: unit?.state,
         hasParsed: unit != nil,
-        hasOverride: valueOverrides[key]?[language] != nil,
+        hasOverride: overrides[key]?[language] != nil,
         hasVariations: device,
         hasPlurals: false,
         isEditable: translatable && !device,
@@ -2248,18 +2268,15 @@ final class LocalizationStore {
     let sourceText = catalog.sourceDisplay(for: key)
     // The guideline is key-scoped metadata on the records; the first one that
     // carries it is authoritative (same rule as the reviewer note).
-    let width = cells.values.compactMap { cell -> Int? in
-      cell.record?.maxWidth ?? cell.pluralRecords.values.compactMap(\.maxWidth).first
-    }.first
+    let width = records.records(key: key).compactMap(\.maxWidth).first
     let (longestText, longestLanguage) = Self.longestValue(
-      catalog: catalog, key: key, sourceText: sourceText,
-      overrides: valueOverrides[key])
+      catalog: catalog, key: key, sourceText: sourceText, overrides: overrides[key])
     return CatalogRow(
       key: key,
       isTranslatable: translatable,
       hasPlurals: rowHasPlurals,
       sourceText: sourceText,
-      sourcePluralSummary: sourcePluralSummary(for: key),
+      sourcePluralSummary: sourcePluralSummary(key: key),
       longestText: longestText,
       longestLanguage: longestLanguage,
       longestLength: longestText.count,
@@ -2267,7 +2284,7 @@ final class LocalizationStore {
       cells: cells,
       isFullyReviewed: filled > 0 && reviewed == filled,
       isFullyNeedsReview: filled > 0 && needsReview == filled,
-      searchBlob: folded(searchBlobText(key: key, entry: entry)),
+      searchBlob: folded(Self.searchBlobText(key: key, entry: entry)),
       maxWidth: width)
   }
 
@@ -2309,7 +2326,7 @@ final class LocalizationStore {
     return best
   }
 
-  private func searchBlobText(key: String, entry: StringCatalog.Entry) -> String {
+  private static func searchBlobText(key: String, entry: StringCatalog.Entry) -> String {
     var parts = [key, entry.comment ?? ""]
     if let localizations = entry.localizations {
       for language in localizations.values {
@@ -2328,85 +2345,5 @@ final class LocalizationStore {
       }
     }
     return parts.joined(separator: "\n")
-  }
-
-  /// Filter across the VISIBLE non-source language columns only: a key
-  /// matches when the chosen state occurs in at least one SELECTED column.
-  /// `cells` now holds every language, so the match is scoped to
-  /// `selectedLanguages` — a hidden language never drives the filters.
-  private func matchesFilter(_ row: CatalogRow) -> Bool {
-    switch filter {
-    case .all:
-      return true
-    case .needsReview:
-      return selectedLanguages.contains { row.cells[$0]?.state == "needs_review" }
-    case .missing:
-      return selectedLanguages.contains { row.cells[$0]?.isMissing == true }
-    case .translated:
-      return selectedLanguages.contains { row.cells[$0]?.state == "translated" }
-    case .new:
-      return selectedLanguages.contains { row.cells[$0]?.state == "new" }
-    case .tooWide:
-      guard let limit = row.maxWidth else { return false }
-      return selectedLanguages.contains { row.cells[$0]?.isOverWidth(limit) == true }
-    }
-  }
-
-  /// Missing count for one language over the base key set (respects the
-  /// non-translatable toggle, ignores search/filter). Reads the same
-  /// `LangCell.isMissing` the Missing filter does, so a plural slot counts by
-  /// its forms and the footer and the filter cannot disagree.
-  func missingCount(for language: String) -> Int {
-    rows.reduce(0) { count, row in
-      guard includeNonTranslatable || row.isTranslatable else { return count }
-      return row.cells[language]?.isMissing ?? true ? count + 1 : count
-    }
-  }
-}
-
-// MARK: - Folding helper
-
-/// Case- and diacritic-insensitive folding used by search.
-func folded(_ string: String) -> String {
-  string.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
-}
-
-// MARK: - Catalog file I/O
-
-/// Serial worker for .xcstrings writes. It has exactly ONE caller — the
-/// store's `save()` — because nothing in this app writes the artifact
-/// implicitly: no edit, no run, no skeleton. The queue keeps a save off the
-/// main thread and `flush()` lets a reader block until an in-flight write has
-/// landed (open/reload, and a run that reads the file when no catalog is
-/// open).
-enum CatalogFileIO {
-  private static let queue = DispatchQueue(
-    label: "dev.v57.dev.catalog-fileio", qos: .userInitiated)
-
-  /// Writes `catalog` to `url` off the main thread. Throws the encode/write
-  /// failure to the caller, which turns it into the save alert.
-  static func write(_ catalog: StringCatalog, to url: URL) async throws {
-    try await withCheckedThrowingContinuation { continuation in
-      queue.async {
-        do {
-          try catalog.save(to: url)
-          continuation.resume(returning: ())
-        } catch {
-          continuation.resume(throwing: error)
-        }
-      }
-    }
-  }
-
-  /// Synchronous variant for the quit prompt, where no runloop is left to
-  /// await on. Throws so the caller can refuse to terminate.
-  static func writeSync(_ catalog: StringCatalog, to url: URL) throws {
-    try queue.sync { try catalog.save(to: url) }
-  }
-
-  /// Blocks the caller until every previously requested write has landed.
-  /// Never call from `queue` itself.
-  static func flush() {
-    queue.sync {}
   }
 }

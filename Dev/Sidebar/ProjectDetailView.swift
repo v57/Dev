@@ -5,7 +5,6 @@
 //  Created by Dmitry on 09.09.26.
 //
 
-import SwiftData
 import ComponentKit
 import SwiftUI
 
@@ -38,7 +37,7 @@ struct ProjectDetailView: View {
   /// changes (another project while the tool is open, or the tool re-picked
   /// after a trip to App Icon).
   private struct CatalogOpenKey: Equatable {
-    let project: PersistentIdentifier
+    let project: Int64
     let tool: DevTool
   }
 
