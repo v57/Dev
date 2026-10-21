@@ -25,6 +25,9 @@ nonisolated enum LaunchOptions {
   /// `-DevStoragePage smartScan|languages|<category>`: Storage's first page.
   static var storagePage: String? { value(after: "-DevStoragePage") }
 
+  /// `-DevHangLog <file>`: main-thread stalls are logged there (`MainThreadWatchdog`).
+  static var hangLog: String? { value(after: "-DevHangLog") }
+
   private static func value(after flag: String) -> String? {
     let arguments = ProcessInfo.processInfo.arguments
     guard let index = arguments.firstIndex(of: flag), index + 1 < arguments.count else { return nil }

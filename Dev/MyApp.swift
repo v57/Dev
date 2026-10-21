@@ -36,6 +36,7 @@ struct MyApp: App {
     private let updater = AppUpdater(github: "v57/Dev", assetName: "Dev.zip")
 
     init() {
+        if let hangLog = LaunchOptions.hangLog { MainThreadWatchdog.start(logTo: hangLog) }
         updater.start()
         // Projects added here sync with the other v57 apps and devices through the vault.
         // It also keeps their app icons, found with Code's ProjectIcon, for Dev's sidebar and the other apps.

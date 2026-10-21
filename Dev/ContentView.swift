@@ -160,6 +160,7 @@ struct ContentView: View {
       Screenshots.ready()
     }
     .onChange(of: settingsRequests) { openSettings() }
+    .task { await listenForMeasurementCommands() }
     .toolbar {
       KitToolbarItem(placement: .navigation) {
         windowTitleView.padding(.leading, 6)
@@ -288,6 +289,44 @@ struct ContentView: View {
     // A catalog loads after the tool opens.
     if model.projectTool == .localization {
       for _ in 0..<100 where localizationStore.catalogURL == nil { try? await Task.sleep(for: .milliseconds(100)) }
+    }
+  }
+
+  /// With `-DevHangLog`, the localization steps a lag is measured on, driven from outside
+  /// without a click: post the distributed notification `dev.v57.dev.measure` with the
+  /// command as its object — `open <project folder>`, `translate`, `pause`, `resume`,
+  /// `save` (the run's Save) or `savefile` (⌘S). Each command is marked in the hang log, and
+  /// `status` appends the pane's state to it.
+  private func listenForMeasurementCommands() async {
+    guard LaunchOptions.hangLog != nil else { return }
+    let center = DistributedNotificationCenter.default()
+    for await note in center.notifications(named: Notification.Name("dev.v57.dev.measure")) {
+      guard let command = note.object as? String else { continue }
+      MainThreadWatchdog.mark(command)
+      let parts = command.split(separator: " ", maxSplits: 1).map(String.init)
+      let workspace = paneCatalogURL.flatMap { translation.workspace(for: $0) }
+      switch parts.first {
+      case "open":
+        guard parts.count == 2 else { continue }
+        let root = URL(fileURLWithPath: parts[1]).standardizedFileURL.path
+        if let row = model.projects.first(where: { $0.rootURL?.standardizedFileURL.path == root }) {
+          model.selection = .project(row.id)
+          model.projectTool = .localization
+        }
+      case "translate":
+        if let url = paneCatalogURL { Task { await translation.start(url) } }
+      case "pause": workspace?.pause()
+      case "resume": Task { try? await workspace?.resume() }
+      case "save": Task { await workspace?.save() }
+      case "savefile": Task { await localizationStore.save() }
+      case "status":
+        let status = workspace?.status
+        MainThreadWatchdog.mark(
+          "status loading=\(localizationStore.isLoading) catalog=\(localizationStore.catalogURL?.lastPathComponent ?? "-") "
+            + "workspace=\(workspace != nil) run=\(status.map { "\($0.state.map { "\($0)" } ?? "-") \($0.done)/\($0.total)" } ?? "-")"
+            + " busy=\(StoreWork.shared.isBusy) dirty=\(localizationStore.hasUnsavedChanges)")
+      default: break
+      }
     }
   }
 
