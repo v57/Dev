@@ -798,7 +798,7 @@ extension Translation {
   /// The redesign's run has to be REACHABLE before it can be judged, and the three
   /// surfaces around it have to speak about ONE run: the toolbar's `Start`, the pane's
   /// overlay and the pane's status bar. This is what they share — it owns the redesign's
-  /// `Store` handle over the app's ONE SwiftData container (10.16: the same records the
+  /// `Store` handle over the app's ONE translation store (10.16: the same records the
   /// browser reads, never a copy) and one `Workspace` per project, built exactly the way
   /// the design builds one: a `Global`, then `loadProject`, then the project's own
   /// `open`.

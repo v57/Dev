@@ -54,8 +54,7 @@ nonisolated struct TranslationRecord: Hashable, Sendable {
   /// run ever re-translates it) but nobody vouched for it yet. The UI shows
   /// an "auto" badge; one click (human confirm) clears it. Persisted raw —
   /// records reconciled from a file always carry false (the file cannot
-  /// express auto-reviewed). The inline default keeps the additive SwiftData
-  /// migration lightweight.
+  /// express auto-reviewed).
   var autoReviewed: Bool = false
   /// empty / needs_review (machine output) / reviewed (human confirmed).
   var state: TranslationState

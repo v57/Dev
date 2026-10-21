@@ -31,8 +31,7 @@ nonisolated struct Project: Hashable, Sendable, Identifiable {
   /// File URL of the project's merged .xcstrings catalog.
   var catalogURL: URL
   /// Root directory of a directory-dropped project; nil for rows first seen
-  /// via their catalog file. Additive + optional so pre-drag rows load via
-  /// lightweight SwiftData migration.
+  /// via their catalog file.
   var rootURL: URL?
   /// Resolved AppIcon.appiconset directory (<root>/Assets.xcassets/
   /// AppIcon.appiconset) of a directory-root project. The directory may not

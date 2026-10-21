@@ -296,7 +296,7 @@ final class SidebarViewModel {
 
   // MARK: - removal
 
-  /// Removes a project from the sidebar: the SwiftData row and — by cascade —
+  /// Removes a project from the sidebar: its row in the translation store with
   /// its reconciled records and its project-scope context doc. The catalog
   /// FILE on disk is never touched: removing un-imports the project, it does
   /// not delete the artifact (re-dropping the folder imports it afresh).

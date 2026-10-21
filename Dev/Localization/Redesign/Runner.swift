@@ -2070,7 +2070,7 @@ extension Translation {
         uniquingKeysWith: { first, _ in first })
     }
 
-    /// The store: the app's SwiftData container, seen from the redesign (7.2).
+    /// The store: the app's translation store, seen from the redesign (7.2).
     private var store: Store { project.global.store }
 
     // MARK: - failures

@@ -158,7 +158,7 @@ final class ServerRun {
     start(base: base, key: key, locale: locale, scope: scope, plan: plan)
   }
 
-  /// The same start without the SwiftData row behind it: the run only ever needs
+  /// The same start without the stored row behind it: the run only ever needs
   /// an endpoint and a key, which is also what a probe can hand it.
   func start(base: URL, key: String, locale: String, scope: String?, plan: Plan) {
     guard !isRunning else { return }

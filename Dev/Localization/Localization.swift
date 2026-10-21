@@ -313,8 +313,8 @@ enum DifferenceChoice {
 }
 
 /// Owns the parsed catalog, load state, view state and the in-memory edit
-/// overrides. Since Phase C the catalog is reconciled into SwiftData
-/// (Reconcile): every (re)load upserts TranslationRecords from the file —
+/// overrides. Since Phase C the catalog is reconciled into the translation store
+/// (`Reconcile`, `TranslationData`): every (re)load upserts TranslationRecords from the file —
 /// DB-owned provenance (provider, context-versions, state) survives the
 /// reload — and every committed cell edit is written through to the DB
 /// record.
@@ -336,7 +336,7 @@ final class LocalizationStore {
   private(set) var catalogURL: URL?
   private(set) var loadError: String?
 
-  // MARK: SwiftData reconcile
+  // MARK: reconcile
 
   /// The project this catalog reconciles into (nil until the first load).
   private(set) var project: Project?
@@ -612,7 +612,7 @@ final class LocalizationStore {
     catalog?.strings.values.filter { $0.shouldTranslate == false }.count ?? 0
   }
 
-  // MARK: - SwiftData working store (records)
+  // MARK: - scan
 
 
   /// Drives Scan Strings — live progress, cancel, the finished report and

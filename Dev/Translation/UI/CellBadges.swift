@@ -25,8 +25,8 @@ extension TranslationState {
 // MARK: - CellStatusAccessory
 
 /// Per-cell leading indicator: the DB-state dot (needs_review orange,
-/// reviewed green, empty none). Reads the live SwiftData record so it updates
-/// the moment a run writes the cell.
+/// reviewed green, empty none). Reads the cell's record, which the row rebuilds
+/// with the moment a run writes the cell.
 struct CellStatusAccessory: View {
   let record: TranslationRecord?
 

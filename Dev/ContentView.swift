@@ -31,7 +31,7 @@ struct ContentView: View {
   /// The UTM VMs and their Run on VM logs.
   @State private var vms = VMStore()
   /// The redesign's shell (Design notes 8.1): the bridge that builds a project's
-  /// `Translation.Workspace` over the same SwiftData container the browser reads
+  /// `Translation.Workspace` over the same translation store the browser reads
   /// (10.16), so the toolbar's Start, the panes' overlays and the panes' status bars
   /// all speak about ONE run.
   @State private var translation = Translation.Shell()

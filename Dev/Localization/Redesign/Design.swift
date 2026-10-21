@@ -112,9 +112,9 @@ enum Translation {
 
     let id: String
     let scope: Scope
-    /// Where the body and the version are read and written. State is SwiftData, so
-    /// the reads and writes below are synchronous — a fetch on the main actor, not
-    /// a suspension point.
+    /// Where the body and the version are read and written. State is held in memory
+    /// (`TranslationData`), so the reads and writes below are synchronous lookups, not
+    /// suspension points.
     let store: Store
     /// The client a compression call goes out through. A document does not own a run,
     /// so it takes the client it is handed and otherwise makes its own: a `Router` is
@@ -175,8 +175,7 @@ enum Translation {
       hasDocument = true
     }
     /// Writes body + version. Called only after a real change, and it is this write
-    /// that carries the sentinel rule (see `Store`): SwiftData on this SDK crashes
-    /// re-faulting an all-nil versions row, so a Version of all zeros is stored as
+    /// that carries the sentinel rule (see `Store`): a Version of all zeros is stored as
     /// the sentinel, never as three nils.
     func save() throws {
       try store.saveDocument(scope, body: context, version: version)

@@ -6,11 +6,10 @@
 //
 //  The design fixes the resolve as SYNCHRONOUS (7.1: `Memory.resolve`/`upsert`/
 //  `clearHints`, the `Imported` lookup and the whole `Store` are synchronous —
-//  state that lives in SwiftData or in one local file), and `Workspace.open()`
-//  applies it with a plain `try`. The app's own facade (`ImportedTranslationDB`)
-//  is async (the deleted first pipeline awaited it); this file reads the same
-//  file through a small blocking handle instead, so prepare never has to be async
-//  for a local index seek.
+//  state held in memory or in one local file). The app's own facade
+//  (`ImportedTranslationDB`) is async (the deleted first pipeline awaited it); this
+//  file reads the same file through a small blocking handle instead, and
+//  `Workspace.open()` runs the lookups off the main actor on it.
 //
 //  Read-only, and nothing else: the database is a source of truth the app ships
 //  from, never something it writes (6.3).

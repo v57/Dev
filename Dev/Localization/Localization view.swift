@@ -1220,8 +1220,8 @@ private struct LanguageEditCell: View {
     }
   }
 
-  /// Override-aware, record-aware display value. Reads the live SwiftData
-  /// record so mid-run machine fills appear the moment a run writes them —
+  /// Override-aware, record-aware display value. Reads the cell's record
+  /// (rebuilt as a run writes it) so mid-run machine fills appear the moment a run writes them —
   /// before they reach the .xcstrings file. Off the CELL, never the store: a
   /// body that reads the store's dictionaries repaints on every edit anywhere.
   private var liveText: String {
