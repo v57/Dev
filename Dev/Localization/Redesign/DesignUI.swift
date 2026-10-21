@@ -72,6 +72,100 @@ extension Translation {
   /// arriving half a second after the previous scroll waits the remaining second and a half,
   /// while a page that has been quiet scrolls at once. ONE value for all four pages.
   static let pagePacing: TimeInterval = 2
+
+  /// A stage's batches, ONE at a time: the page on screen is the only one built — never a
+  /// horizontal strip of every batch (a run's pages are many, and a paging scroll view of them
+  /// was what the overlay stuttered on).
+  ///
+  /// It FOLLOWS the run — the batch the run is on, paced by `pagePacing` — until the reader
+  /// pages away with the buttons or the ← → keys; Live goes back to following.
+  struct BatchPager<Page: View>: View {
+    /// The batch the run is on.
+    let index: Int
+    let count: Int
+    @ViewBuilder let page: (Int) -> Page
+
+    /// The batch the reader chose; nil while following the run.
+    @State private var chosen: Int?
+    /// The run's batch as the page follows it, paced (`pagePacing`).
+    @State private var followed: Int?
+    /// When the page last followed the run to a batch. Seeded `.distantPast`, so the FIRST
+    /// appearance never waits: a page opened mid-run goes straight to the batch the run is on.
+    @State private var lastFollow: Date = .distantPast
+    @FocusState private var focused: Bool
+
+    private var shown: Int {
+      let wanted = chosen ?? followed ?? index
+      return min(max(wanted, 0), max(count - 1, 0))
+    }
+
+    var body: some View {
+      VStack(spacing: 0) {
+        if count > 0 {
+          page(shown)
+            .id(shown)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        Divider()
+        bar
+      }
+      .focusable()
+      .focusEffectDisabled()
+      .focused($focused)
+      .onAppear { focused = true }
+      .onKeyPress(.leftArrow) {
+        go(shown - 1)
+        return .handled
+      }
+      .onKeyPress(.rightArrow) {
+        go(shown + 1)
+        return .handled
+      }
+      .task(id: index) {
+        // The pause is a BUDGET since the last follow, not a fresh timer per change: SwiftUI
+        // cancels this task whenever `index` changes, so a sleep counted from here would share
+        // nothing and a run producing batches faster than the pause would postpone the page
+        // forever. It always lands on the NEWEST index: a cancelled task never gets here.
+        let target = index
+        let wait = max(0, pagePacing - Date.now.timeIntervalSince(lastFollow))
+        try? await Task.sleep(for: .seconds(wait))
+        guard !Task.isCancelled else { return }
+        lastFollow = .now
+        followed = target
+      }
+    }
+
+    private var bar: some View {
+      HStack(spacing: 10) {
+        Button { go(shown - 1) } label: { Image(systemName: "chevron.left") }
+          .disabled(shown <= 0)
+          .help("Previous batch (←)")
+        Text(count > 0 ? "Batch \(shown + 1) of \(count)" : "No batch")
+          .font(.callout)
+          .monospacedDigit()
+          .foregroundStyle(.secondary)
+        Button { go(shown + 1) } label: { Image(systemName: "chevron.right") }
+          .disabled(shown >= count - 1)
+          .help("Next batch (→)")
+        Spacer()
+        if chosen != nil {
+          Button("Live") { chosen = nil }
+            .help("Follow the batch the run is on")
+        }
+      }
+      .buttonStyle(.borderless)
+      .padding(.horizontal, 12)
+      .padding(.vertical, 6)
+    }
+
+    /// Shows a batch the reader chose. Choosing the run's own batch goes back to following it.
+    private func go(_ offset: Int) {
+      guard count > 0 else { return }
+      let target = min(max(offset, 0), count - 1)
+      chosen = target == (followed ?? index) ? nil : target
+      focused = true
+    }
+  }
 }
 
 extension Translation.VerticalTranslate {
@@ -83,33 +177,9 @@ extension Translation.VerticalTranslate {
     /// batch, so its exchange is the entry at the page's own offset; a caller that supplies none
     /// gets the "nothing sent yet" reading on both halves rather than a crash.
     var exchanges: [Translation.Run.Exchange] = []
-    @State var scrollPosition: Int?
-    /// When this page last followed the run to a batch. Seeded `.distantPast`, so the FIRST
-    /// appearance never waits: a page opened mid-run goes straight to the batch the run is on,
-    /// and only later CHANGES pause (8.1, "PACING").
-    @State var lastScroll: Date = .distantPast
     var body: some View {
-      GeometryReader { view in
-        ScrollView(.horizontal) {
-          LazyHStack(spacing: 0) {
-            ForEach(Array(operations.enumerated()), id: \.offset) { (offset, element) in
-              OperationContent(operation: element, exchange: exchange(at: offset)).frame(width: view.size.width, height: view.size.height)
-            }
-          }.scrollTargetLayout()
-        }.scrollTargetBehavior(.paging).scrollPosition(id: $scrollPosition, anchor: .center)
-      }.task(id: index) {
-        // The pause is a BUDGET since the last scroll, not a fresh timer per change: SwiftUI
-        // cancels this task whenever `index` changes, so a sleep counted from here would share
-        // nothing and a run producing batches faster than the pause would postpone the scroll
-        // forever. Measuring from `lastScroll` keeps the page advancing — and it always lands on
-        // the NEWEST index, because a cancelled task never reaches the scroll below.
-        let target = index
-        let wait = max(0, Translation.pagePacing - Date.now.timeIntervalSince(lastScroll))
-        try? await Task.sleep(for: .seconds(wait))
-        lastScroll = .now
-        withAnimation(.smooth) {
-          scrollPosition = target
-        }
+      Translation.BatchPager(index: index, count: operations.count) { offset in
+        OperationContent(operation: operations[offset], exchange: exchange(at: offset))
       }
     }
 

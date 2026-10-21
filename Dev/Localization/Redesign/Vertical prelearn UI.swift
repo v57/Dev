@@ -16,33 +16,9 @@ extension Translation.VerticalPrelearn {
     /// batch, so its exchange is the entry at the page's own offset; a caller that supplies none
     /// gets the "nothing sent yet" reading on both halves rather than a crash.
     var exchanges: [Translation.Run.Exchange] = []
-    @State var scrollPosition: Int?
-    /// When this page last followed the run to a batch. Seeded `.distantPast`, so the FIRST
-    /// appearance never waits: a page opened mid-run goes straight to the batch the run is on,
-    /// and only later CHANGES pause (8.1, "PACING").
-    @State var lastScroll: Date = .distantPast
     var body: some View {
-      GeometryReader { view in
-        ScrollView(.horizontal) {
-          LazyHStack(spacing: 0) {
-            ForEach(Array(operations.enumerated()), id: \.offset) { (offset, element) in
-              OperationContent(operation: element, exchange: exchange(at: offset)).frame(width: view.size.width, height: view.size.height)
-            }
-          }.scrollTargetLayout()
-        }.scrollTargetBehavior(.paging).scrollPosition(id: $scrollPosition, anchor: .center)
-      }.task(id: index) {
-        // The pause is a BUDGET since the last scroll, not a fresh timer per change: SwiftUI
-        // cancels this task whenever `index` changes, so a sleep counted from here would share
-        // nothing and a run producing batches faster than the pause would postpone the scroll
-        // forever. Measuring from `lastScroll` keeps the page advancing — and it always lands on
-        // the NEWEST index, because a cancelled task never reaches the scroll below.
-        let target = index
-        let wait = max(0, Translation.pagePacing - Date.now.timeIntervalSince(lastScroll))
-        try? await Task.sleep(for: .seconds(wait))
-        lastScroll = .now
-        withAnimation(.smooth) {
-          scrollPosition = target
-        }
+      Translation.BatchPager(index: index, count: operations.count) { offset in
+        OperationContent(operation: operations[offset], exchange: exchange(at: offset))
       }
     }
 
