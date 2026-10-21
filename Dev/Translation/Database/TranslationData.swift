@@ -39,9 +39,28 @@ nonisolated struct ProjectRecords: Sendable {
     }
   }
 
-  /// Every record of one key (every language and form).
+  /// Every record of one key (every language and form), in a FIXED order — by language, the
+  /// flat record before the forms, the forms in CLDR order — because callers read "the first
+  /// record of the key" (its note, its width, a slot's status) and a set's order is not one.
   func records(key: String) -> [TranslationRecord] {
-    (slotsByKey[key] ?? []).compactMap { bySlot[$0] }
+    (slotsByKey[key] ?? []).sorted { a, b in
+      a.language != b.language
+        ? a.language < b.language
+        : Self.categoryRank(a.category) < Self.categoryRank(b.category)
+    }.compactMap { bySlot[$0] }
+  }
+
+  private static func categoryRank(_ category: String) -> Int {
+    switch category {
+    case "": 0
+    case "zero": 1
+    case "one": 2
+    case "two": 3
+    case "few": 4
+    case "many": 5
+    case "other": 6
+    default: 7
+    }
   }
 
   /// Every record, unordered.

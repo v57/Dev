@@ -107,4 +107,16 @@ import Testing
     #expect(try database.projects().first?.id == 3)
     #expect(try database.edits(project: 3).count == 1)
   }
+
+  /// A key's records come back in one order however they were stored: by language, the flat
+  /// slot first, the forms in CLDR order — callers read "the first record" (a plural slot's
+  /// status came from whichever form a set happened to yield first).
+  @Test func aKeysRecordsComeInAFixedOrder() {
+    let forms = ["other", "many", "one", "few"].map { record("k", "ru", category: $0) }
+    var records = ProjectRecords(forms + [record("k", "de"), record("k", "ru")])
+    records[SlotKey(key: "x", language: "ru", category: "")] = record("x", "ru")
+    #expect(records.records(key: "k").map { "\($0.language)/\($0.category ?? "")" }
+      == ["de/", "ru/", "ru/one", "ru/few", "ru/many", "ru/other"])
+    #expect(records.languages == ["de", "ru"])
+  }
 }

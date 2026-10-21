@@ -871,9 +871,15 @@ enum Translation {
     nonisolated private static func slot(
       language: String, records: [TranslationRecord]
     ) -> LocalizationString {
-      let owner = records.first { $0.category == nil } ?? records[0]
-      var slot = LocalizationString(language: language)
       let forms = records.filter { $0.category != nil }
+      // The record that speaks for the slot — its status and its stamp. Chosen by RULE, never
+      // by the order the records came in: the flat record; for a plural slot the `other` form
+      // (the one every language has, and the one the file's own state is read from), else the
+      // first form in the language's rule order.
+      let owner = forms.isEmpty
+        ? (records.first { $0.category == nil } ?? records[0])
+        : Self.speaking(for: forms, language: language)
+      var slot = LocalizationString(language: language)
       if forms.isEmpty {
         slot.target = .value(owner.value ?? "")
         slot.machine = .value(owner.machine ?? "")
@@ -895,9 +901,24 @@ enum Translation {
         // not a snapshot, and `toLearn` reads nil as "nothing confirmed since".
         slot.reviewed = reviewed.isEmpty ? nil : .plural(reviewed)
       }
-      slot.status = Self.status(of: records, value: slot.target)
+      slot.status = Self.status(of: owner, value: slot.target)
       slot.versions = Store.version(owner.contextVersions)
       return slot
+    }
+    /// The form record a plural slot's status and stamp are read from: `other` when it holds a
+    /// value, else the first form with a value in the language's rule order, else `other`, else
+    /// the first form in that order.
+    nonisolated private static func speaking(
+      for forms: [TranslationRecord], language: String
+    ) -> TranslationRecord {
+      let order = Plural.rules(language: language).map(\.rawValue)
+      let sorted = forms.sorted {
+        (order.firstIndex(of: $0.category ?? "") ?? order.count)
+          < (order.firstIndex(of: $1.category ?? "") ?? order.count)
+      }
+      let other = sorted.first { $0.category == "other" }
+      if let other, other.value?.isEmpty == false { return other }
+      return sorted.first { $0.value?.isEmpty == false } ?? other ?? sorted[0]
     }
     /// The status a stored record reads as.
     ///
@@ -915,9 +936,9 @@ enum Translation {
     /// What this projection does carry is the INPUT to that comparison: every slot keeps
     /// the stamp it was produced against.
     nonisolated private static func status(
-      of records: [TranslationRecord], value: StringBody
+      of record: TranslationRecord, value: StringBody
     ) -> LocalizationString.Status {
-      guard !value.isEmpty, let record = records.first else { return .needsTranslate }
+      guard !value.isEmpty else { return .needsTranslate }
       switch record.state {
       case .empty: return .needsTranslate
       case .needs_review: return .translated

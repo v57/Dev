@@ -12,7 +12,7 @@ import UniformTypeIdentifiers
 
 // MARK: - Row filter
 
-enum RowFilter: String, CaseIterable, Identifiable {
+nonisolated enum RowFilter: String, CaseIterable, Identifiable, Sendable {
   case all
   case needsReview
   case missing
@@ -175,7 +175,7 @@ nonisolated struct LangCell: Sendable {
 
 /// Custom comparator so language columns (chosen at runtime) can sort, and so
 /// missing/absent values always sort last, in either direction.
-struct CatalogSort: SortComparator, Hashable {
+nonisolated struct CatalogSort: SortComparator, Hashable, Sendable {
   enum Column: Hashable {
     case comment
     case source
@@ -1522,6 +1522,12 @@ final class LocalizationStore {
     let base = await data.loadRecords(project: project.id)
     let baseGeneration = data.generation(project: project.id)
     let added = purpose == .open ? [] : addedLanguages
+    // An open resets the view state (`finishLoad`), a reload keeps it: the visible rows are
+    // projected for the state the pane will have.
+    let query = purpose == .open
+      ? RowQuery(search: "", filter: .all, includeNonTranslatable: false, selectedLanguages: [],
+                 sort: [CatalogSort(.source)])
+      : rowQuery
     let prepared = await Task.detached(priority: .userInitiated) {
       let plan = Reconcile.mirror(
         catalog, projectID: project.id, existing: base, policy: policy,
@@ -1531,7 +1537,9 @@ final class LocalizationStore {
       let built = RowBuilder(
         catalog: document, records: plan.records, overrides: [:], languages: languages
       ).build()
-      return (plan: plan, document: document, languages: languages, built: built)
+      return (
+        plan: plan, document: document, languages: languages, built: built,
+        visible: query.visible(built.rows))
     }.value
     guard generation == loadGeneration else { return }
     Reconcile.apply(prepared.plan, projectID: project.id, base: base, generation: baseGeneration)
@@ -1542,7 +1550,8 @@ final class LocalizationStore {
     finishLoad(prepared.document, project: project, url: url, purpose: purpose)
     applyRows(
       languages: prepared.languages, rows: prepared.built.rows, positions: prepared.built.positions,
-      recordGeneration: data.generation(project: project.id))
+      recordGeneration: data.generation(project: project.id),
+      visible: query == rowQuery ? prepared.visible : nil)
     // A reshaped document is NOT a fresh parse any more: the pane holds an edit the file does not
     // have (the load changed a slot's shape), so Save is live and the unsaved-changes prompt will
     // say so — `finishLoad`/`adopt` clear the flag for a freshly parsed catalog, and this is the
@@ -1563,12 +1572,14 @@ final class LocalizationStore {
     purpose: LoadPurpose
   ) {
     if purpose == .open {
-      searchText = ""
-      filter = .all
-      includeNonTranslatable = false
+      // The backing values, not the properties: each property re-projects the rows it is
+      // about, and these are the OLD catalog's rows, about to be replaced.
+      _searchText = ""
+      _filter = .all
+      _includeNonTranslatable = false
       showComments = false
       showLongest = false
-      sortOrder = [CatalogSort(.source)]
+      _sortOrder = [CatalogSort(.source)]
       selectedLanguages = []
       addedLanguages = []
     }
@@ -1901,21 +1912,15 @@ final class LocalizationStore {
   /// and sort. Pure predicates over what the rows already carry — no
   /// per-row catalog derivation, so per-keystroke search stays cheap.
   private func recomputeVisibleRows() {
-    guard !rows.isEmpty else {
-      visibleRows = []
-      return
-    }
-    let query = folded(searchText)
-    var shown: [CatalogRow] = []
-    shown.reserveCapacity(rows.count)
-    for row in rows {
-      if !includeNonTranslatable && !row.isTranslatable { continue }
-      guard matchesFilter(row) else { continue }
-      if !query.isEmpty && !row.searchBlob.contains(query) { continue }
-      shown.append(row)
-    }
-    let sort = sortOrder.isEmpty ? [CatalogSort(.source)] : sortOrder
-    visibleRows = shown.sorted(using: sort)
+    visibleRows = rowQuery.visible(rows)
+  }
+
+  /// What `visibleRows` is projected by: the include toggle, filter, search and sort.
+  private var rowQuery: RowQuery {
+    RowQuery(
+      search: folded(searchText), filter: filter, includeNonTranslatable: includeNonTranslatable,
+      selectedLanguages: selectedLanguages,
+      sort: sortOrder.isEmpty ? [CatalogSort(.source)] : sortOrder)
   }
 
   /// The project's records as the store holds them now (empty before the project is loaded).
@@ -1954,29 +1959,34 @@ final class LocalizationStore {
     let recordGeneration = project.map { TranslationData.shared.generation(project: $0.id) } ?? -1
     let overrides = valueOverrides
     let added = addedLanguages
+    let query = rowQuery
     Task {
       let built = await Task.detached(priority: .userInitiated) {
         let languages = RowBuilder.languages(catalog: catalog, records: records, added: added)
         let builder = RowBuilder(
           catalog: catalog, records: records, overrides: overrides, languages: languages)
-        return (languages, builder.build())
+        let rows = builder.build()
+        return (languages, rows, query.visible(rows.rows))
       }.value
       guard generation == rowsGeneration else { return }
+      // The view state may have moved while the rows were built: then the visible set is
+      // projected again, here.
       applyRows(languages: built.0, rows: built.1.rows, positions: built.1.positions,
-                recordGeneration: recordGeneration)
+                recordGeneration: recordGeneration, visible: query == rowQuery ? built.2 : nil)
     }
   }
 
   /// Puts a finished build on screen.
   private func applyRows(
-    languages: [String], rows: [CatalogRow], positions: [String: Int], recordGeneration: Int
+    languages: [String], rows: [CatalogRow], positions: [String: Int], recordGeneration: Int,
+    visible: [CatalogRow]? = nil
   ) {
     browserLanguages = languages
     browserLanguageSet = Set(languages)
     self.rows = rows
     rowPositions = positions
     rowsRecordGeneration = recordGeneration
-    recomputeVisibleRows()
+    if let visible { visibleRows = visible } else { recomputeVisibleRows() }
   }
 
   /// `browserLanguages` as a set, for the per-change "is this a new language" check.
@@ -2038,28 +2048,6 @@ final class LocalizationStore {
       updated.addLanguage(language)
     }
     return updated
-  }
-
-  /// Filter across the VISIBLE non-source language columns only: a key
-  /// matches when the chosen state occurs in at least one SELECTED column.
-  /// `cells` now holds every language, so the match is scoped to
-  /// `selectedLanguages` — a hidden language never drives the filters.
-  private func matchesFilter(_ row: CatalogRow) -> Bool {
-    switch filter {
-    case .all:
-      return true
-    case .needsReview:
-      return selectedLanguages.contains { row.cells[$0]?.state == "needs_review" }
-    case .missing:
-      return selectedLanguages.contains { row.cells[$0]?.isMissing == true }
-    case .translated:
-      return selectedLanguages.contains { row.cells[$0]?.state == "translated" }
-    case .new:
-      return selectedLanguages.contains { row.cells[$0]?.state == "new" }
-    case .tooWide:
-      guard let limit = row.maxWidth else { return false }
-      return selectedLanguages.contains { row.cells[$0]?.isOverWidth(limit) == true }
-    }
   }
 
   /// Missing count for one language over the base key set (respects the
@@ -2374,5 +2362,59 @@ nonisolated struct RowBuilder: Sendable {
       }
     }
     return parts.joined(separator: "\n")
+  }
+}
+
+// MARK: - Row query
+
+/// What the table shows of the rows: the include toggle, the filter, the search and the sort —
+/// pure, so a whole build projects its visible rows off the main thread too.
+nonisolated struct RowQuery: Sendable, Equatable {
+  let search: String
+  let filter: RowFilter
+  let includeNonTranslatable: Bool
+  let selectedLanguages: [String]
+  let sort: [CatalogSort]
+
+  static func == (a: RowQuery, b: RowQuery) -> Bool {
+    a.search == b.search && a.filter == b.filter && a.includeNonTranslatable == b.includeNonTranslatable
+      && a.selectedLanguages == b.selectedLanguages && a.sort.map(\.order) == b.sort.map(\.order)
+      && a.sort == b.sort
+  }
+
+  /// The rows the table shows, in order.
+  func visible(_ rows: [CatalogRow]) -> [CatalogRow] {
+    guard !rows.isEmpty else { return [] }
+    var shown: [CatalogRow] = []
+    shown.reserveCapacity(rows.count)
+    for row in rows {
+      if !includeNonTranslatable && !row.isTranslatable { continue }
+      guard matches(row) else { continue }
+      if !search.isEmpty && !row.searchBlob.contains(search) { continue }
+      shown.append(row)
+    }
+    return shown.sorted(using: sort)
+  }
+
+  /// Filter across the VISIBLE non-source language columns only: a key
+  /// matches when the chosen state occurs in at least one SELECTED column.
+  /// `cells` holds every language, so the match is scoped to
+  /// `selectedLanguages` — a hidden language never drives the filters.
+  private func matches(_ row: CatalogRow) -> Bool {
+    switch filter {
+    case .all:
+      return true
+    case .needsReview:
+      return selectedLanguages.contains { row.cells[$0]?.state == "needs_review" }
+    case .missing:
+      return selectedLanguages.contains { row.cells[$0]?.isMissing == true }
+    case .translated:
+      return selectedLanguages.contains { row.cells[$0]?.state == "translated" }
+    case .new:
+      return selectedLanguages.contains { row.cells[$0]?.state == "new" }
+    case .tooWide:
+      guard let limit = row.maxWidth else { return false }
+      return selectedLanguages.contains { row.cells[$0]?.isOverWidth(limit) == true }
+    }
   }
 }
