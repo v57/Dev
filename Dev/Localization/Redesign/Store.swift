@@ -94,8 +94,8 @@ extension Translation {
 
     let data: TranslationData
 
-    init(data: TranslationData = .shared) {
-      self.data = data
+    init(data: TranslationData? = nil) {
+      self.data = data ?? .shared
     }
 
     // MARK: - version stamps

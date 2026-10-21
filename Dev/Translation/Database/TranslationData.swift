@@ -88,12 +88,17 @@ nonisolated struct ProjectRecords: Sendable {
 /// Records are VALUES: a change is a copy handed back to `upsert`. Who needs to know about one
 /// subscribes (`observeRecords`) and is told which slots moved, once per main-actor turn.
 @MainActor final class TranslationData {
-  static let shared = TranslationData()
+  /// The app's store. A test swaps in one over a file of its own (`init(location:)`), so it
+  /// never reads or writes the user's.
+  static var shared = TranslationData(
+    location: LaunchOptions.isScreenshotMode ? nil : TranslationData.databaseURL)
 
   private let writer: Writer
 
-  private init() {
-    writer = Writer(location: LaunchOptions.isScreenshotMode ? nil : Self.databaseURL)
+  /// A store over the database at `location` (nil: in memory). A new file there imports the
+  /// SwiftData store beside it (`legacyStoreURL`) only for the app's own location.
+  init(location: URL?) {
+    writer = Writer(location: location, importsLegacyStore: location == Self.databaseURL)
   }
 
   // MARK: - launch
@@ -734,9 +739,11 @@ extension TranslationData {
     /// Opened on the queue, on first use.
     private var database: TranslationDatabase?
     private let location: URL?
+    private let importsLegacyStore: Bool
 
-    init(location: URL?) {
+    init(location: URL?, importsLegacyStore: Bool) {
       self.location = location
+      self.importsLegacyStore = importsLegacyStore
     }
 
     /// Queues a change; the drain is scheduled once, however many changes arrive before it.
@@ -790,7 +797,7 @@ extension TranslationData {
           let isNew = !FileManager.default.fileExists(atPath: location.path)
           opened = try TranslationDatabase(url: location)
           let legacy = TranslationData.legacyStoreURL
-          if isNew, FileManager.default.fileExists(atPath: legacy.path) {
+          if isNew, importsLegacyStore, FileManager.default.fileExists(atPath: legacy.path) {
             let started = Date()
             do {
               try LegacyImport.run(from: legacy, into: opened)
