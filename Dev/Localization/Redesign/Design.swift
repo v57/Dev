@@ -631,6 +631,7 @@ enum Translation {
       for (key, ofKey) in byKey {
         guard let row = rowIndex[key], data.indices.contains(row) else { continue }
         for (language, ofLanguage) in Dictionary(grouping: ofKey, by: \.language) {
+          let ofLanguage = Self.records(ofLanguage, shapedBy: catalog, key: key, language: language)
           guard ofLanguage.contains(where: { $0.updatedAt > loadedAt }),
             let at = data[row].index(of: language)
           else { continue }
@@ -672,7 +673,9 @@ enum Translation {
       var targets: [LocalizationString] = []
       for language in languages.keys.sorted() {
         var slot: LocalizationString
-        if let ofLanguage = byLanguage[language] {
+        if let ofLanguage = byLanguage[language].map({
+          Self.records($0, shapedBy: catalog, key: key, language: language)
+        }), !ofLanguage.isEmpty {
           slot = self.slot(language: language, records: ofLanguage)
         } else {
           slot = Self.slot(language: language, key: key, catalog: catalog)
@@ -785,6 +788,22 @@ enum Translation {
       case "stale": return .stale
       default: return .translated
       }
+    }
+    /// The records a (key, language) slot is projected from, in the shape the FILE gives it.
+    ///
+    /// A flat value a person confirmed in the file is a shape a person chose
+    /// (`holdsReviewedFlat`), so the store's form records for the pair are a shape the load
+    /// left behind, and the slot reads flat: projected as plural, the write-back (`apply`)
+    /// would clear the flat unit and put the forms back into the file. Empty when the store
+    /// holds no flat record for the pair, so the slot is the artifact's own.
+    private static func records(
+      _ records: [TranslationRecord], shapedBy catalog: StringCatalog?, key: String,
+      language: String
+    ) -> [TranslationRecord] {
+      guard let catalog, catalog.holdsReviewedFlat(key: key, language: language) else {
+        return records
+      }
+      return records.filter { $0.category == nil }
     }
     /// One (key, language) slot, projected from the records of that pair.
     ///

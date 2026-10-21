@@ -199,6 +199,19 @@ nonisolated struct StringCatalog: Codable, Sendable {
     return variations.keys.contains { $0 != "plural" }
   }
 
+  /// True when this key/language slot is FLAT with a value a person confirmed (Xcode's
+  /// `translated`). That flat shape is a person's choice — taking a plural away in Xcode is
+  /// exactly this — so the app's plural form records never write over it: the load leaves a
+  /// slot with reviewed values on both sides as it is (`Reconcile.shapeConflicts`), and the
+  /// stale forms it keeps would otherwise put the plural back on the next write.
+  func holdsReviewedFlat(key: String, language: String) -> Bool {
+    guard !hasPlurals(for: key, language: language),
+          let unit = strings[key]?.localizations?[language]?.stringUnit,
+          unit.state == "translated", unit.value?.isBlankOrEmpty == false
+    else { return false }
+    return true
+  }
+
   /// Plural form values for a key/language pair: category -> stringUnit.
   /// Nil when the slot has no plural variation.
   func pluralUnits(for key: String, language: String) -> [String: StringUnit]? {

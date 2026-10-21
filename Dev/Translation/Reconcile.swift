@@ -1902,7 +1902,11 @@ nonisolated enum Reconcile {
       guard let fileState = fileState(for: record) else { continue }
 
       if let category = record.category {
-        // Plural form record: write the form, never the flat unit.
+        // Plural form record: write the form, never the flat unit — and never into a flat
+        // slot a person confirmed (`holdsReviewedFlat`).
+        if updated.holdsReviewedFlat(key: record.key, language: record.language) {
+          continue
+        }
         let current = updated.pluralValue(for: record.key, language: record.language, category: category)
         let currentState = updated.pluralState(for: record.key, language: record.language, category: category)
         if current == value && currentState == fileState {
