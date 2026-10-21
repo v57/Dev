@@ -327,7 +327,12 @@ enum DifferenceChoice {
 final class LocalizationStore {
   // MARK: load state
 
-  private(set) var catalog: StringCatalog?
+  private(set) var catalog: StringCatalog? {
+    didSet { catalogRevision += 1 }
+  }
+  /// Bumped by every change of `catalog`, so a background edit of a snapshot can tell whether
+  /// it is still editing the catalog the pane holds.
+  @ObservationIgnored private var catalogRevision = 0
   private(set) var catalogURL: URL?
   private(set) var loadError: String?
 
@@ -699,6 +704,30 @@ final class LocalizationStore {
     }
     markDirty()
     return true
+  }
+
+  /// The same publish, with the edit run OFF the main actor over a snapshot of the catalog —
+  /// for a whole run's results, which walk every row of a session. The result is taken only
+  /// if the catalog did not move while it was computed; otherwise the edit runs again, here,
+  /// on the catalog as it is now.
+  @discardableResult
+  func publish(
+    from url: URL, keys: Set<String>? = nil,
+    offMain edit: @escaping @Sendable (inout StringCatalog) -> Bool
+  ) async -> Bool {
+    guard let open = catalog, catalogURL == url else { return false }
+    let revision = catalogRevision
+    let edited = await Task.detached(priority: .userInitiated) { () -> StringCatalog? in
+      var updated = open
+      return edit(&updated) ? updated : nil
+    }.value
+    guard catalogURL == url else { return false }
+    guard catalogRevision == revision else { return publish(from: url, keys: keys, edit) }
+    guard let edited else { return false }
+    return publish(from: url, keys: keys, { catalog in
+      catalog = edited
+      return true
+    })
   }
 
   /// True when the Save button may write the artifact.

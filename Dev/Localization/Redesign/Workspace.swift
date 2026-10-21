@@ -235,7 +235,7 @@ extension Translation {
     /// pending (`sessionDirty`) and the attach re-publishes it.
     func attach(_ store: LocalizationStore) {
       app = store
-      if sessionDirty { publish() }
+      if sessionDirty { Task { await publish() } }
     }
 
     /// Where the last run of each stage stopped, read on open.
@@ -329,7 +329,7 @@ extension Translation {
       // value translation memory answered is a result too (5.7 counts it apart from the
       // items sent), and a publish that finds nothing to write touches neither the catalog
       // nor the flag.
-      publish()
+      await publish()
     }
 
     /// Stops the batch in flight and keeps everything already applied. The run stays
@@ -353,7 +353,7 @@ extension Translation {
         try await runner.resume(run)
         // The batches a resume landed are the run's results like any other: the app's
         // catalog is what a Save would write, so it learns about them now (5.8).
-        publish()
+        await publish()
       case .cancelled, .finished: try await self.run(stage, mode: run.mode)
       // Already going: a second start is a wait, not a second run (8.1).
       case .scanning, .running: return
@@ -389,7 +389,7 @@ extension Translation {
       if retry.completed {
         await save()
       } else {
-        publish()
+        await publish()
       }
       // A batch that failed AGAIN is reported the way a run reports one (5.7). The failures list
       // is the attempts' HISTORY and keeps what the original run left there (5.9), so this asks
@@ -777,9 +777,15 @@ extension Translation {
     /// a save) changes nothing and raises nothing. A publish with no store to publish into (a
     /// preview, or a pane that has gone away) raises the SESSION's own reading instead, and
     /// `attach` hands the session over the moment a store appears.
-    func publish() {
+    func publish() async {
       guard let app, let url = catalogURL else { return markPending() }
-      if app.publish(from: url, apply(to:)) { sessionDirty = true }
+      // The walk is every row × slot of the session, so it runs off the main actor over a
+      // snapshot of the rows.
+      let rows = project.data
+      let edits = translatableEdits
+      if await app.publish(from: url, offMain: { Self.apply(rows, translatable: edits, to: &$0) }) {
+        sessionDirty = true
+      }
     }
     /// ONE ROW published — a human edit's shape (5.8): the review and editing actions change
     /// one row, and an editor must not pay for a walk of the whole session to raise a flag.
@@ -787,7 +793,9 @@ extension Translation {
     private func publish(_ row: LocalizationKey) {
       sessionEdits &+= 1
       guard let app, let url = catalogURL else { return markPending() }
-      if app.publish(from: url, keys: [row.key], { catalog in apply(row, to: &catalog) }) {
+      if app.publish(from: url, keys: [row.key], { catalog in
+        Self.apply(row, translatable: translatableEdits, to: &catalog)
+      }) {
         sessionDirty = true
       }
     }
@@ -829,7 +837,7 @@ extension Translation {
         self.error = error.localizedDescription
         return
       }
-      publish()
+      await publish()
       guard let app else {
         error = "No catalog is open for this project, so there is nothing to save into."
         return
@@ -859,17 +867,21 @@ extension Translation {
     /// `shouldTranslate` flag this session toggled. What it deliberately does NOT carry is a
     /// COMMENT: the format owns that field and no session state backs it (2.8 — the on-device
     /// pass writes into this same catalog), so every entry keeps the comment the catalog has.
-    private func apply(to catalog: inout StringCatalog) -> Bool {
+    nonisolated private static func apply(
+      _ rows: [LocalizationKey], translatable: [String: Bool], to catalog: inout StringCatalog
+    ) -> Bool {
       var changed = false
-      for row in project.data {
-        if apply(row, to: &catalog) { changed = true }
+      for row in rows {
+        if apply(row, translatable: translatable, to: &catalog) { changed = true }
       }
       return changed
     }
     /// One row published: the flag this session changed, and every slot the row carries.
-    private func apply(_ row: LocalizationKey, to catalog: inout StringCatalog) -> Bool {
+    nonisolated private static func apply(
+      _ row: LocalizationKey, translatable edits: [String: Bool], to catalog: inout StringCatalog
+    ) -> Bool {
       var changed = false
-      if let translatable = translatableEdits[row.key], var entry = catalog.strings[row.key] {
+      if let translatable = edits[row.key], var entry = catalog.strings[row.key] {
         let flag: Bool? = translatable ? nil : false
         if entry.shouldTranslate != flag {
           entry.shouldTranslate = flag
@@ -899,7 +911,7 @@ extension Translation {
     /// A shape the session and the FILE disagree on stays as the file has it — a flat slot never
     /// writes into a plural-varied node, and no device-varied node is touched — which is the old
     /// merge's shadowing rule, restated here because the redesign calls nothing in that file.
-    private func apply(
+    nonisolated private static func apply(
       _ slot: LocalizationString, of row: LocalizationKey, to catalog: inout StringCatalog
     ) -> Bool {
       // The source language is AUTHORED text, not a translation: the artifact owns it and the
@@ -947,7 +959,7 @@ extension Translation {
     ///
     /// Device variations and substitutions are deliberately NOT in the signature: the mapping
     /// above never touches either, so they can never be the thing that changed.
-    private static func signature(
+    nonisolated private static func signature(
       of catalog: StringCatalog, key: String, language: String
     ) -> [String: String] {
       var signature: [String: String] = [:]
@@ -964,7 +976,7 @@ extension Translation {
     /// One flat unit written into a node, leaving the node's variations and substitutions where
     /// they are: the flat unit is the session's to write and nothing else there is. Returns
     /// whether the unit really moved.
-    private func setUnit(
+    nonisolated private static func setUnit(
       _ text: String, state: String, key: String, language: String, in catalog: inout StringCatalog
     ) -> Bool {
       guard var entry = catalog.strings[key] else { return false }
@@ -982,7 +994,7 @@ extension Translation {
     }
     /// The flat unit of a node dropped, so a plural set can take its place (`nil` is absence,
     /// and normalization drops a node left with nothing).
-    private func clearUnit(key: String, language: String, in catalog: inout StringCatalog) {
+    nonisolated private static func clearUnit(key: String, language: String, in catalog: inout StringCatalog) {
       guard var entry = catalog.strings[key],
         var localizations = entry.localizations,
         var node = localizations[language],

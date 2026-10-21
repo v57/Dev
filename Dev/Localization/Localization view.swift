@@ -419,14 +419,15 @@ private struct LanguageButtonsRow: View {
     ScrollView(.horizontal, showsIndicators: false) {
       HStack(spacing: 6) {
         if !store.pickerLanguages.isEmpty {
-          ChipTrack {
+          // Lazy: a catalog carries up to a hundred languages, and building every chip up front
+          // was most of what showing the pane cost.
+          ChipTrack(lazy: true) {
             ForEach(store.pickerLanguages, id: \.self) { language in
               let selected = store.isLanguageSelected(language)
               Toggle(language, isOn: Binding(get: { selected }, set: { _ in store.toggleLanguage(language) }))
                 .help(selected ? "Hide \(language) column" : "Show \(language) column")
             }
           }
-          .fixedSize()
         }
         addLanguagesButton
       }

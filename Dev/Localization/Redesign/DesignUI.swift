@@ -748,8 +748,12 @@ extension Translation {
       VStack(alignment: .leading, spacing: 0) {
         header
         Divider()
+        // LAZY, line by line: a request and a streaming reply are tens of kilobytes, and laying
+        // them out whole on every publish of the reply was most of what a run cost the main
+        // thread. Only the lines on screen are laid out, and a reply that grows touches its last
+        // lines only. The halves below are flat view lists for the same reason.
         ScrollView {
-          VStack(alignment: .leading, spacing: 0) {
+          LazyVStack(alignment: .leading, spacing: 0) {
             // The input FIRST: it is the question the reply answers, and a reader checking a
             // failure needs to see what was asked before what came back.
             inputHalf
@@ -781,7 +785,7 @@ extension Translation {
     /// The INPUT: the system message, then the user message with the prefix's end marked in it.
     @ViewBuilder
     private var inputHalf: some View {
-      VStack(alignment: .leading, spacing: 0) {
+      Group {
         halfHeader(
           icon: "arrow.up.circle", title: "Model input",
           detail: "Exactly what went out for this batch: the system message, then the user message — L0, L1, the items last (4.3).")
@@ -807,7 +811,7 @@ extension Translation {
     /// The REPLY: what came back, printed as it came — or why nothing did.
     @ViewBuilder
     private var replyHalf: some View {
-      VStack(alignment: .leading, spacing: 0) {
+      Group {
         halfHeader(
           icon: "arrow.down.circle", title: "Model reply",
           detail: "Raw and unparsed: this is the batch's answer exactly as it arrived.")
@@ -829,7 +833,8 @@ extension Translation {
             icon: "text.badge.xmark", title: "The model answered nothing",
             detail: "The reply came back empty — whitespace only, which is an empty answer and a defect (5.3).")
         case .reply(let raw):
-          text(raw).padding(.bottom, 12)
+          text(raw)
+          Color.clear.frame(height: 12)
         }
       }
     }
@@ -838,8 +843,9 @@ extension Translation {
 
     /// A request as the wire carried it: the system message, then the user message with the
     /// cacheable prefix's end marked inside it.
+    @ViewBuilder
     private func blocks(_ request: Prompt.Request) -> some View {
-      VStack(alignment: .leading, spacing: 0) {
+      Group {
         blockLabel("System message")
         text(request.system)
         blockLabel("User message")
@@ -930,12 +936,15 @@ extension Translation {
     }
 
     /// One message or reply body, verbatim and selectable.
+    /// A body as one row per line, for the lazy stack above.
     private func text(_ body: String) -> some View {
-      Text(body)
-        .font(.system(.callout, design: .monospaced))
-        .textSelection(.enabled)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 12)
+      ForEach(Array(body.split(separator: "\n", omittingEmptySubsequences: false).enumerated()), id: \.offset) { _, line in
+        Text(line.isEmpty ? " " : String(line))
+          .font(.system(.callout, design: .monospaced))
+          .textSelection(.enabled)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .padding(.horizontal, 12)
+      }
     }
 
     private func note(icon: String, title: String, detail: String) -> some View {

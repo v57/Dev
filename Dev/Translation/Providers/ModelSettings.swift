@@ -4,6 +4,7 @@
 //
 
 import Foundation
+import os
 import Security
 
 // MARK: - ModelSettings
@@ -92,7 +93,19 @@ nonisolated enum ProviderKeychain {
     read(account: preset.id) != nil
   }
 
+  /// What the keychain answered per account, kept for the life of the app: the start buttons
+  /// and the run's pages ask whether a model is configured on every redraw, and a keychain read
+  /// is a trip to `securityd`. `save` and `delete` are the only writers, and they update it.
+  private static let cache = OSAllocatedUnfairLock(initialState: [String: String?]())
+
   static func read(account: String) -> String? {
+    if let cached = cache.withLock({ $0[account] }) { return cached }
+    let value = readKeychain(account: account)
+    cache.withLock { $0[account] = .some(value) }
+    return value
+  }
+
+  private static func readKeychain(account: String) -> String? {
     let query: [String: Any] = [
       kSecClass as String: kSecClassGenericPassword,
       kSecAttrService as String: service,
@@ -124,6 +137,7 @@ nonisolated enum ProviderKeychain {
       kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
       kSecAttrLabel as String: "Dev: \(account) API key",
     ]
+    defer { cache.withLock { $0[account] = nil } }
     let status = SecItemUpdate(base as CFDictionary, attributes as CFDictionary)
     if status == errSecSuccess { return true }
     guard status == errSecItemNotFound else { return false }
@@ -132,6 +146,7 @@ nonisolated enum ProviderKeychain {
 
   @discardableResult
   static func delete(account: String) -> Bool {
+    defer { cache.withLock { $0[account] = nil } }
     let query: [String: Any] = [
       kSecClass as String: kSecClassGenericPassword,
       kSecAttrService as String: service,
