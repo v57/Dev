@@ -808,11 +808,11 @@ extension TranslationData {
             }
           }
         } else {
-          opened = try TranslationDatabase(url: URL(fileURLWithPath: ":memory:"))
+          opened = try TranslationDatabase(url: nil)
         }
       } catch {
         NSLog("[TranslationData] %@ could not be opened (%@); using memory", location?.path ?? "-", error as NSError)
-        opened = try! TranslationDatabase(url: URL(fileURLWithPath: ":memory:"))
+        opened = try! TranslationDatabase(url: nil)
       }
       database = opened
       return opened

@@ -72,14 +72,17 @@ nonisolated struct TranslationChanges: Sendable {
 /// reads return values, and every write is one transaction.
 nonisolated final class TranslationDatabase {
   let connection: SQLiteConnection
-  let url: URL
+  /// The file, or nil for a database in memory.
+  let url: URL?
 
   /// The schema this code reads and writes.
   static let schemaVersion: Int64 = 1
 
-  init(url: URL) throws {
+  /// Opens the file at `url`, or a database in memory for nil (SQLite's `:memory:`, which a file URL would turn into
+  /// a path under the working directory).
+  init(url: URL?) throws {
     self.url = url
-    connection = try SQLiteConnection(path: url.path)
+    connection = try SQLiteConnection(path: url?.path ?? ":memory:")
     try connection.execute("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = OFF;")
     try migrate()
   }
