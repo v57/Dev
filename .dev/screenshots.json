@@ -6,7 +6,7 @@
   "scenes": [
     {
       "id": "01-localization",
-      "arguments": ["-DevScreenshotMode", "-DevTool", "localization"],
+      "arguments": ["-DevScreenshotMode", "-DevTool", "localization", "-localization.showsInspector", "YES"],
       "environment": { "DEV_DEMO_PROJECTS": "$DEMO" },
       "caption": "Translate every string in one run"
     },
