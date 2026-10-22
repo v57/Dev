@@ -278,6 +278,7 @@ private struct ProjectRow: View {
         .interpolation(.high)
         .aspectRatio(contentMode: .fit)
         .frame(width: 18, height: 18)
+        .clipShape(.rect(cornerRadius: 18 * 0.225, style: .continuous))
     } else {
       RowTile(systemImage: "folder", hue: .blue)
     }

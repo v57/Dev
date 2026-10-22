@@ -215,6 +215,7 @@ struct ContentView: View {
       RichHeader(Text(row.name), size: .title) {
         if let icon = row.iconImage {
           Image(nsImage: icon).resizable().interpolation(.high).frame(width: 28, height: 28)
+            .clipShape(.rect(cornerRadius: 28 * 0.225, style: .continuous))
         } else {
           Tile(systemImage: "app.dashed", hue: .blue, size: 28)
         }
