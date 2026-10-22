@@ -179,6 +179,7 @@ struct TranslationSettingsView: View {
       if let url = preset.keysURL.flatMap(URL.init(string:)) {
         FormRow(preset.needsKey ? "Get a key" : "Download", systemImage: "arrow.up.right.square", hue: .blue) {
           Link(preset.needsKey ? "Open" : "Download", destination: url)
+            .foregroundStyle(.kitLink)
         }
       }
     }
