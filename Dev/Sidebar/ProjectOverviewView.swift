@@ -337,7 +337,7 @@ struct ProjectOverviewView: View {
             } label: {
               ScreenshotThumbnail(shot: shot, preferFinal: true)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.kitHoverEffect)
           }
         }
       } else {
@@ -454,6 +454,8 @@ struct ScreenshotThumbnail: View {
             .padding(6)
         }
       }
+      // The picture tilts and lights under the pointer; the caption stays outside the effect.
+      .kitHoverEffect(in: .rect(cornerRadius: 8))
       HStack(spacing: 6) {
         Text(shot.title)
           .lineLimit(1)

@@ -175,7 +175,7 @@ struct ScreenshotsView: View {
                     RoundedRectangle(cornerRadius: 10)
                       .strokeBorder(selectedScene == shot.name ? Color.accentColor : .clear, lineWidth: 2))
               }
-              .buttonStyle(.plain)
+              .buttonStyle(.kitHoverEffect)
             }
           }
           .padding(.horizontal, 16)
