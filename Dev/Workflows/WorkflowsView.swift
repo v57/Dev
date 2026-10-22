@@ -414,7 +414,7 @@ struct WorkflowsView: View {
         step.name, subtitle: state?.note ?? step.runnerTitle, subtitleHue: state?.state == .failed ? .red : nil,
         isSelected: isSelectedStep(step)
       ) {
-        StepStateIcon(state: state?.state)
+        StepStateIcon(state: state?.state, isSelected: isSelectedStep(step))
       }
       .overlay(alignment: .trailing) {
         if let duration = state?.duration {
@@ -562,6 +562,8 @@ struct WorkflowsView: View {
 /// A step's state in its live icon: done, running, failed, skipped or waiting.
 struct StepStateIcon: View {
   let state: WorkflowRun.StepState?
+  /// A step that hasn't run takes the selected row's accent.
+  var isSelected = false
 
   var body: some View {
     switch state {
@@ -569,7 +571,12 @@ struct StepStateIcon: View {
     case .failed: LiveIcon(systemImage: "xmark", hue: .red, status: .failed, size: 22)
     case .running: LiveIcon(systemImage: "hammer", status: .working, size: 22)
     case .skipped: LiveIcon(systemImage: "arrow.uturn.forward", hue: .gray, status: .paused(), size: 22)
-    case .waiting, nil: LiveIcon(systemImage: "circle.dashed", hue: .gray, status: .idle, size: 22)
+    // Nothing has happened yet: a bare dashed circle, no tile, as the canvas draws a step before its first run.
+    case .waiting, nil:
+      Image(systemName: "circle.dashed")
+        .font(.system(size: 15))
+        .foregroundStyle(isSelected ? AnyShapeStyle(Hue.accent.text) : AnyShapeStyle(.kitSecondary))
+        .frame(width: 22, height: 22)
     }
   }
 }
