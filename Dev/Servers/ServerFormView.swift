@@ -3,6 +3,7 @@
 //  Dev
 //
 
+import ComponentKit
 import SwiftUI
 
 /// The add/edit sheet for one server — ONE form for both, so the fields,
@@ -20,7 +21,7 @@ struct ServerFormView: View {
   /// Called with the finished values. `key == nil` means "leave the key alone".
   let onSave: (_ name: String, _ endpoint: String, _ key: String?) -> Void
 
-  @Environment(\.dismiss) private var dismiss
+  @Environment(\.kitDismiss) private var dismiss
 
   @State private var name: String
   @State private var endpoint: String
@@ -47,59 +48,53 @@ struct ServerFormView: View {
   }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 14) {
-      Text(editing == nil ? "Add Connection" : "Edit Connection")
-        .font(.headline)
-
-      Form {
-        TextField("Name", text: $name, prompt: Text("Local"))
-          .help("What this server is called in the sidebar")
-
-        TextField("Endpoint", text: $endpoint, prompt: Text("http://127.0.0.1:8080/"))
-          .help("The server's API root: the app POSTs localize/* under it")
-
-        HStack(spacing: 6) {
+    KitSheet(
+      title: editing == nil ? "Add Connection" : "Edit Connection",
+      meta: "A server that serves its strings through the Localization Server API", systemImage: "server.rack",
+      hue: .gray
+    ) {
+      FormCard {
+        FormRow(
+          "Name", help: "What this server is called in the sidebar", systemImage: "character.cursor.ibeam", hue: .gray,
+          field: TextField("Name", text: $name, prompt: Text("Local")))
+        FormRow(
+          "Endpoint", help: "The server's API root: the app POSTs localize/* under it", systemImage: "link",
+          field: TextField("Endpoint", text: $endpoint, prompt: Text("http://127.0.0.1:8080/")))
+        FormRow("Key", help: keyHelp, systemImage: "key", hue: .orange) {
+          Button(showsKey ? "Hide" : "Show") { showsKey.toggle() }
+            .buttonStyle(.kitPlain)
+            .foregroundStyle(.kitLink)
+        }
+        Group {
           if showsKey {
             TextField("Key", text: $key, prompt: Text(sharedKeyHint))
           } else {
             SecureField("Key", text: $key, prompt: Text(sharedKeyHint))
           }
-          Button {
-            showsKey.toggle()
-          } label: {
-            Image(systemName: showsKey ? "eye.slash" : "eye")
-          }
-          .buttonStyle(.borderless)
-          .help(showsKey ? "Hide the key" : "Show the key")
         }
+        .labelsHidden()
+        .kitField()
+        .padding(.horizontal, 12)
+        .padding(.bottom, 10)
         .onChange(of: key) { _, _ in keyEdited = true }
-        .help(keyHelp)
         if key.isEmpty, let found = importable {
-          Button("Use \(ServerKeychain.sharedKeyName) from \(found.source)") {
-            key = found.key
-          }
-          .buttonStyle(.link)
-          .help("Copies the key into this server's own keychain item when you save")
+          GroupRow(
+            "Use \(ServerKeychain.sharedKeyName) from \(found.source)",
+            help: "Copies the key into this server's own keychain item when you save",
+            action: { key = found.key })
         }
       }
-      .formStyle(.grouped)
-
-      HStack {
-        if let problem {
-          Label(problem, systemImage: "exclamationmark.triangle.fill")
-            .font(.caption)
-            .foregroundStyle(.orange)
-        }
-        Spacer()
-        Button("Cancel", role: .cancel) { dismiss() }
-          .keyboardShortcut(.cancelAction)
-        Button(editing == nil ? "Add" : "Save") { save() }
-          .keyboardShortcut(.defaultAction)
-          .disabled(problem != nil)
+    } footer: {
+      if let problem {
+        SheetStatus(problem, systemImage: "exclamationmark.triangle", hue: .orange)
       }
+      Button("Cancel", role: .cancel) { dismiss() }
+        .keyboardShortcut(.cancelAction)
+      Button(editing == nil ? "Add" : "Save") { save() }
+        .buttonStyle(.kitPrimary)
+        .keyboardShortcut(.defaultAction)
+        .disabled(problem != nil)
     }
-    .padding(20)
-    .frame(width: 420)
   }
 
   // MARK: - validation

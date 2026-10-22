@@ -18,8 +18,9 @@ nonisolated enum LaunchOptions {
       .split(separator: ":").map { URL(fileURLWithPath: String($0)) }
   }
 
-  /// `-DevOpen storage|vms`: a tool to open instead of a project (ContentView reads it per scene);
-  /// `-DevOpen releaseSettings` (with `-DevTool workflows`) opens Release Settings.
+  /// `-DevOpen storage|vms`: a tool to open instead of a project, `welcome` nothing (ContentView reads it per scene);
+  /// `-DevOpen releaseSettings` or `editWorkflow` (with `-DevTool workflows`) opens Release Settings or the first
+  /// workflow's sheet, `addServer` the Add Connection sheet.
   static var open: String? { value(after: "-DevOpen") }
 
   /// `-DevStoragePage smartScan|languages|<category>`: Storage's first page.

@@ -61,7 +61,7 @@ struct ServerDetailView: View {
           .disabled(row == nil)
       }
     }
-    .sheet(isPresented: $editing) {
+    .kitSheet(isPresented: $editing) {
       ServerFormView(editing: store.connection(id: serverID)) { name, endpoint, key in
         store.update(id: serverID, name: name, endpoint: endpoint, key: key)
       }

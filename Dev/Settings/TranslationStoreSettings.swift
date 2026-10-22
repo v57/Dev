@@ -36,19 +36,18 @@ struct ClearTranslationStoreSection: View {
         .help("Clear Translation Store…")
     }
     .onAppear { refreshBlocker() }
-    .alert(
-      prompt?.title ?? "",
-      isPresented: Binding(get: { prompt != nil }, set: { if !$0 { prompt = nil } })
+    .kitConfirmation(
+      StoreClearPrompt.confirm.title,
+      isPresented: Binding(get: { prompt == .confirm }, set: { if !$0, prompt == .confirm { prompt = nil } }),
+      message: StoreClearPrompt.confirm.message, systemImage: "brain", confirm: "Clear Store"
     ) {
-      if prompt == .confirm {
-        Button("Cancel", role: .cancel) { prompt = nil }
-        Button("Clear Store", role: .destructive) { clear() }
-      } else {
-        Button("OK") { prompt = nil }
-      }
-    } message: {
-      Text(prompt?.message ?? "")
+      clear()
     }
+    .kitNotice(
+      prompt?.title ?? "",
+      isPresented: Binding(
+        get: { if case .result = prompt { true } else { false } }, set: { if !$0 { prompt = nil } }),
+      message: prompt?.message, systemImage: "brain", hue: .purple)
   }
 
   private func refreshBlocker() {

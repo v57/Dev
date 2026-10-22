@@ -3,6 +3,7 @@
 //  Dev
 //
 
+import ComponentKit
 import CryptoKit
 import Foundation
 import SwiftUI
@@ -201,7 +202,7 @@ nonisolated struct AppStoreConnectAPI: Sendable {
 struct AppStoreUploadSheet: View {
   let root: URL
   let library: ScreenshotLibrary?
-  @Environment(\.dismiss) private var dismiss
+  @Environment(\.kitDismiss) private var dismiss
   @State private var replace = true
   @State private var lines: [String] = []
   @State private var isUploading = false
@@ -215,60 +216,64 @@ struct AppStoreUploadSheet: View {
 
   var body: some View {
     let finals = finalFiles()
-    VStack(alignment: .leading, spacing: 14) {
-      Text("Upload to App Store Connect").font(.headline)
-      Text("Replaces the screenshots of the app's version in Prepare for Submission, one display type per size, for \(finals.count) languages.")
-        .foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
-      VStack(alignment: .leading, spacing: 4) {
+    KitSheet(
+      title: "Upload to App Store Connect",
+      meta: "Replaces the screenshots of the app's version in Prepare for Submission, one display type per size, for \(finals.count) languages.",
+      systemImage: "icloud.and.arrow.up", width: 520
+    ) {
+      FormCard("Pictures") {
         ForEach(finals.keys.sorted(), id: \.self) { locale in
-          Text("\(Locale.current.localizedString(forIdentifier: locale) ?? locale): \(finals[locale]?.count ?? 0) pictures")
-            .font(.callout)
-        }
-      }
-      .padding(10)
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
-      if config == nil {
-        Label("This project has no release.env. Set it up in Workflows ▸ Release Settings first.", systemImage: "exclamationmark.triangle.fill")
-          .foregroundStyle(.orange)
-      } else if !hasKey || savedConfig != config {
-        // Shell's key import: choose the .p8, check it with Apple; saved to release.env on Upload.
-        Form {
-          Section("App Store Connect API key") {
-            AppStoreConnectKeyFields(config: Binding(get: { config ?? ReleaseConfig() }, set: { config = $0 }), offersNotary: false)
+          GroupRow(Locale.current.localizedString(forIdentifier: locale) ?? locale) {
+            Text("\(finals[locale]?.count ?? 0) pictures").foregroundStyle(.kitSecondary)
           }
         }
-        .formStyle(.grouped)
-        .frame(height: 230)
-        .scrollDisabled(true)
       }
-      Toggle("Delete the version's current screenshots first", isOn: $replace)
+      .controlSize(.small)
+      if config == nil {
+        FormCard {
+          FormRow(
+            "No release.env", help: "Set it up in Workflows ▸ Release Settings first.",
+            systemImage: "exclamationmark.triangle", hue: .orange)
+        }
+      } else if !hasKey || savedConfig != config {
+        // Shell's key import: choose the .p8, check it with Apple; saved to release.env on Upload.
+        FormCard("App Store Connect API key") {
+          AppStoreConnectKeyFields(config: Binding(get: { config ?? ReleaseConfig() }, set: { config = $0 }), offersNotary: false)
+        }
+      }
+      FormCard {
+        GroupRow("Delete the version's current screenshots first") {
+          Toggle("Delete the version's current screenshots first", isOn: $replace)
+            .labelsHidden().toggleStyle(.kitSwitch)
+        }
+      }
       if !lines.isEmpty {
         ScrollView {
           Text(lines.joined(separator: "\n"))
-            .font(.system(.caption, design: .monospaced))
+            .kitFont(.monoSmall)
             .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(10)
         }
         .frame(height: 120)
+        .kitSurface(.card, cornerRadius: KitMetrics.radiusCard)
       }
+    } footer: {
       if let error {
-        Label(error, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.red).textSelection(.enabled)
+        SheetStatus(error, systemImage: "exclamationmark.triangle", status: .failed)
+      } else if isUploading {
+        SheetStatus("Uploading…", systemImage: "icloud.and.arrow.up", status: .working)
+      } else if done {
+        SheetStatus("Uploaded", systemImage: "icloud.and.arrow.up", status: .done)
       }
-      HStack {
-        if isUploading { ProgressView().controlSize(.small) }
-        Spacer()
-        Button(done ? "Done" : "Cancel") { dismiss() }
-          .keyboardShortcut(.cancelAction)
-        if !done {
-          Button("Upload") { Task { await upload(finals) } }
-            .keyboardShortcut(.defaultAction)
-            .disabled(isUploading || finals.isEmpty || !hasKey)
-        }
+      Button(done ? "Done" : "Cancel") { dismiss() }
+        .keyboardShortcut(.cancelAction)
+      if !done {
+        Button("Upload") { Task { await upload(finals) } }
+          .buttonStyle(.kitPrimary)
+          .keyboardShortcut(.defaultAction)
+          .disabled(isUploading || finals.isEmpty || !hasKey)
       }
     }
-    .padding(20)
-    .frame(width: 500)
     .task {
       config = ReleaseConfig.load(from: root)
       savedConfig = config

@@ -66,7 +66,7 @@ struct SidebarView: View {
         }
         .help("Add a project or a Localization Server")
     }
-    .sheet(item: $serverSheet) { sheet in
+    .kitSheet(item: $serverSheet) { sheet in
       switch sheet {
       case .add:
         ServerFormView { name, endpoint, key in
@@ -86,6 +86,8 @@ struct SidebarView: View {
     .task {
       await TranslationData.shared.start()
       servers.refresh()
+      // Design checks: the Add Connection sheet.
+      if LaunchOptions.isScreenshotMode, LaunchOptions.open == "addServer" { serverSheet = .add }
       await servers.checkAll()
     }
     .dropDestination(for: URL.self) { urls, _ in
@@ -102,7 +104,7 @@ struct SidebarView: View {
       model.isDropTargeted = $0
     }
     .kitDropTarget(model.isDropTargeted, cornerRadius: KitMetrics.radiusCard)
-    .sheet(isPresented: Binding(
+    .kitSheet(isPresented: Binding(
       get: { !model.importSuggestions.isEmpty },
       set: { if !$0 { model.importSuggestions = [] } }
     )) {
@@ -114,14 +116,9 @@ struct SidebarView: View {
         }
       }
     }
-    .alert(model.alert?.title ?? "", isPresented: Binding(
-      get: { model.alert != nil },
-      set: { if !$0 { model.alert = nil } }
-    )) {
-      Button("OK") { model.alert = nil }
-    } message: {
-      Text(model.alert?.message ?? "")
-    }
+    .kitNotice(
+      model.alert?.title ?? "", isPresented: Binding(get: { model.alert != nil }, set: { if !$0 { model.alert = nil } }),
+      message: model.alert?.message)
     .task { model.refresh() }
     .onChange(of: model.selection) {
       // A selection usually precedes a reconcile (catalog open); refresh so

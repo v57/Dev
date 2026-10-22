@@ -42,16 +42,10 @@ extension Translation {
       // `error` is what the workspace owes an alert (a missing credential, or the
       // failure the last run ended on), and the shell is where it can be shown whether
       // the overlay is open or closed.
-      .alert(
+      .kitNotice(
         "Translation",
-        isPresented: Binding(
-          get: { workspace.error != nil },
-          set: { if !$0 { workspace.error = nil } })
-      ) {
-        Button("OK") { workspace.error = nil }
-      } message: {
-        Text(workspace.error ?? "")
-      }
+        isPresented: Binding(get: { workspace.error != nil }, set: { if !$0 { workspace.error = nil } }),
+        message: workspace.error)
     }
   }
 
@@ -427,16 +421,10 @@ extension Translation {
       // The shell's own failure channel: a run that could not start (no credential, 5.2)
       // has nothing on screen to report from, and the bar is the one surface that
       // outlives a closed overlay (8.1).
-      .alert(
+      .kitNotice(
         "Translation",
-        isPresented: Binding(
-          get: { workspace.error != nil },
-          set: { if !$0 { workspace.error = nil } })
-      ) {
-        Button("OK") { workspace.error = nil }
-      } message: {
-        Text(workspace.error ?? "")
-      }
+        isPresented: Binding(get: { workspace.error != nil }, set: { if !$0 { workspace.error = nil } }),
+        message: workspace.error)
     }
 
     private func bar(_ estimate: Run.Estimate?) -> some View {

@@ -76,14 +76,14 @@ struct ContentView: View {
     .onChange(of: model.projects.compactMap(\.rootURL)) { _, roots in
       workflows.watchedRoots = roots
     }
-    .alert(
+    // Cancel (or Escape) doesn't allow it.
+    .kitConfirmation(
       "\(agents.pending?.client ?? "An agent") wants to \(agents.pending?.summary ?? "")",
-      isPresented: Binding(get: { agents.pending != nil }, set: { _ in })
+      isPresented: Binding(get: { agents.pending != nil }, set: { if !$0, agents.pending != nil { agents.answer(false) } }),
+      message: "The request came over Dev's MCP server. Settings ▸ Agents sets what agents may do without asking.",
+      systemImage: "powerplug", confirm: "Allow", role: nil
     ) {
-      Button("Don't Allow", role: .cancel) { agents.answer(false) }
-      Button("Allow") { agents.answer(true) }
-    } message: {
-      Text("The request came over Dev's MCP server. Settings ▸ Agents sets what agents may do without asking.")
+      agents.answer(true)
     }
     // File ▸ New Icon: the App Icon tool without a project.
     .onReceive(NotificationCenter.default.publisher(for: .devOpenProjectlessIcon)) { _ in
@@ -96,40 +96,31 @@ struct ContentView: View {
     // quitting all hold their request here until it is answered, because
     // Save is the only writer of the .xcstrings. Attached at the root so a
     // hidden Localize pane cannot swallow the prompt.
-    .alert(localizationStore.unsavedChangesTitle, isPresented: Binding(
-      get: { localizationStore.isUnsavedPromptPresented },
-      set: { if !$0 { localizationStore.dismissUnsavedPrompt() } }
-    )) {
-      Button("Save") { Task { await localizationStore.resolvePendingLeave(.save) } }
-      Button("Discard", role: .destructive) {
-        Task { await localizationStore.resolvePendingLeave(.discard) }
-      }
-      Button("Cancel", role: .cancel) {
-        Task { await localizationStore.resolvePendingLeave(.cancel) }
-      }
-    } message: {
-      Text(localizationStore.unsavedChangesMessage)
-    }
+    // A button closes the prompt before its answer runs, so the binding only answers Cancel (or Escape) itself.
+    .kitConfirmation(
+      localizationStore.unsavedChangesTitle,
+      isPresented: Binding(
+        get: { localizationStore.isUnsavedPromptPresented },
+        set: { if !$0, localizationStore.isUnsavedPromptPresented { leave(.cancel) } }),
+      message: localizationStore.unsavedChangesMessage, systemImage: "square.and.arrow.down", hue: .accent,
+      buttons: [
+        KitConfirmationButton("Discard", role: .destructive) { leave(.discard) },
+        KitConfirmationButton("Save", isDefault: true) { leave(.save) },
+      ])
     // Versions prompt: the file and the app's records carry different values for
     // the same slot, so the load asks which version to load instead of keeping
     // the cached records and dropping the file's (or the other way round). The
     // parse is held until this is answered — nothing is opened before it is.
-    .alert(localizationStore.versionsPromptTitle, isPresented: Binding(
-      get: { localizationStore.isVersionsPromptPresented },
-      set: { if !$0 { localizationStore.dismissVersionsPrompt() } }
-    )) {
-      Button("Load the File's Values") {
-        Task { await localizationStore.resolveDifferences(.file) }
-      }
-      Button("Keep the App's Records") {
-        Task { await localizationStore.resolveDifferences(.app) }
-      }
-      Button("Cancel", role: .cancel) {
-        Task { await localizationStore.resolveDifferences(.cancel) }
-      }
-    } message: {
-      Text(localizationStore.versionsPromptMessage)
-    }
+    .kitConfirmation(
+      localizationStore.versionsPromptTitle,
+      isPresented: Binding(
+        get: { localizationStore.isVersionsPromptPresented },
+        set: { if !$0, localizationStore.isVersionsPromptPresented { resolveDifferences(.cancel) } }),
+      message: localizationStore.versionsPromptMessage, systemImage: "arrow.triangle.branch", hue: .orange,
+      buttons: [
+        KitConfirmationButton("Keep the App's Records") { resolveDifferences(.app) },
+        KitConfirmationButton("Load the File's Values", isDefault: true) { resolveDifferences(.file) },
+      ])
     // Restore the remembered imported translation DB (path only — no open,
     // no scan) so the pipeline knows it is active.
     .task {
@@ -206,6 +197,18 @@ struct ContentView: View {
         }
       }
     }
+  }
+
+  /// Answers the unsaved-changes prompt, closing it first.
+  private func leave(_ choice: LeaveChoice) {
+    localizationStore.dismissUnsavedPrompt()
+    Task { await localizationStore.resolvePendingLeave(choice) }
+  }
+
+  /// Answers the versions prompt, closing it first.
+  private func resolveDifferences(_ choice: DifferenceChoice) {
+    localizationStore.dismissVersionsPrompt()
+    Task { await localizationStore.resolveDifferences(choice) }
   }
 
   /// The toolbar's rich title: the open project (its icon, name and folder), or the tool.

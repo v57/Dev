@@ -77,24 +77,16 @@ struct ServersSidebarSection: View {
         .buttonStyle(.kitIcon)
         .help("Add a Localization Server")
     }
-    .confirmationDialog(
+    .kitConfirmation(
       "Remove \(pendingRemoval?.name ?? "")?",
-      isPresented: Binding(
-        get: { pendingRemoval != nil },
-        set: { if !$0 { pendingRemoval = nil } }
-      ),
-      titleVisibility: .visible
+      isPresented: Binding(get: { pendingRemoval != nil }, set: { if !$0 { pendingRemoval = nil } }),
+      message: "The server's key is removed from the login keychain. Nothing on the server itself is touched.",
+      systemImage: "server.rack", confirm: "Remove Server"
     ) {
-      Button("Remove Server", role: .destructive) {
-        if let row = pendingRemoval {
-          if selection == .server(row.id) { selection = nil }
-          store.remove(id: row.id)
-        }
-        pendingRemoval = nil
+      if let row = pendingRemoval {
+        if selection == .server(row.id) { selection = nil }
+        store.remove(id: row.id)
       }
-      Button("Cancel", role: .cancel) { pendingRemoval = nil }
-    } message: {
-      Text("The server's key is removed from the login keychain. Nothing on the server itself is touched.")
     }
   }
 }

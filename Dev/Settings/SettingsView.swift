@@ -153,7 +153,7 @@ struct TranslationSettingsView: View {
         }
       }
     }
-    .sheet(isPresented: Binding(
+    .kitSheet(isPresented: Binding(
       get: { !model.importCandidates.isEmpty },
       set: { if !$0 { model.importCandidates = [] } }
     )) {

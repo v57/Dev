@@ -73,36 +73,35 @@ struct WorkflowsView: View {
         if releaseConfig == nil { releaseConfig = await ReleaseConfig.detect(in: root) }
         showsReleaseSettings = true
       }
-    }
-    .alert("Run \(confirmingRun?.name ?? "")?", isPresented: Binding(
-      get: { confirmingRun != nil }, set: { if !$0 { confirmingRun = nil } })
-    ) {
-      Button("Cancel", role: .cancel) { confirmingRun = nil }
-      Button("Run") {
-        if let workflow = confirmingRun { start(workflow, confirmed: true) }
-        confirmingRun = nil
+      if LaunchOptions.isScreenshotMode, LaunchOptions.open == "editWorkflow" {
+        editing = store.workflows(for: root).first
       }
-    } message: {
-      let names = confirmingRun?.steps.filter(\.publishes).map(\.name).joined(separator: ", ") ?? ""
-      Text("This run publishes: \(names). It sends the build outside this Mac.")
     }
-    .alert(
-      "\(store.confirmation?.workflowName ?? "") wants to publish",
-      isPresented: Binding(get: { store.confirmation?.root == root }, set: { _ in })
+    .kitConfirmation(
+      "Run \(confirmingRun?.name ?? "")?",
+      isPresented: Binding(get: { confirmingRun != nil }, set: { if !$0 { confirmingRun = nil } }),
+      message: "This run publishes: \(confirmingRun?.steps.filter(\.publishes).map(\.name).joined(separator: ", ") ?? ""). It sends the build outside this Mac.",
+      systemImage: "paperplane", confirm: "Run", role: nil
     ) {
-      Button("Don't Publish", role: .cancel) { if let c = store.confirmation { store.answer(c, false) } }
-      Button("Publish") { if let c = store.confirmation { store.answer(c, true) } }
-    } message: {
-      let c = store.confirmation
-      Text("Started by \(c?.startedBy ?? "you"). Next: \(c?.steps.joined(separator: ", ") ?? "").")
+      if let workflow = confirmingRun { start(workflow, confirmed: true) }
     }
-    .alert(store.notice ?? "", isPresented: Binding(get: { store.notice != nil }, set: { if !$0 { store.notice = nil } })) {
-      Button("OK") { store.notice = nil }
+    // Cancel (or Escape) doesn't publish.
+    .kitConfirmation(
+      "\(store.confirmation?.workflowName ?? "") wants to publish",
+      isPresented: Binding(
+        get: { store.confirmation?.root == root },
+        set: { if !$0, let c = store.confirmation, c.root == root { store.answer(c, false) } }),
+      message: "Started by \(store.confirmation?.startedBy ?? "you"). Next: \(store.confirmation?.steps.joined(separator: ", ") ?? "").",
+      systemImage: "paperplane", confirm: "Publish", role: nil
+    ) {
+      if let c = store.confirmation { store.answer(c, true) }
     }
-    .alert(saveError ?? "", isPresented: Binding(get: { saveError != nil }, set: { if !$0 { saveError = nil } })) {
-      Button("OK") { saveError = nil }
-    }
-    .sheet(isPresented: $showsReleaseSettings) {
+    .kitNotice(
+      store.notice ?? "", isPresented: Binding(get: { store.notice != nil }, set: { if !$0 { store.notice = nil } }),
+      systemImage: "info.circle", hue: .accent)
+    .kitNotice(
+      saveError ?? "", isPresented: Binding(get: { saveError != nil }, set: { if !$0 { saveError = nil } }))
+    .kitSheet(isPresented: $showsReleaseSettings) {
       ReleaseSettingsSheet(config: releaseConfig ?? ReleaseConfig()) { edited in
         do {
           try edited.save(to: root)
@@ -112,7 +111,7 @@ struct WorkflowsView: View {
         }
       }
     }
-    .sheet(item: $editing) { workflow in
+    .kitSheet(item: $editing) { workflow in
       WorkflowSettingsSheet(workflow: workflow) { edited in
         save(edited)
       } onDelete: {
@@ -586,7 +585,7 @@ struct WorkflowSettingsSheet: View {
   @State var workflow: Workflow
   let onSave: (Workflow) -> Void
   let onDelete: () -> Void
-  @Environment(\.dismiss) private var dismiss
+  @Environment(\.kitDismiss) private var dismiss
 
   init(workflow: Workflow, onSave: @escaping (Workflow) -> Void, onDelete: @escaping () -> Void) {
     _workflow = State(initialValue: workflow)
@@ -595,38 +594,45 @@ struct WorkflowSettingsSheet: View {
   }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 16) {
-      Text("Workflow").font(.headline)
-      Form {
-        TextField("Name", text: $workflow.name)
-        Section("Runs on its own") {
-          TextField("Every commit on branch", text: optional(\.trigger.branch), prompt: Text("main"))
-          TextField("New tags matching", text: optional(\.trigger.tag), prompt: Text("v*"))
-          TextField("Every day at", text: optional(\.trigger.daily), prompt: Text("02:00"))
-          Text("Dev checks these while it is open: there is no server, so nothing runs while the Mac sleeps or Dev is quit.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-        }
+    KitSheet(title: "Workflow", meta: "Saved to .dev/workflows/\(workflow.id).json", systemImage: "shippingbox") {
+      FormCard {
+        FormRow("Name", systemImage: "character.cursor.ibeam", hue: .gray, field: TextField("Name", text: $workflow.name))
       }
-      .formStyle(.grouped)
-      HStack {
-        Button("Delete Workflow", role: .destructive) {
-          onDelete()
-          dismiss()
-        }
-        Spacer()
-        Button("Cancel") { dismiss() }
-          .keyboardShortcut(.cancelAction)
-        Button("Save") {
-          onSave(workflow)
-          dismiss()
-        }
-        .keyboardShortcut(.defaultAction)
-        .disabled(workflow.name.trimmingCharacters(in: .whitespaces).isEmpty)
+      FormCard(
+        "Runs on its own",
+        footer: "Dev checks these while it is open: there is no server, so nothing runs while the Mac sleeps or Dev is quit."
+      ) {
+        trigger("Every commit on branch", "arrow.triangle.branch", \.trigger.branch, "main")
+        trigger("New tags matching", "tag", \.trigger.tag, "v*")
+        trigger("Every day at", "clock", \.trigger.daily, "02:00")
       }
+    } footer: {
+      Button("Delete Workflow", role: .destructive) {
+        onDelete()
+        dismiss()
+      }
+      Spacer()
+      Button("Cancel") { dismiss() }
+        .keyboardShortcut(.cancelAction)
+      Button("Save") {
+        onSave(workflow)
+        dismiss()
+      }
+      .buttonStyle(.kitPrimary)
+      .keyboardShortcut(.defaultAction)
+      .disabled(workflow.name.trimmingCharacters(in: .whitespaces).isEmpty)
     }
-    .padding(20)
-    .frame(width: 460, height: 380)
+  }
+
+  private func trigger(
+    _ title: String, _ systemImage: String, _ path: WritableKeyPath<Workflow, String?>, _ prompt: String
+  ) -> some View {
+    GroupRow(title) {
+      TextField(title, text: optional(path), prompt: Text(prompt))
+        .labelsHidden()
+        .kitField()
+        .frame(width: 160)
+    }
   }
 
   private func optional(_ path: WritableKeyPath<Workflow, String?>) -> Binding<String> {

@@ -3,6 +3,7 @@
 //  Dev
 //
 
+import ComponentKit
 import SwiftUI
 
 /// The project's `release.env`, edited as a form: how release.sh builds, signs
@@ -11,89 +12,99 @@ import SwiftUI
 struct ReleaseSettingsSheet: View {
   @State var config: ReleaseConfig
   let onSave: (ReleaseConfig) -> Void
-  @Environment(\.dismiss) private var dismiss
+  @Environment(\.kitDismiss) private var dismiss
   @State private var notary: AppStoreConnectKey.Status = .idle
 
   var body: some View {
-    VStack(spacing: 0) {
-      Form {
-        Section("App") {
-          field("App name", "APP_NAME", "MyApp")
-          field("Scheme", "SCHEME", "MyApp")
-          field("Project", "PROJECT", "MyApp.xcodeproj")
-          field("Workspace", "WORKSPACE", "MyApp.xcworkspace (instead of a project)")
-          Picker("Platform", selection: binding("PLATFORM")) {
-            Text("macOS").tag("macos")
-            Text("iOS").tag("ios")
-          }
-          field("Team ID", "TEAM_ID", "ABCDE12345")
+    KitSheet(
+      title: "Release Settings", meta: "release.env: how release.sh builds, signs and ships the app",
+      systemImage: "shippingbox", width: 560
+    ) {
+      FormCard("App") {
+        field("App name", "APP_NAME", "MyApp")
+        field("Scheme", "SCHEME", "MyApp")
+        field("Project", "PROJECT", "MyApp.xcodeproj")
+        field("Workspace", "WORKSPACE", "instead of a project")
+        GroupRow("Platform") {
+          // Empty means macOS to release.sh.
+          KitPicker(
+            "Platform",
+            selection: Binding(
+              get: { config["PLATFORM"].isEmpty ? "macos" : config["PLATFORM"] }, set: { config["PLATFORM"] = $0 }),
+            options: [("macOS", "macos"), ("iOS", "ios")])
         }
-        Section("Tests and screenshots") {
-          field("Test scheme", "TEST_SCHEME", "empty skips tests")
-          field("Test destination", "TEST_DESTINATION", "platform=macOS")
-          field("Screenshot test", "SCREENSHOT_TEST", "MyAppUITests/ScreenshotTests")
-          field("Locales", "SCREENSHOT_LOCALES", "en-US de-DE ja-JP")
+        field("Team ID", "TEAM_ID", "ABCDE12345")
+      }
+      FormCard("Tests and screenshots") {
+        field("Test scheme", "TEST_SCHEME", "empty skips tests")
+        field("Test destination", "TEST_DESTINATION", "platform=macOS")
+        field("Screenshot test", "SCREENSHOT_TEST", "MyAppUITests/ScreenshotTests")
+        field("Locales", "SCREENSHOT_LOCALES", "en-US de-DE ja-JP")
+      }
+      FormCard(
+        "Direct download",
+        footer: "A notarytool keychain profile. Use for Notarization below saves the App Store Connect key as one."
+      ) {
+        field("Formats", "DIRECT_DOWNLOAD", "zip dmg")
+        // Empty means universal to release.sh.
+        GroupRow("Builds", help: "Both ships <App> (universal) and <App>-AppleSilicon, half the size") {
+          KitPicker(
+            "Builds",
+            selection: Binding(
+              get: { config["DIRECT_ARCHS"].isEmpty ? "universal" : config["DIRECT_ARCHS"] },
+              set: { config["DIRECT_ARCHS"] = $0 }),
+            options: [("Universal", "universal"), ("Apple silicon", "arm64"), ("Both", "universal arm64")])
         }
-        Section {
-          field("Formats", "DIRECT_DOWNLOAD", "zip dmg")
-          // Empty means universal to release.sh.
-          Picker("Builds", selection: Binding(
-            get: { config["DIRECT_ARCHS"].isEmpty ? "universal" : config["DIRECT_ARCHS"] },
-            set: { config["DIRECT_ARCHS"] = $0 })) {
-            Text("Universal").tag("universal")
-            Text("Apple silicon").tag("arm64")
-            Text("Both").tag("universal arm64")
-          }
-          .help("Both ships <App> (universal) and <App>-AppleSilicon, half the size")
-          HStack {
-            field("Notary profile", "NOTARY_PROFILE", "notary")
+        GroupRow("Notary profile", help: notaryLine) {
+          HStack(spacing: 6) {
+            textField("Notary profile", "NOTARY_PROFILE", "notary")
             Button("Check") { Task { await checkNotary() } }
+              .buttonStyle(.kit)
               .disabled(config["NOTARY_PROFILE"].isEmpty || notary == .checking)
           }
-          switch notary {
-          case .idle: EmptyView()
-          case .checking:
-            HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Checking with Apple…").foregroundStyle(.secondary) }
-          case .valid(let text): Label(text, systemImage: "checkmark.seal.fill").foregroundStyle(.green)
-          case .failed(let text):
-            Label(text, systemImage: "xmark.octagon.fill").foregroundStyle(.red).lineLimit(4).textSelection(.enabled)
-          }
-        } header: {
-          Text("Direct download")
-        } footer: {
-          Text("A notarytool keychain profile. Use for Notarization below saves the App Store Connect key as one.")
         }
-        Section("GitHub") {
-          field("Repository", "GITHUB_REPO", "owner/repo")
+      }
+      FormCard("GitHub") {
+        field("Repository", "GITHUB_REPO", "owner/repo")
+        GroupRow("Create as draft") {
           Toggle("Create as draft", isOn: Binding(
             get: { config["GITHUB_DRAFT"] != "no" },
             set: { config["GITHUB_DRAFT"] = $0 ? "yes" : "no" }))
+          .labelsHidden().toggleStyle(.kitSwitch)
         }
-        Section {
+      }
+      FormCard(
+        "App Store Connect",
+        footer: "The API key uploads screenshots, and builds without the account signed in to Xcode. Dev copies it to ~/.appstoreconnect/private_keys."
+      ) {
+        GroupRow("Upload to App Store Connect") {
           Toggle("Upload to App Store Connect", isOn: Binding(
             get: { config["APP_STORE"] == "yes" },
             set: { config["APP_STORE"] = $0 ? "yes" : "no" }))
-          AppStoreConnectKeyFields(config: $config)
-        } header: {
-          Text("App Store Connect")
-        } footer: {
-          Text("The API key uploads screenshots, and builds without the account signed in to Xcode. Dev copies it to ~/.appstoreconnect/private_keys.")
+          .labelsHidden().toggleStyle(.kitSwitch)
         }
+        AppStoreConnectKeyFields(config: $config)
       }
-      .formStyle(.grouped)
-      HStack {
-        Spacer()
-        Button("Cancel") { dismiss() }
-          .keyboardShortcut(.cancelAction)
-        Button("Save") {
-          onSave(config)
-          dismiss()
-        }
-        .keyboardShortcut(.defaultAction)
+    } footer: {
+      Button("Cancel") { dismiss() }
+        .keyboardShortcut(.cancelAction)
+      Button("Save") {
+        onSave(config)
+        dismiss()
       }
-      .padding(16)
+      .buttonStyle(.kitPrimary)
+      .keyboardShortcut(.defaultAction)
     }
-    .frame(width: 540, height: 680)
+  }
+
+  /// The notary profile's check, as the row's line.
+  private var notaryLine: String? {
+    switch notary {
+    case .idle: nil
+    case .checking: "Checking with Apple…"
+    case .valid(let text): text
+    case .failed(let text): text
+    }
   }
 
   private func checkNotary() async {
@@ -105,7 +116,15 @@ struct ReleaseSettingsSheet: View {
     Binding(get: { config[key] }, set: { config[key] = $0 })
   }
 
+  /// A row with its value as a field at the end.
   private func field(_ title: String, _ key: String, _ prompt: String) -> some View {
+    GroupRow(title) { textField(title, key, prompt) }
+  }
+
+  private func textField(_ title: String, _ key: String, _ prompt: String) -> some View {
     TextField(title, text: binding(key), prompt: Text(prompt))
+      .labelsHidden()
+      .kitField()
+      .frame(width: 250)
   }
 }

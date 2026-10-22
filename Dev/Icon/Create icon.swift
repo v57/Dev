@@ -57,12 +57,8 @@ struct CreateIconView: View {
       guard create.settings.preview else { return }
       await generateImage()
     }
-    .alert(alertMessage ?? "", isPresented: Binding(
-      get: { alertMessage != nil },
-      set: { if !$0 { alertMessage = nil } }
-    )) {
-      Button("OK") { alertMessage = nil }
-    }
+    .kitNotice(
+      alertMessage ?? "", isPresented: Binding(get: { alertMessage != nil }, set: { if !$0 { alertMessage = nil } }))
   }
 
   // MARK: - controls

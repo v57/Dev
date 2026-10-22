@@ -3,6 +3,7 @@
 //  Dev
 //
 
+import ComponentKit
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -104,60 +105,55 @@ struct AppStoreConnectKeyFields: View {
   private var shown: AppStoreConnectKey.Status { checked == current ? status : .idle }
   private var complete: Bool { !config["ASC_KEY_PATH"].isEmpty && !config["ASC_KEY_ID"].isEmpty }
 
+  /// Rows of a `FormCard`: the key file, its ID and issuer, the check with Apple and, in Release Settings, saving it
+  /// as the notary profile.
   var body: some View {
-    LabeledContent("Key file") {
-      HStack {
-        Text(config["ASC_KEY_PATH"].isEmpty ? "None" : (config["ASC_KEY_PATH"] as NSString).lastPathComponent)
-          .foregroundStyle(config["ASC_KEY_PATH"].isEmpty ? .secondary : .primary)
-          .help(config["ASC_KEY_PATH"])
-        Button("Choose…") { choosing = true }
-          .fileImporter(isPresented: $choosing, allowedContentTypes: [UTType(filenameExtension: "p8") ?? .data]) {
-            imported($0)
-          }
+    GroupRow(
+      "Key file",
+      help: importError ?? (config["ASC_KEY_PATH"].isEmpty ? "None" : (config["ASC_KEY_PATH"] as NSString).lastPathComponent)
+    ) {
+      Button("Choose…") { choosing = true }
+        .buttonStyle(.kit)
+        .fileImporter(isPresented: $choosing, allowedContentTypes: [UTType(filenameExtension: "p8") ?? .data]) {
+          imported($0)
+        }
+    }
+    .help(config["ASC_KEY_PATH"])
+    GroupRow("Key ID") { field("Key ID", "ASC_KEY_ID", "from AuthKey_<KEY ID>.p8") }
+    GroupRow("Issuer ID") { field("Issuer ID", "ASC_ISSUER_ID", "empty for an individual key") }
+    GroupRow("Check with Apple", help: line(shown)) {
+      HStack(spacing: 10) {
+        Link("Create a key…", destination: URL(string: "https://appstoreconnect.apple.com/access/integrations/api")!)
+          .foregroundStyle(.kitLink)
+        Button("Check") { Task { await check() } }
+          .buttonStyle(.kit)
+          .disabled(!complete || shown == .checking)
       }
     }
-    TextField("Key ID", text: binding("ASC_KEY_ID"), prompt: Text("from AuthKey_<KEY ID>.p8"))
-    TextField("Issuer ID", text: binding("ASC_ISSUER_ID"), prompt: Text("team keys; empty for an individual key"))
-    if let importError {
-      Label(importError, systemImage: "xmark.octagon.fill").foregroundStyle(.red)
-    }
-    HStack {
-      statusView(shown)
-      Spacer()
-      Link("Create a key…", destination: URL(string: "https://appstoreconnect.apple.com/access/integrations/api")!)
-        .font(.callout)
-      Button("Check with Apple") { Task { await check() } }
-        .disabled(!complete || shown == .checking)
-    }
     if offersNotary {
-      HStack {
-        statusView(notary)
-        Spacer()
-        Button("Use for Notarization") { Task { await saveNotary() } }
+      GroupRow("Use for Notarization", help: line(notary) ?? "Saves this key as the notarytool profile “\(notaryProfile)”") {
+        Button("Save Profile") { Task { await saveNotary() } }
+          .buttonStyle(.kit)
           .disabled(!complete || notary == .checking)
-          .help("Saves this key as the notarytool profile “\(notaryProfile)” in your keychain")
       }
     }
   }
 
-  @ViewBuilder
-  private func statusView(_ status: AppStoreConnectKey.Status) -> some View {
+  /// A check's state as a row's line.
+  private func line(_ status: AppStoreConnectKey.Status) -> String? {
     switch status {
-    case .idle:
-      EmptyView()
-    case .checking:
-      HStack(spacing: 6) {
-        ProgressView().controlSize(.small)
-        Text("Checking with Apple…").foregroundStyle(.secondary)
-      }
-    case .valid(let text):
-      Label(text, systemImage: "checkmark.seal.fill").foregroundStyle(.green)
-    case .failed(let message):
-      Label(message, systemImage: "xmark.octagon.fill")
-        .foregroundStyle(.red)
-        .lineLimit(4)
-        .textSelection(.enabled)
+    case .idle: nil
+    case .checking: "Checking with Apple…"
+    case .valid(let text): text
+    case .failed(let message): message
     }
+  }
+
+  private func field(_ title: String, _ key: String, _ prompt: String) -> some View {
+    TextField(title, text: binding(key), prompt: Text(prompt))
+      .labelsHidden()
+      .kitField()
+      .frame(width: 250)
   }
 
   private var notaryProfile: String { config["NOTARY_PROFILE"].isEmpty ? "notary" : config["NOTARY_PROFILE"] }

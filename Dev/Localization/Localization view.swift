@@ -110,18 +110,14 @@ struct LocalizationView: View {
       guard projectCatalogURL == nil else { return }
       await store.openDefaultIfPresent()
     }
-    .alert(store.errorTitle, isPresented: errorBinding) {
-      Button("OK") { store.dismissError() }
-    } message: {
-      Text(store.errorMessage ?? "")
-    }
+    .kitNotice(store.errorTitle, isPresented: errorBinding, message: store.errorMessage)
     // Generating writes a file into the project, so it asks first and names
     // the exact path and source language it will use.
-    .alert(generateTitle, isPresented: $isConfirmingGenerate) {
-      Button("Cancel", role: .cancel) {}
-      Button("Generate") { Task { await generate() } }
-    } message: {
-      Text(generateMessage)
+    .kitConfirmation(
+      generateTitle, isPresented: $isConfirmingGenerate, message: generateMessage, systemImage: "doc.badge.plus",
+      confirm: "Generate", role: nil
+    ) {
+      Task { await generate() }
     }
     .task(id: isConfirmingGenerate) {
       guard isConfirmingGenerate else { return }
@@ -131,28 +127,28 @@ struct LocalizationView: View {
       }.value
     }
     // Scan Strings report (toolbar "Scan Strings", and the tail of Generate).
-    .sheet(isPresented: Binding(
+    .kitSheet(isPresented: Binding(
       get: { store.scan.isPresented },
       set: { if !$0 { store.scan.dismiss() } }
     )) {
       ScanStringsView(store: store)
     }
     // Reviewer note editor (row menu "Note…").
-    .sheet(isPresented: Binding(
+    .kitSheet(isPresented: Binding(
       get: { store.noteKey != nil },
       set: { if !$0 { store.closeNote() } }
     )) {
       NoteEditorView(store: store)
     }
     // Project context rules (toolbar "Context Rules…").
-    .sheet(isPresented: Binding(
+    .kitSheet(isPresented: Binding(
       get: { store.contextDocsOpen },
       set: { if !$0 { store.closeContextDocs() } }
     )) {
       ContextDocsView(store: store)
     }
     // Add Languages overlay (language strip's "Add Languages").
-    .sheet(isPresented: Binding(
+    .kitSheet(isPresented: Binding(
       get: { store.languagePickerOpen },
       set: { if !$0 { store.closeLanguagePicker() } }
     )) {
@@ -463,7 +459,7 @@ private struct LanguageButtonsRow: View {
 /// button that names the count.
 private struct AddLanguagesView: View {
   let store: LocalizationStore
-  @Environment(\.dismiss) private var dismiss
+  @Environment(\.kitDismiss) private var dismiss
 
   @State private var selection: Set<String> = []
 
@@ -1021,7 +1017,7 @@ private struct WidthBadge: View {
 /// writer.
 private struct NoteEditorView: View {
   let store: LocalizationStore
-  @Environment(\.dismiss) private var dismiss
+  @Environment(\.kitDismiss) private var dismiss
 
   @State private var text = ""
   @State private var scope: Reconcile.NoteScope = .project
@@ -1104,7 +1100,7 @@ private struct NoteEditorView: View {
 /// until "Update Translations" (or the next whole-catalog run) is asked to.
 private struct ContextDocsView: View {
   let store: LocalizationStore
-  @Environment(\.dismiss) private var dismiss
+  @Environment(\.kitDismiss) private var dismiss
 
   @State private var text = ""
   @State private var initialized = false

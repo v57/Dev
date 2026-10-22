@@ -62,8 +62,8 @@ struct ScreenshotsView: View {
       // A file written elsewhere (an agent, a save) replaces the draft.
       draft = config
     }
-    .sheet(isPresented: $showsLog) { logSheet }
-    .sheet(isPresented: $uploading) {
+    .kitSheet(isPresented: $showsLog) { logSheet }
+    .kitSheet(isPresented: $uploading) {
       AppStoreUploadSheet(root: root, library: library)
     }
   }

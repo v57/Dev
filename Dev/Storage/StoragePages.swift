@@ -65,31 +65,19 @@ struct StorageView: View {
       }
     }
     .toolbar { StorageToolbar() }
-    .sheet(isPresented: $isConfirming) {
+    .kitSheet(isPresented: $isConfirming) {
       StorageCleanSheet()
     }
-    .alert(
+    .kitNotice(
       store.report.map(Self.reportTitle) ?? "",
-      isPresented: Binding(get: { store.report != nil }, set: { if !$0 { store.report = nil } })
-    ) {
-      if (store.report?.trashedBytes ?? 0) > 0 {
-        Button("Open Trash") { store.openTrash() }
-      }
-      if store.report?.failures.contains(where: { $0.message.contains("App Management") }) == true {
-        Button("Open App Management") { FullDiskAccess.openAppManagementSettings() }
-      }
-      Button("OK") { store.report = nil }
-    } message: {
-      Text(store.report.map(Self.reportMessage) ?? "")
-    }
-    .alert(
+      isPresented: Binding(get: { store.report != nil }, set: { if !$0 { store.report = nil } }),
+      message: store.report.map(Self.reportMessage), systemImage: "trash",
+      hue: store.report?.failures.isEmpty == false ? .orange : .green,
+      buttons: reportButtons)
+    .kitNotice(
       "Couldn't scan system folders",
-      isPresented: Binding(get: { store.systemScanError != nil }, set: { if !$0 { store.systemScanError = nil } })
-    ) {
-      Button("OK") { store.systemScanError = nil }
-    } message: {
-      Text(store.systemScanError ?? "")
-    }
+      isPresented: Binding(get: { store.systemScanError != nil }, set: { if !$0 { store.systemScanError = nil } }),
+      message: store.systemScanError)
     .task(id: store.lastScan) {
       let runners = await Task.detached { StorageStore.workflowRunnerNames() }.value
       store.applyLocks(runnerNames: runners)
@@ -113,6 +101,18 @@ struct StorageView: View {
       GroupsPage(category: category)
         .id(category)
     }
+  }
+
+  /// The clean report's ways out before OK: the Trash when something went there, the setting a failure needs.
+  private var reportButtons: [KitConfirmationButton] {
+    var buttons: [KitConfirmationButton] = []
+    if (store.report?.trashedBytes ?? 0) > 0 {
+      buttons.append(KitConfirmationButton("Open Trash") { store.openTrash() })
+    }
+    if store.report?.failures.contains(where: { $0.message.contains("App Management") }) == true {
+      buttons.append(KitConfirmationButton("Open App Management") { FullDiskAccess.openAppManagementSettings() })
+    }
+    return buttons
   }
 
   nonisolated static func reportTitle(_ report: StorageCleanReport) -> String {

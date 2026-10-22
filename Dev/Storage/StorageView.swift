@@ -84,7 +84,7 @@ struct StorageSafetyBadge: View {
 /// your own data called out, and where it goes (the Trash by default).
 struct StorageCleanSheet: View {
   @Environment(StorageStore.self) private var store
-  @Environment(\.dismiss) private var dismiss
+  @Environment(\.kitDismiss) private var dismiss
   @State private var deleteImmediately = false
 
   var body: some View {
