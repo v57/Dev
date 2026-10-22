@@ -44,16 +44,20 @@ struct SidebarView: View {
   var body: some View {
     @Bindable var model = model
     KitSidebar(selection: $model.selection, searchText: $search, searchPrompt: "Search Projects") {
+      // A long Projects list keeps its title in view, and the sections it pushes off wait as titles at the bottom.
       projectsSection
+        .kitSticky()
       KitSection("Tools", meta: storage.sidebarStatus, systemImage: "wrench.and.screwdriver", hue: .orange) {
         StorageSidebarRow()
         VMsSidebarRow()
       }
+      .kitSticky(bottom: .title)
       ServersSidebarSection(
         store: servers,
         selection: $model.selection) { sheet in
           serverSheet = sheet
         }
+        .kitSticky(bottom: .title)
     } bottomBar: {
       Button("Add", systemImage: "plus") { showsAddMenu = true }
         .kitMenu(isPresented: $showsAddMenu) {
