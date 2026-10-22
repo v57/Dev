@@ -11,7 +11,7 @@ import SwiftUI
 ///
 /// A selected project gets the toolbar's tab control — Overview, Localization,
 /// App Icon, Screenshots, Workflows — and opens on Overview (or the tab it was
-/// last left on). With no project yet, the pane is the welcome screen.
+/// last left on). With nothing selected, the pane is the welcome screen.
 struct ContentView: View {
   @Environment(\.openSettings) private var openSettings
   /// A screenshot scene asks for Settings; the view opens it, since the environment's
@@ -261,7 +261,7 @@ struct ContentView: View {
   }
 
   /// A screenshot scene's screen, from its arguments: `-DevTool <tab>` picks the project's tab
-  /// (`overview|localization|icon|screenshots|workflows`), `-DevOpen storage|vms` a tool instead,
+  /// (`overview|localization|icon|screenshots|workflows`), `-DevOpen storage|vms` a tool instead (`welcome`: nothing),
   /// `-DevSettings` or `-DevSettingsTab <tab>` opens Settings, and `-DevRunWorkflow <id>` starts that
   /// workflow of the demo project.
   private func open(_ arguments: [String]) async {
@@ -273,6 +273,7 @@ struct ContentView: View {
     switch value(after: "-DevOpen") {
     case "storage": model.selection = .storage
     case "vms": model.selection = .vms
+    case "welcome": model.selection = nil
     default: if let demoProject { model.selection = .project(demoProject) }
     }
     if let tab = value(after: "-DevTool").flatMap(DevTool.init(rawValue:)) { model.projectTool = tab }
@@ -364,14 +365,7 @@ struct ContentView: View {
     case .vms:
       VMsView(projects: model.projects)
     case nil:
-      if model.projects.isEmpty {
-        WelcomeView(model: model)
-      } else {
-        EmptyState(
-          systemImage: "sidebar.left", title: "Select a Project",
-          message: "Pick a project in the sidebar, or open Storage or Virtual Machines."
-        ).kitPane()
-      }
+      WelcomeView(model: model)
     }
   }
 }

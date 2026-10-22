@@ -128,8 +128,27 @@ final class SidebarViewModel {
     didSet {
       guard selection != oldValue else { return }
       // A project opens on the tab it was last left on, Overview the first time.
-      if case .project(let id) = selection { projectTool = lastTool[id] ?? .overview }
+      if case .project(let id) = selection {
+        projectTool = lastTool[id] ?? .overview
+        noteOpened(id)
+      }
     }
+  }
+
+  /// When each project was last opened, for the welcome's Recent list (kept across launches, not in screenshot
+  /// mode).
+  @ObservationIgnored private var openedAt: [String: Double] =
+    UserDefaults.standard.dictionary(forKey: "ProjectsLastOpened") as? [String: Double] ?? [:]
+
+  /// When the project was last opened in Dev, or nil before its first time.
+  func lastOpened(_ id: Int64) -> Date? {
+    openedAt["\(id)"].map(Date.init(timeIntervalSinceReferenceDate:))
+  }
+
+  private func noteOpened(_ id: Int64) {
+    guard !LaunchOptions.isScreenshotMode else { return }
+    openedAt["\(id)"] = Date().timeIntervalSinceReferenceDate
+    UserDefaults.standard.set(openedAt, forKey: "ProjectsLastOpened")
   }
 
   /// The tab shown for the SELECTED project. Drives the toolbar's tab control,

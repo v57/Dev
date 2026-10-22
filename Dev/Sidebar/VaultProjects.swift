@@ -67,6 +67,25 @@ import VaultKit
     return icons
   }
 
+  /// The vault's projects on this Mac that Dev could list but doesn't (removed here, or not followed yet), by name:
+  /// the welcome's Projects list.
+  func otherProjects(listed: Set<String>) -> [VaultProject] {
+    guard !LaunchOptions.isScreenshotMode else { return [] }
+    return vault.localProjects
+      .filter { project in
+        guard let path = project.localPath else { return false }
+        return !listed.contains(path) && (!showsOnlyXcodeProjects || project.kinds.contains(.xcode))
+      }
+      .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+  }
+
+  /// Adds a vault project to Dev, taking back an earlier removal here; returns its id in the sidebar.
+  func add(_ project: VaultProject, model: SidebarViewModel) async -> Int64? {
+    guard let path = project.localPath else { return nil }
+    dismissed.remove(project.id)
+    return await model.addSuggestedDirectories([URL(fileURLWithPath: path, isDirectory: true)])
+  }
+
   /// Follows the vault again after Show only Xcode projects changed.
   func preferencesChanged() {
     guard observer != nil else { return }
