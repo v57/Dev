@@ -178,7 +178,15 @@ nonisolated enum StorageCleaner {
     var report = StorageCleanReport()
     let fileManager = FileManager.default
     let asRoot = items.filter(needsRoot)
-    for item in items where !needsRoot(item) {
+    // Simulators go before their runtime, and a runtime one of them stayed
+    // on stays too, so no simulator is left without its runtime.
+    let ordered = items.filter { $0.parent != nil } + items.filter { $0.parent == nil }
+    var keptParents: [String: String] = [:]
+    for item in ordered where !needsRoot(item) {
+      if let kept = keptParents[item.id] {
+        report.failures.append((item.title, "\(kept) could not be removed first"))
+        continue
+      }
       do {
         switch item.cleanup {
         case .trash:
@@ -221,6 +229,7 @@ nonisolated enum StorageCleaner {
         report.cleanedBytes += item.bytes
       } catch {
         report.failures.append((item.title, message(for: error, item: item)))
+        if let parent = item.parent { keptParents[parent] = item.title }
       }
     }
     if !asRoot.isEmpty {

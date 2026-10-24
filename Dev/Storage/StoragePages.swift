@@ -307,6 +307,7 @@ private struct StorageActionButton: View {
     guard !items.isEmpty else { return "Clean" }
     let uninstalls = items.allSatisfy { item in
       item.category == .applications || StorageLanguages.classify(item)?.isVersion == true
+        || item.id.hasPrefix("runtime:") || item.parent.map(store.selection.contains) == true
     }
     return uninstalls ? "Uninstall" : "Clean"
   }
@@ -369,9 +370,12 @@ struct BadgeIcon: View {
 /// One file of an item group: check, title, detail, path, size, Show in Finder.
 struct StorageFileRow: View {
   let item: StorageItem
+  /// Indented under the item it is part of.
+  var nested = false
   @Environment(StorageStore.self) private var store
 
   var body: some View {
+    let cleanup = store.cleanup(of: item)
     HStack(spacing: 12) {
       RoundCheck(state: store.isSelected(item) ? .on : .off, size: 18,
                  disabled: !item.cleanup.isCleanable || item.isLocked || store.isBusy) {
@@ -393,11 +397,11 @@ struct StorageFileRow: View {
           .truncationMode(.middle)
       }
       Spacer(minLength: 8)
-      if case .command(_, _, let verb) = item.cleanup {
+      if case .command(_, _, let verb) = cleanup {
         Text(verb).font(.caption).foregroundStyle(.secondary)
-      } else if case .cloneDuplicates = item.cleanup {
-        Text(item.cleanup.verb).font(.caption).foregroundStyle(.secondary)
-      } else if case .revealOnly(let reason) = item.cleanup {
+      } else if case .cloneDuplicates = cleanup {
+        Text(cleanup.verb).font(.caption).foregroundStyle(.secondary)
+      } else if case .revealOnly(let reason) = cleanup {
         Image(systemName: "info.circle").foregroundStyle(.secondary).help(reason)
       }
       Text(item.bytes.byteString)
@@ -414,6 +418,7 @@ struct StorageFileRow: View {
     .padding(.horizontal, 10)
     .padding(.vertical, 7)
     .background(store.isSelected(item) ? Color.accentColor.opacity(0.07) : .clear, in: RoundedRectangle(cornerRadius: 10))
+    .padding(.leading, nested ? 28 : 0)
     .opacity(item.isLocked ? 0.6 : 1)
     .kitContextMenu {
       Button("Show in Finder", systemImage: "folder") { store.reveal(item) }
@@ -772,13 +777,27 @@ private struct GroupsPage: View {
         } else {
           // A group can hold hundreds of folders: rows are built as they scroll in.
           LazyVStack(spacing: 2) {
-            ForEach(group.items) { StorageFileRow(item: $0) }
+            ForEach(nested(group.items), id: \.item.id) { StorageFileRow(item: $0.item, nested: $0.nested) }
           }
           .padding(.horizontal, 12)
           .padding(.bottom, 110)
         }
       }
     }
+  }
+
+  /// The items with the ones that are part of another (a runtime's
+  /// simulators) right under it, indented; a parent sorts by its size with theirs.
+  private func nested(_ items: [StorageItem]) -> [(item: StorageItem, nested: Bool)] {
+    let ids = Set(items.map(\.id))
+    let children = Dictionary(grouping: items.filter { $0.parent.map(ids.contains) == true }) { $0.parent ?? "" }
+    guard !children.isEmpty else { return items.map { ($0, false) } }
+    func total(_ item: StorageItem) -> Int64 {
+      item.bytes + (children[item.id] ?? []).reduce(0) { $0 + $1.bytes }
+    }
+    return items.filter { $0.parent.map(ids.contains) != true }
+      .sorted { total($0) > total($1) }
+      .flatMap { item in [(item, false)] + (children[item.id] ?? []).map { ($0, true) } }
   }
 
   private func about(_ safety: StorageSafety) -> String {

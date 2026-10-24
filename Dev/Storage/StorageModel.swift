@@ -316,6 +316,13 @@ nonisolated struct StorageItem: Identifiable, Codable, Sendable, Hashable {
   /// When anything inside last changed, filled by measuring; nil for sizes a
   /// tool reported and for scans saved before this existed.
   var modified: Date?
+  /// The item this one is part of (a simulator's runtime): listed under it,
+  /// picked with it, and removed by `cleanupWithParent` when it goes. Optional
+  /// so older scans load.
+  var parent: String?
+  /// How the item goes when its parent goes too (a simulator is deleted, not
+  /// erased, with its runtime).
+  var cleanupWithParent: StorageCleanup?
 
   var isLocked: Bool { lockReason != nil }
 
@@ -336,11 +343,11 @@ nonisolated extension StorageItem {
     if category.section == .installed { return true }
     if StorageLanguages.classify(self)?.isVersion == true { return true }
     switch (category, group) {
-    case (.xcode, "Command Line Tools"), (.xcode, "Simulator Runtimes"), (.claude, "Claude Code"),
+    case (.xcode, "Command Line Tools"), (.claude, "Claude Code"),
       (.claude, "Claude desktop"), (.web, "Test Browsers"):
       return true
     default:
-      return false
+      return id.hasPrefix("runtime:")
     }
   }
 

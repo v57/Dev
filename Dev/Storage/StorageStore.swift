@@ -70,6 +70,11 @@ final class StorageStore {
     }
   }
 
+  /// A store over these items alone, for tests: no saved scan is loaded.
+  init(items: [StorageItem]) {
+    userItems = items
+  }
+
   /// True when access was granted after the scan on screen was made, so a
   /// rescan would see more.
   var rescanWouldSeeMore: Bool {
@@ -118,7 +123,12 @@ final class StorageStore {
   }
 
   var selectedItems: [StorageItem] {
-    items.filter { selection.contains($0.id) && $0.cleanup.isCleanable && !$0.isLocked }
+    items.filter { selection.contains($0.id) && !$0.isLocked }
+      .compactMap { item in
+        var item = item
+        item.cleanup = cleanup(of: item)
+        return item.cleanup.isCleanable ? item : nil
+      }
       .map { item in
         // An app picked file by file: only those paths go (Reset keeps the app).
         guard let paths = partialPaths[item.id], !paths.isEmpty else { return item }
@@ -269,10 +279,23 @@ final class StorageStore {
 
   func isSelected(_ item: StorageItem) -> Bool { selection.contains(item.id) }
 
-  func setSelected(_ selected: Bool, _ items: [StorageItem]) {
-    let ids = items.filter { $0.cleanup.isCleanable && !$0.isLocked }.map(\.id)
+  /// A runtime is picked and unpicked with its simulators. Keeping one of
+  /// them keeps the runtime and the rest too, rather than erasing them.
+  func setSelected(_ selected: Bool, _ picked: [StorageItem]) {
+    var ids = Set(picked.filter { $0.cleanup.isCleanable && !$0.isLocked }.map(\.id))
+    if !selected { ids.formUnion(picked.compactMap(\.parent).filter(selection.contains)) }
+    ids.formUnion(items.filter { $0.parent.map(ids.contains) == true }.map(\.id))
     for id in ids { partialPaths[id] = nil }
     if selected { selection.formUnion(ids) } else { selection.subtract(ids) }
+  }
+
+  /// How an item goes with this selection: a simulator whose runtime is
+  /// picked too is deleted with it, not erased.
+  func cleanup(of item: StorageItem) -> StorageCleanup {
+    if let parent = item.parent, let withParent = item.cleanupWithParent, selection.contains(parent) {
+      return withParent
+    }
+    return item.cleanup
   }
 
   /// Everything found with this tag, and how much of it is selected.

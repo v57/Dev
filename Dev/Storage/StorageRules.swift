@@ -51,40 +51,66 @@ nonisolated extension StorageDiscovery {
     eachChild(.xcode, "Toolchains", of: ".swiftly/toolchains", .rebuildable, detail: "swiftly toolchain")
   }
 
-  /// Simulators through simctl, which owns their bookkeeping: a device is
-  /// erased (it stays in Xcode's list), a runtime is deleted by simctl, and the
-  /// devices whose runtime is gone are deleted together.
+  /// Simulators through simctl, which owns their bookkeeping. A runtime and
+  /// the simulators on it are one uninstall: picking the runtime picks them,
+  /// and they are deleted before it, so none is left behind unavailable. A
+  /// simulator picked on its own is erased (it stays in Xcode's list).
   private mutating func addSimulators() {
     let xcrun = "/usr/bin/xcrun"
     let devicesRoot = h("Library/Developer/CoreSimulator/Devices")
 
+    var runtimes: [SimRuntime] = []
+    let listedRuntimes = ScanShell.run(xcrun, arguments: ["simctl", "runtime", "list", "-j"],
+      currentDirectory: nil, timeout: 30)
+    if listedRuntimes.succeeded, let data = listedRuntimes.stdout.data(using: .utf8),
+      let list = try? JSONDecoder.storage.decode([String: SimRuntime].self, from: data) {
+      runtimes = list.values.sorted { $0.version ?? "" < $1.version ?? "" }
+    }
+    // A runtime owns its simulators only while it is the one build of its
+    // version: with two installed, deleting one moves them to the other.
+    let builds = Dictionary(grouping: runtimes, by: \.platformVersion)
+    func owner(of runtime: String) -> SimRuntime? {
+      guard let matching = builds[runtime], matching.count == 1 else { return nil }
+      return matching[0]
+    }
+
     let listed = ScanShell.run(xcrun, arguments: ["simctl", "list", "devices", "-j"],
       currentDirectory: nil, timeout: 30)
-    var usedRuntimes = Set<String>()
+    var simulatorCounts: [String: Int] = [:]
+    var bootedRuntimes = Set<String>()
     var unavailable: [String] = []
     var shutDown: [String] = []
     if listed.succeeded, let data = listed.stdout.data(using: .utf8),
       let list = try? JSONDecoder.storage.decode(SimDeviceList.self, from: data) {
       for (runtime, devices) in list.devices.sorted(by: { $0.key < $1.key }) {
+        let parent = owner(of: runtime).map { "runtime:" + $0.identifier }
         for device in devices {
           let path = devicesRoot + "/" + device.udid
           guard device.isAvailable ?? true else {
             unavailable.append(path)
             continue
           }
-          usedRuntimes.insert(runtime)
+          simulatorCounts[runtime, default: 0] += 1
           let booted = device.state == "Booted"
-          if !booted { shutDown.append(path) }
+          if booted { bootedRuntimes.insert(runtime) } else { shutDown.append(path) }
           let detail = [StorageNames.simRuntime(runtime), device.state,
             StorageNames.relative(device.lastUsedAt).map { "used \($0)" }]
             .compactMap { $0 }.joined(separator: " · ")
-          add(StorageItem(
+          var item = StorageItem(
             id: "sim:" + device.udid, category: .xcode, group: "Simulators",
             title: device.name, detail: detail, paths: [path], safety: .data,
             cleanup: booted
               ? .revealOnly(reason: "Booted — shut it down to erase it")
               : .command(executable: xcrun, arguments: ["simctl", "erase", device.udid],
-                verb: "Erase content")))
+                verb: "Erase content"))
+          if let parent {
+            // Even an empty one is listed: its runtime cannot go without it.
+            item.minBytes = 0
+            item.parent = parent
+            item.cleanupWithParent = .command(executable: xcrun, arguments: ["simctl", "delete", device.udid],
+              verb: "Delete")
+          }
+          add(item)
         }
       }
     }
@@ -106,26 +132,28 @@ nonisolated extension StorageDiscovery {
           verb: "Delete")))
     }
 
-    let runtimes = ScanShell.run(xcrun, arguments: ["simctl", "runtime", "list", "-j"],
-      currentDirectory: nil, timeout: 30)
-    if runtimes.succeeded, let data = runtimes.stdout.data(using: .utf8),
-      let list = try? JSONDecoder.storage.decode([String: SimRuntime].self, from: data) {
-      for runtime in list.values.sorted(by: { $0.version ?? "" < $1.version ?? "" }) {
-        let name = StorageNames.simRuntime(runtime.runtimeIdentifier ?? runtime.identifier)
-        let unused = !usedRuntimes.contains(runtime.runtimeIdentifier ?? "")
-        let detail = [runtime.build, unused ? "no simulator uses it" : nil,
-          StorageNames.relative(runtime.lastUsedAt).map { "used \($0)" }]
-          .compactMap { $0 }.joined(separator: " · ")
-        add(StorageItem(
-          id: "runtime:" + runtime.identifier, category: .xcode, group: "Simulator Runtimes",
-          title: "\(name) runtime", detail: detail, paths: [runtime.path ?? runtime.mountPath ?? ""],
-          safety: .rebuildable,
-          cleanup: runtime.deletable ?? false
-            ? .command(executable: xcrun, arguments: ["simctl", "runtime", "delete", runtime.identifier],
-              verb: "Delete")
-            : .revealOnly(reason: "simctl reports this runtime as not deletable"),
-          bytes: runtime.sizeBytes ?? 0, reportedSize: true))
+    for runtime in runtimes {
+      let key = runtime.platformVersion
+      let name = StorageNames.simRuntime(key)
+      let owns = owner(of: key) != nil
+      let used = simulatorCounts[key] ?? 0
+      let count = owns ? used : 0
+      let simulators = used == 0 ? "no simulator uses it" : owns ? "\(used) simulator\(used == 1 ? "" : "s")" : nil
+      let detail = [runtime.build, simulators, StorageNames.relative(runtime.lastUsedAt).map { "used \($0)" }]
+        .compactMap { $0 }.joined(separator: " · ")
+      var item = StorageItem(
+        id: "runtime:" + runtime.identifier, category: .xcode, group: "Simulators",
+        title: "\(name) runtime", detail: detail, paths: [runtime.path ?? runtime.mountPath ?? ""],
+        safety: .rebuildable,
+        cleanup: runtime.deletable ?? false
+          ? .command(executable: xcrun, arguments: ["simctl", "runtime", "delete", runtime.identifier],
+            verb: count > 0 ? "Delete with simulators" : "Delete")
+          : .revealOnly(reason: "simctl reports this runtime as not deletable"),
+        bytes: runtime.sizeBytes ?? 0, reportedSize: true)
+      if owns, bootedRuntimes.contains(key) {
+        item.lockReason = "A simulator on it is booted"
       }
+      add(item)
     }
   }
 
@@ -681,6 +709,10 @@ nonisolated private struct SimRuntime: Decodable {
   let mountPath: String?
   let path: String?
   let lastUsedAt: Date?
+
+  /// The version its simulators name (`…SimRuntime.iOS-27-0`), shared by
+  /// every build of that version.
+  var platformVersion: String { runtimeIdentifier ?? identifier }
 }
 
 nonisolated private struct OllamaManifest: Decodable {
