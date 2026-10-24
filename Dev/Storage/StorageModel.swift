@@ -323,6 +323,10 @@ nonisolated struct StorageItem: Identifiable, Codable, Sendable, Hashable {
   /// How the item goes when its parent goes too (a simulator is deleted, not
   /// erased, with its runtime).
   var cleanupWithParent: StorageCleanup?
+  /// Who still needs it (the devices that run this Device Support's OS):
+  /// Smart Scan leaves it, though it can still be picked by hand. Optional so
+  /// older scans load.
+  var inUse: String?
 
   var isLocked: Bool { lockReason != nil }
 
@@ -359,9 +363,9 @@ nonisolated extension StorageItem {
   }
 
   /// What Smart Scan picks: caches and build output. Never your data, never
-  /// what you installed, never scratch space.
+  /// what you installed, never scratch space, never what a device still needs.
   var isRecommended: Bool {
-    safety != .data && cleanup.isCleanable && !isLocked && !isInstalled && !isScratch
+    safety != .data && cleanup.isCleanable && !isLocked && !isInstalled && !isScratch && inUse == nil
   }
 }
 

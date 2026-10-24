@@ -20,9 +20,18 @@ nonisolated extension StorageDiscovery {
 
     addSimulators()
 
+    let paired = PairedDevices.recent()
     for platform in ["iOS", "watchOS", "tvOS", "visionOS", "macOS"] {
-      eachChild(.xcode, "Device Support", of: "\(xcode)/\(platform) DeviceSupport", .cache,
-        detail: "\(platform) symbols, copied again when the device next connects")
+      for child in children(of: h("\(xcode)/\(platform) DeviceSupport")) {
+        let name = (child as NSString).lastPathComponent
+        let users = paired.users(ofDeviceSupport: name)
+        var item = StorageItem(
+          id: child, category: .xcode, group: "Device Support", title: name,
+          detail: users ?? "\(platform) symbols, copied again when the device next connects",
+          paths: [child], safety: .cache, cleanup: .trash)
+        item.inUse = users
+        add(item)
+      }
     }
     eachChild(.xcode, "Archives", of: "\(xcode)/Archives", .data,
       detail: "Xcode archives — keep the ones whose dSYMs you still need")
@@ -154,6 +163,53 @@ nonisolated extension StorageDiscovery {
         item.lockReason = "A simulator on it is booted"
       }
       add(item)
+    }
+  }
+
+  /// The devices paired with this Mac that connected lately, from devicectl:
+  /// the Device Support of the OS one runs is copied again (minutes per
+  /// device) the next time it connects, so Smart Scan leaves it.
+  struct PairedDevices {
+    struct Device {
+      let name: String
+      let productType: String?
+      let build: String
+      let lastConnection: Date?
+    }
+    var devices: [Device] = []
+
+    static func recent(within days: Double = 90) -> PairedDevices {
+      let listed = ScanShell.run("/usr/bin/xcrun", arguments: ["devicectl", "list", "devices", "-q", "--json-output", "-"],
+        currentDirectory: nil, timeout: 30)
+      guard listed.succeeded, let data = listed.stdout.data(using: .utf8),
+        let list = try? JSONDecoder().decode(DeviceCtlList.self, from: data)
+      else { return PairedDevices() }
+      let since = Date().addingTimeInterval(-days * 86_400)
+      let style = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
+      return PairedDevices(devices: list.result.devices.compactMap { device in
+        guard let build = device.deviceProperties?.osBuildUpdate else { return nil }
+        let last = device.connectionProperties?.lastConnectionDate.flatMap { try? style.parse($0) }
+        guard (last ?? .distantFuture) > since else { return nil }
+        return Device(name: device.deviceProperties?.name ?? device.hardwareProperties?.productType ?? "A device",
+          productType: device.hardwareProperties?.productType, build: build, lastConnection: last)
+      })
+    }
+
+    /// "iPhone 18 Pro runs it · connected yesterday" for a Device Support
+    /// folder (`iPhone17,2 27.0.1 (24A446)`, or `16.4 (20E247) arm64e`) a
+    /// recent device runs, else nil.
+    func users(ofDeviceSupport folder: String) -> String? {
+      guard let open = folder.firstIndex(of: "("), let close = folder[open...].firstIndex(of: ")") else { return nil }
+      let build = String(folder[folder.index(after: open)..<close])
+      let first = folder.split(separator: " ").first.map(String.init)
+      let productType = first?.contains(",") == true ? first : nil
+      let users = devices.filter { $0.build == build && (productType == nil || $0.productType == productType) }
+      guard !users.isEmpty else { return nil }
+      let names = users.map(\.name).joined(separator: ", ")
+      let last = users.compactMap(\.lastConnection).max()
+      return [names + (users.count == 1 ? " runs it" : " run it"),
+        StorageNames.relative(last).map { "connected \($0)" }]
+        .compactMap { $0 }.joined(separator: " · ")
     }
   }
 
@@ -713,6 +769,22 @@ nonisolated private struct SimRuntime: Decodable {
   /// The version its simulators name (`…SimRuntime.iOS-27-0`), shared by
   /// every build of that version.
   var platformVersion: String { runtimeIdentifier ?? identifier }
+}
+
+nonisolated private struct DeviceCtlList: Decodable {
+  struct Device: Decodable {
+    struct Hardware: Decodable { let productType: String? }
+    struct Properties: Decodable {
+      let name: String?
+      let osBuildUpdate: String?
+    }
+    struct Connection: Decodable { let lastConnectionDate: String? }
+    let hardwareProperties: Hardware?
+    let deviceProperties: Properties?
+    let connectionProperties: Connection?
+  }
+  struct Result: Decodable { let devices: [Device] }
+  let result: Result
 }
 
 nonisolated private struct OllamaManifest: Decodable {
