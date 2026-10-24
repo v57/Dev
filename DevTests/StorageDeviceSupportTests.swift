@@ -34,12 +34,14 @@ import Testing
     #expect(!item.isRecommended)
   }
 
-  /// The real devicectl: every device it returns connected within the window.
+  /// The real devicectl: every device it returns connected within the
+  /// window, and none is a simulator (their UDIDs are UUIDs, a device's not).
   @Test func recentDevicesConnectedLately() {
     let since = Date().addingTimeInterval(-90 * 86_400)
     for device in Paired.recent().devices {
       #expect((device.lastConnection ?? .distantFuture) > since)
       #expect(!device.build.isEmpty)
+      #expect(UUID(uuidString: device.udid) == nil, "\(device.name) is a simulator")
     }
   }
 }

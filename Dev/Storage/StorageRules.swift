@@ -166,12 +166,13 @@ nonisolated extension StorageDiscovery {
     }
   }
 
-  /// The devices paired with this Mac that connected lately, from devicectl:
+  /// The real devices paired with this Mac that connected lately, from devicectl:
   /// the Device Support of the OS one runs is copied again (minutes per
   /// device) the next time it connects, so Smart Scan leaves it.
   struct PairedDevices {
     struct Device {
       let name: String
+      var udid = ""
       let productType: String?
       let build: String
       let lastConnection: Date?
@@ -187,11 +188,13 @@ nonisolated extension StorageDiscovery {
       let since = Date().addingTimeInterval(-days * 86_400)
       let style = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
       return PairedDevices(devices: list.result.devices.compactMap { device in
-        guard let build = device.deviceProperties?.osBuildUpdate else { return nil }
+        // devicectl lists the simulators too, on the same builds as devices.
+        guard device.hardwareProperties?.reality == "physical",
+          let build = device.deviceProperties?.osBuildUpdate else { return nil }
         let last = device.connectionProperties?.lastConnectionDate.flatMap { try? style.parse($0) }
         guard (last ?? .distantFuture) > since else { return nil }
         return Device(name: device.deviceProperties?.name ?? device.hardwareProperties?.productType ?? "A device",
-          productType: device.hardwareProperties?.productType, build: build, lastConnection: last)
+          udid: device.hardwareProperties?.udid ?? "", productType: device.hardwareProperties?.productType, build: build, lastConnection: last)
       })
     }
 
@@ -773,7 +776,11 @@ nonisolated private struct SimRuntime: Decodable {
 
 nonisolated private struct DeviceCtlList: Decodable {
   struct Device: Decodable {
-    struct Hardware: Decodable { let productType: String? }
+    struct Hardware: Decodable {
+      let udid: String?
+      let productType: String?
+      let reality: String?
+    }
     struct Properties: Decodable {
       let name: String?
       let osBuildUpdate: String?
