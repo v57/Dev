@@ -253,11 +253,28 @@ extension StorageStore {
     }
   }
 
-  /// A scan or a clean in flight: the row's icon carries it.
+  /// The toolbar title's status line: what the scan is doing (with the items measured so far), or the sidebar's line.
+  var titleStatus: String {
+    switch phase {
+    case .scanning(let text) where isMeasuringItems:
+      return "\(text) \(measuredCount)/\(discoveredCount)"
+    case .scanning(let text):
+      return text
+    case .cleaning, .idle:
+      return sidebarStatus
+    }
+  }
+
+  /// A scan or a clean in flight, with the share of items measured once the scan has counted them: the live icons
+  /// (the sidebar row's and the toolbar title's) carry it.
   var workStatus: WorkStatus {
     switch phase {
+    case .scanning where isMeasuringItems: .working(progress: Double(measuredCount) / Double(discoveredCount))
     case .scanning, .cleaning: .working
     case .idle: .idle
     }
   }
+
+  /// The scan has counted its items and is measuring them.
+  private var isMeasuringItems: Bool { discoveredCount > 0 && measuredCount < discoveredCount }
 }

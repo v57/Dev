@@ -155,6 +155,7 @@ struct ContentView: View {
       KitToolbarItem(placement: .navigation) {
         windowTitleView.padding(.leading, 6)
       }
+      CompatTitleSpace()
       // The project's tabs: only while a project is open.
       if model.hasSelectedProject {
         KitToolbarItem(placement: .principal) {
@@ -229,8 +230,18 @@ struct ContentView: View {
       }
       .frame(maxWidth: 200)
     } else {
-      KitTitle(windowTitle, systemImage: windowSymbol, hue: .gray)
+      KitTitle(windowTitle, meta: windowMeta, systemImage: windowSymbol, hue: .gray, status: windowStatus)
     }
+  }
+
+  /// The tool's status line under the title: Storage's scan, clean or what it can free.
+  private var windowMeta: [String] {
+    model.selection == .storage ? [storage.titleStatus] : []
+  }
+
+  /// The tool's work, on the title's live icon: Storage's scan or clean.
+  private var windowStatus: WorkStatus {
+    model.selection == .storage ? storage.workStatus : .idle
   }
 
   /// The symbol of what the window shows when it isn't a project.

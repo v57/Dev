@@ -34,3 +34,13 @@ extension View {
     }
   }
 }
+
+/// The flexible space after the toolbar's title on macOS 26, which keeps the tools at the trailing edge (without the
+/// system title, the toolbar lines them up right after the kit's); nothing before it, where they sit there already.
+struct CompatTitleSpace: ToolbarContent {
+  var body: some ToolbarContent {
+    if #available(macOS 26, *) {
+      ToolbarSpacer(.flexible)
+    }
+  }
+}

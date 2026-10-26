@@ -367,6 +367,9 @@ final class StorageStore {
     }
   }
 
+  /// The normal scan stops on Cancel; the password scan runs as root to its end.
+  var canCancelScan: Bool { scanTask != nil }
+
   func cancelScan() {
     scanTask?.cancel()
   }

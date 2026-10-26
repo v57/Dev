@@ -135,48 +135,26 @@ struct StorageView: View {
 
 // MARK: - Toolbar
 
-/// Scan progress, or Scan System Folders and Scan Again.
+/// Cancel while a scan can stop, or Export, Scan System Folders and Scan Again. The scan's progress is the title's:
+/// its live icon and status line (`StorageStore.titleStatus`).
 private struct StorageToolbar: ToolbarContent {
   @Environment(StorageStore.self) private var store
 
   var body: some ToolbarContent {
-    ToolbarItemGroup(placement: .primaryAction) {
-      switch store.phase {
-      case .scanning(let text):
-        HStack(spacing: 8) {
-          if store.discoveredCount > 0 && store.measuredCount < store.discoveredCount {
-            ProgressView(value: Double(store.measuredCount), total: Double(store.discoveredCount))
-              .frame(width: 100)
-            Text("\(text) \(store.measuredCount)/\(store.discoveredCount)")
-              .font(.callout.monospacedDigit())
-              .foregroundStyle(.secondary)
+    if store.phase == .idle || store.canCancelScan {
+      KitToolbarItem(placement: .primaryAction) {
+        ToolGroup {
+          if store.phase == .idle {
+            if store.hasResults {
+              Button("Export Selection…", systemImage: "square.and.arrow.up") { store.exportSelection() }
+                .help("Saves what is picked, and what is not and why, as a Markdown report")
+              Button("Scan System Folders…", systemImage: "lock.shield") { store.scanSystem() }
+                .help("Asks for your administrator password, then measures the whole disk as root: system logs and caches, other accounts, and whatever no category explains")
+            }
+            Button(store.hasResults ? "Scan Again" : "Scan", systemImage: "arrow.clockwise") { store.scan() }
           } else {
-            ProgressView().controlSize(.small)
-            Text(text).font(.callout).foregroundStyle(.secondary)
+            Button("Cancel", systemImage: "xmark") { store.cancelScan() }
           }
-        }
-        Button("Cancel") { store.cancelScan() }
-      case .cleaning:
-        ProgressView().controlSize(.small)
-      case .idle:
-        if store.hasResults {
-          Button {
-            store.exportSelection()
-          } label: {
-            Label("Export Selection…", systemImage: "square.and.arrow.up")
-          }
-          .help("Saves what is picked, and what is not and why, as a Markdown report")
-          Button {
-            store.scanSystem()
-          } label: {
-            Label("Scan System Folders…", systemImage: "lock.shield")
-          }
-          .help("Asks for your administrator password, then measures the whole disk as root: system logs and caches, other accounts, and whatever no category explains")
-        }
-        Button {
-          store.scan()
-        } label: {
-          Label(store.hasResults ? "Scan Again" : "Scan", systemImage: "arrow.clockwise")
         }
       }
     }
