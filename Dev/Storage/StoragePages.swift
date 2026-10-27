@@ -3,8 +3,9 @@
 //  Dev
 //
 
-import AppKit
+import Foundation
 import ComponentKit
+import DevDesktop
 import SwiftUI
 
 // MARK: - Storage
@@ -962,7 +963,7 @@ private struct UninstallerPage: View {
         appID = app.id
       } label: {
         HStack(spacing: 10) {
-          Image(nsImage: NSWorkspace.shared.icon(forFile: app.primaryPath))
+          (DevDesktop.icon(forFile: app.primaryPath) ?? Image(systemName: "app.dashed"))
             .resizable()
             .frame(width: 38, height: 38)
           VStack(alignment: .leading, spacing: 2) {
@@ -1000,7 +1001,7 @@ private struct AppDetail: View {
     ScrollView {
       VStack(alignment: .leading, spacing: 18) {
         HStack(spacing: 16) {
-          Image(nsImage: NSWorkspace.shared.icon(forFile: app.primaryPath))
+          (DevDesktop.icon(forFile: app.primaryPath) ?? Image(systemName: "app.dashed"))
             .resizable()
             .frame(width: 72, height: 72)
           VStack(alignment: .leading, spacing: 4) {
@@ -1080,7 +1081,7 @@ private struct AppDetail: View {
         .monospacedDigit()
         .frame(width: 80, alignment: .trailing)
       Button {
-        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+        KitDesktop.reveal([URL(fileURLWithPath: path)])
       } label: {
         Image(systemName: "magnifyingglass")
       }

@@ -5,7 +5,8 @@
 //  Created by Dmitry on 10.09.26.
 //
 
-import AppKit
+import ComponentKit
+import Foundation
 import SwiftUI
 
 /// The Scan Strings report sheet: live progress while the scan runs, then

@@ -3,10 +3,11 @@
 //  Dev
 //
 
-import AppKit
+import DevDesktop
 import DevScreenshots
 import DevScreenshotsCapture
 import Foundation
+import PlatformBroadcast
 
 /// Dev's MCP server: `Dev.app/Contents/MacOS/Dev --mcp` speaks the Model
 /// Context Protocol over stdin/stdout (one JSON-RPC message per line), so an
@@ -285,23 +286,21 @@ nonisolated enum MCPServer {
     let semaphore = DispatchSemaphore(value: 0)
     final class Box: @unchecked Sendable { var answer: String? }
     let box = Box()
-    let center = DistributedNotificationCenter.default()
-    let observer = center.addObserver(forName: AgentChannel.reply, object: nil, queue: .main) { note in
-      guard let info = note.userInfo as? [String: String], info["id"] == id else { return }
+    let observer = Broadcast.observe(AgentChannel.reply) { info in
+      guard info["id"] == id else { return }
       box.answer = info["answer"]
       semaphore.signal()
     }
-    defer { center.removeObserver(observer) }
+    defer { observer.cancel() }
     var payload = request
     payload["id"] = id
     payload["client"] = AgentPermissions.authorName
-    let running = !NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "dev.v57.dev").isEmpty
-    if !running {
-      NSWorkspace.shared.open(Bundle.main.bundleURL)
+    if !DevDesktop.isOwnAppRunning(helperArguments: ["--mcp", "--screenshots"]) {
+      DevDesktop.launchOwnApp()
       Thread.sleep(forTimeInterval: 4)
     }
     DispatchQueue.main.async {
-      center.postNotificationName(AgentChannel.request, object: nil, userInfo: payload, deliverImmediately: true)
+      Broadcast.post(AgentChannel.request, payload)
     }
     guard semaphore.wait(timeout: .now() + 300) == .success, let answer = box.answer else {
       throw ToolError(message: "Dev did not answer. Open Dev and try again.")
@@ -312,8 +311,7 @@ nonisolated enum MCPServer {
 
   private static func announce(_ root: URL) {
     DispatchQueue.main.async {
-      DistributedNotificationCenter.default().postNotificationName(
-        AgentChannel.changed, object: nil, userInfo: ["project": root.path], deliverImmediately: true)
+      Broadcast.post(AgentChannel.changed, ["project": root.path])
     }
   }
 

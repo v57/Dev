@@ -3,7 +3,7 @@
 //  Dev
 //
 
-import AppKit
+import Foundation
 import ComponentKit
 import SwiftUI
 
@@ -383,10 +383,10 @@ struct WorkflowsView: View {
         Button("Show File") {
           let url = Workflow.url(workflow.id, in: root)
           if FileManager.default.fileExists(atPath: url.path) {
-            NSWorkspace.shared.activateFileViewerSelecting([url])
+            KitDesktop.reveal([url])
           } else {
             save(workflow)
-            NSWorkspace.shared.activateFileViewerSelecting([url])
+            KitDesktop.reveal([url])
           }
         }
         .buttonStyle(.kitPlain)

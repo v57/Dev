@@ -4,7 +4,7 @@
 //
 
 import Foundation
-import os
+import Synchronization
 
 /// One project's slot records, by slot, with an index by key — so one row's records are a
 /// lookup, not a walk of six figures of them. A value: a snapshot handed to a background pass
@@ -734,8 +734,8 @@ extension TranslationData {
   /// reads, in the order they were asked for — so a read sees every write queued before it.
   nonisolated final class Writer: @unchecked Sendable {
     private let dispatch = DispatchQueue(label: "dev.v57.dev.translation-db", qos: .userInitiated)
-    private let lock = OSAllocatedUnfairLock(initialState: Pending())
-    private let scheduled = OSAllocatedUnfairLock(initialState: false)
+    private let lock = Mutex(Pending())
+    private let scheduled = Mutex(false)
     /// Opened on the queue, on first use.
     private var database: TranslationDatabase?
     private let location: URL?

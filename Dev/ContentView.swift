@@ -1,5 +1,6 @@
-import AppKit
+import Foundation
 import ComponentKit
+import PlatformBroadcast
 import DevScreenshots
 import SwiftUI
 import VaultKit
@@ -227,7 +228,7 @@ struct ContentView: View {
     if case .project(let id) = model.selection, let row = model.projectRow(id: id) {
       RichHeader(Text(row.name), size: .title) {
         if let icon = row.iconImage {
-          Image(nsImage: icon).resizable().interpolation(.high).frame(width: 28, height: 28)
+          icon.resizable().interpolation(.high).frame(width: 28, height: 28)
             .clipShape(.rect(cornerRadius: 28 * 0.225, style: .continuous))
         } else {
           Tile(systemImage: "app.dashed", hue: .blue, size: 28)
@@ -323,9 +324,8 @@ struct ContentView: View {
   /// `status` appends the pane's state to it.
   private func listenForMeasurementCommands() async {
     guard LaunchOptions.hangLog != nil else { return }
-    let center = DistributedNotificationCenter.default()
-    for await note in center.notifications(named: Notification.Name("dev.v57.dev.measure")) {
-      guard let command = note.object as? String else { continue }
+    for await note in Broadcast.messages(named: "dev.v57.dev.measure") {
+      guard let command = note[Broadcast.objectKey] else { continue }
       MainThreadWatchdog.mark(command)
       let parts = command.split(separator: " ", maxSplits: 1).map(String.init)
       let workspace = paneCatalogURL.flatMap { translation.workspace(for: $0) }

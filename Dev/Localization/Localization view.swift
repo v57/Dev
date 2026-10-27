@@ -5,7 +5,6 @@
 //  Created by Dmitry on 08.09.26.
 //
 
-import AppKit
 import ComponentKit
 import Foundation
 import SwiftUI

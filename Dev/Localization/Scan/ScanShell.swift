@@ -5,7 +5,6 @@
 //  Created by Dmitry on 10.09.26.
 //
 
-import Darwin
 import Foundation
 
 /// Result of one scan subprocess run (toolchain invocation).

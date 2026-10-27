@@ -3,8 +3,8 @@
 //  Dev
 //
 
-import AppKit
-import Darwin
+import ComponentKit
+import SwiftUI
 import Foundation
 
 /// Full Disk Access: what lets the scan into the folders macOS keeps from
@@ -34,7 +34,7 @@ nonisolated enum FullDiskAccess {
   @MainActor
   static func openSettings() {
     let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!
-    NSWorkspace.shared.open(url)
+    KitDesktop.open(url)
   }
 
   /// Privacy & Security › App Management: what moving another app's bundle
@@ -42,7 +42,7 @@ nonisolated enum FullDiskAccess {
   @MainActor
   static func openAppManagementSettings() {
     let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AppBundles")!
-    NSWorkspace.shared.open(url)
+    KitDesktop.open(url)
   }
 }
 

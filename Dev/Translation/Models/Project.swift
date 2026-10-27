@@ -5,8 +5,9 @@
 //  Created by Dmitry on 08.09.26.
 //
 
-import AppKit
+import ComponentKit
 import Foundation
+import SwiftUI
 
 /// A translation project: one merged .xcstrings catalog being translated.
 /// A project owns its project-scope ContextDoc and the TranslationRecords
@@ -56,23 +57,23 @@ nonisolated struct Project: Hashable, Sendable, Identifiable {
   /// icon set exists on disk, else a folder placeholder symbol (catalog-file
   /// projects and directory projects without Assets.xcassets yet). nil only
   /// if even the symbol cannot be resolved.
-  var iconThumbnail: NSImage? {
+  var iconThumbnail: Image? {
     if let image = Self.bestIconImage(in: iconURL) { return image }
-    return NSImage(systemSymbolName: "folder", accessibilityDescription: name)
+    return Image(systemName: "folder")
   }
 
   /// Loads the largest-representative PNG of an AppIcon.appiconset: this
   /// app's exporter always writes a canonical 1024.png; Xcode-authored sets
   /// use Contents.json + arbitrary filenames, so fall back to the biggest
   /// PNG by file size.
-  private static func bestIconImage(in setURL: URL?) -> NSImage? {
+  private static func bestIconImage(in setURL: URL?) -> Image? {
     guard let setURL else { return nil }
     let fm = FileManager.default
     guard fm.fileExists(atPath: setURL.path),
           let names = try? fm.contentsOfDirectory(atPath: setURL.path)
     else { return nil }
     for name in ["1024.png", "512.png", "256.png", "128.png"] where names.contains(name) {
-      if let image = NSImage(contentsOf: setURL.appendingPathComponent(name)) {
+      if let image = image(at: setURL.appendingPathComponent(name)) {
         return image
       }
     }
@@ -85,9 +86,13 @@ nonisolated struct Project: Hashable, Sendable, Identifiable {
       }
       .max { $0.1 < $1.1 }
     guard let largest, largest.1 > 0,
-          let image = NSImage(contentsOf: setURL.appendingPathComponent(largest.0))
+          let image = image(at: setURL.appendingPathComponent(largest.0))
     else { return nil }
     return image
+  }
+
+  private static func image(at url: URL) -> Image? {
+    (try? Data(contentsOf: url)).flatMap(Image.init(data:))
   }
 
   init(

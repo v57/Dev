@@ -3,7 +3,7 @@
 //  Dev
 //
 
-import AppKit
+import Foundation
 import DevScreenshots
 import DevScreenshotsCapture
 import ComponentKit
@@ -197,7 +197,7 @@ struct ScreenshotsView: View {
         message: library?.configError
           ?? "Describe the app's screens in .dev/screenshots.json: each scene is the launch arguments that open it. Dev captures them, frames them for the App Store and uploads them."
       ) {
-        Button("Show Project in Finder") { NSWorkspace.shared.activateFileViewerSelecting([root]) }
+        Button("Show Project in \(KitDesktop.fileManagerName)") { KitDesktop.reveal([root]) }
           .buttonStyle(.kit)
       }
     }
@@ -266,7 +266,7 @@ struct ScreenshotsView: View {
         .font(.callout)
         .foregroundStyle(.secondary)
       Button("Show Screenshots File") {
-        NSWorkspace.shared.activateFileViewerSelecting([ScreenshotConfig.url(in: root)])
+        KitDesktop.reveal([ScreenshotConfig.url(in: root)])
       }
       .buttonStyle(.link)
     }
@@ -349,7 +349,7 @@ struct ScreenshotsView: View {
         Text(scene.id).font(.callout.weight(.semibold))
         Spacer()
         ColorPicker("", selection: Binding(
-          get: { Color(cgColor: ScreenshotProcessor.cgColor(framing.wrappedValue.background(of: scene.id))) },
+          get: { Color(hex: framing.wrappedValue.background(of: scene.id)) },
           set: { color in framing.wrappedValue.backgrounds[scene.id] = color.hexString }), supportsOpacity: false)
           .labelsHidden()
       }
@@ -376,7 +376,7 @@ struct ScreenshotsView: View {
 
   private func hexBinding(_ hex: Binding<String>) -> Binding<Color> {
     Binding(
-      get: { Color(cgColor: ScreenshotProcessor.cgColor(hex.wrappedValue)) },
+      get: { Color(hex: hex.wrappedValue) },
       set: { color in hex.wrappedValue = color.hexString })
   }
 
@@ -445,11 +445,23 @@ struct ScreenshotsView: View {
 }
 
 extension Color {
+  /// `#RRGGBB` → sRGB; anything else is black.
+  init(hex: String) {
+    var value: UInt64 = 0
+    let digits = hex.trimmingCharacters(in: CharacterSet(charactersIn: "# "))
+    guard digits.count == 6, Scanner(string: digits).scanHexInt64(&value) else {
+      self.init(.sRGB, red: 0, green: 0, blue: 0)
+      return
+    }
+    self.init(
+      .sRGB, red: Double((value >> 16) & 0xFF) / 255, green: Double((value >> 8) & 0xFF) / 255,
+      blue: Double(value & 0xFF) / 255)
+  }
+
   /// `#RRGGBB` in sRGB.
   var hexString: String {
-    guard let color = NSColor(self).usingColorSpace(.sRGB) else { return "#000000" }
-    return String(format: "#%02X%02X%02X",
-                  Int((color.redComponent * 255).rounded()), Int((color.greenComponent * 255).rounded()),
-                  Int((color.blueComponent * 255).rounded()))
+    let color = resolve(in: EnvironmentValues())
+    func byte(_ component: Float) -> Int { Int((max(0, min(1, Double(component))) * 255).rounded()) }
+    return String(format: "#%02X%02X%02X", byte(color.red), byte(color.green), byte(color.blue))
   }
 }

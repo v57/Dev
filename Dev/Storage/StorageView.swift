@@ -3,7 +3,7 @@
 //  Dev
 //
 
-import AppKit
+import Foundation
 import ComponentKit
 import SwiftUI
 

@@ -4,6 +4,7 @@
 //
 
 import Foundation
+import PlatformDiskUsage
 
 /// One pass over the folders you work in, picking out what lives inside
 /// projects and downloads rather than in a tool's fixed location: build

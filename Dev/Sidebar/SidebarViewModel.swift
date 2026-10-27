@@ -5,7 +5,9 @@
 //  Created by Dmitry on 09.09.26.
 //
 
-import AppKit
+import ComponentKit
+import DevDesktop
+import SwiftUI
 import Foundation
 import UniformTypeIdentifiers
 
@@ -82,7 +84,7 @@ struct SidebarProjectRow: Identifiable {
   let catalogURL: URL
   /// The project's AppIcon.appiconset, when it has one.
   let iconURL: URL?
-  let iconImage: NSImage?
+  let iconImage: Image?
   /// The icon the vault keeps for the project (found anywhere in its folder), preferred to `iconImage`.
   let vaultIcon: Data?
   /// Distinct translatable keys present in the project's reconciled records.
@@ -476,16 +478,12 @@ final class SidebarViewModel {
   /// "Add Project…": the same import as a drop, from an Open panel, so adding a
   /// project never depends on dragging. Selects the first project added.
   func addProjectsFromPanel() {
-    let panel = NSOpenPanel()
-    panel.canChooseDirectories = true
-    panel.canChooseFiles = true
-    panel.allowedContentTypes = [.folder, .init(filenameExtension: "xcstrings") ?? .data]
-    panel.allowsMultipleSelection = true
-    panel.prompt = "Add"
-    panel.message = "Choose a project folder, a folder of repos, or a String Catalog."
-    guard panel.runModal() == .OK else { return }
-    let urls = panel.urls
     Task {
+      let urls = await DevDesktop.chooseFiles(
+        message: "Choose a project folder, a folder of repos, or a String Catalog.", prompt: "Add",
+        contentTypes: [.folder, .init(filenameExtension: "xcstrings") ?? .data], canChooseFolders: true,
+        allowsMultipleSelection: true)
+      guard !urls.isEmpty else { return }
       if let first = await importDroppedURLs(urls) { selection = .project(first) }
     }
   }

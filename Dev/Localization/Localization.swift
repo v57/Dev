@@ -5,7 +5,7 @@
 //  Created by Dmitry on 09.09.26.
 //
 
-import AppKit
+import DevDesktop
 import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
@@ -1382,19 +1382,17 @@ final class LocalizationStore {
 
   /// Unguarded half: shows the .xcstrings file panel and opens the choice.
   private func presentOpenPanel() {
-    let panel = NSOpenPanel()
-    panel.canChooseFiles = true
-    panel.canChooseDirectories = false
-    panel.allowsMultipleSelection = false
-    panel.message = "Choose an .xcstrings catalog"
-    if let type = UTType(filenameExtension: "xcstrings") {
-      panel.allowedContentTypes = [type]
+    Task {
+      guard
+        let url = await DevDesktop.chooseFiles(
+          message: "Choose an .xcstrings catalog", contentTypes: UTType(filenameExtension: "xcstrings").map { [$0] } ?? []
+        ).first
+      else { return }
+      // Unguarded: the prompt (if any) was answered before the panel appeared,
+      // so this must not ask again — re-entering the guarded `open` here would
+      // loop the prompt forever on a discarded-edit leave.
+      await self.performOpen(url)
     }
-    guard panel.runModal() == .OK, let url = panel.url else { return }
-    // Unguarded: the prompt (if any) was answered before the panel appeared,
-    // so this must not ask again — re-entering the guarded `open` here would
-    // loop the prompt forever on a discarded-edit leave.
-    Task { await self.performOpen(url) }
   }
 
   /// Opens `url` only when it is NOT the catalog already open — the

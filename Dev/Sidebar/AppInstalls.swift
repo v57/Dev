@@ -3,11 +3,12 @@
 //  Dev
 //
 
-import AppKit
+import DevDesktop
 import CodeActions
 import CodeWorkspace
 import Foundation
 import Observation
+import PlatformBroadcast
 
 /// The sidebar's Install buttons: a project's Mac app built and put in place on this Mac by Code's install action
 /// (`AppInstall`: archive, quit the running copy, replace it in ~/Applications or /Applications, open it again).
@@ -66,13 +67,11 @@ import Observation
   @ObservationIgnored private var scanTask: Task<Void, Never>?
   @ObservationIgnored private var tracked: [URL] = []
   @ObservationIgnored private var lastCheckAll = Date.distantPast
-  @ObservationIgnored private var activation: NSObjectProtocol?
+  @ObservationIgnored private var activation: AnyObject?
 
   private init() {
     // Another app may have installed or removed one meanwhile.
-    activation = NotificationCenter.default.addObserver(
-      forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
-    ) { _ in
+    activation = DevDesktop.onActivation {
       Task { @MainActor in AppInstalls.shared.checkAllIfStale() }
     }
     #if DEBUG
@@ -85,9 +84,8 @@ import Observation
     /// `install <project folder>`, `cancel <project folder>`, `answer yes|no`, `check` or `dump` (each project's
     /// phase and the queue, to /tmp/dev-installs.txt).
     private func listenForDebugCommands() async {
-      let center = DistributedNotificationCenter.default()
-      for await note in center.notifications(named: Notification.Name("dev.v57.dev.install")) {
-        guard let command = note.object as? String else { continue }
+      for await note in Broadcast.messages(named: "dev.v57.dev.install") {
+        guard let command = note[Broadcast.objectKey] else { continue }
         let parts = command.split(separator: " ", maxSplits: 1).map(String.init)
         let root = parts.count == 2 ? URL(fileURLWithPath: parts[1]) : nil
         switch parts.first {

@@ -4,6 +4,7 @@
 //
 
 import Foundation
+import PlatformDiskUsage
 
 /// What a running scan reports, in order: phases while it discovers, then one
 /// `measured` per item as its size lands, then the finished snapshot.
@@ -102,7 +103,7 @@ nonisolated enum StorageScanner {
     if case .cloneDuplicates(let roots) = item.cleanup {
       // What cloning frees is what the copies hold on their own, which only
       // reading them tells; their bytes are already counted by their folders.
-      let found = StorageDuplicates.find(in: roots)
+      let found = DuplicateFiles.find(in: roots)
       item.bytes = found.bytes
       item.detail = "\(found.copyCount) copies of \(found.groups.count) files · nothing is removed"
     } else if !item.reportedSize {
@@ -215,7 +216,7 @@ nonisolated enum StorageCleaner {
         case .cloneDuplicates(let roots):
           let idle = StorageDiscovery.excludingBootedSimulators(roots)
           guard !idle.isEmpty else { throw CleanError(message: "The simulators are booted, or simctl did not answer") }
-          let result = StorageDuplicates.cloneAll(in: idle)
+          let result = DuplicateFiles.cloneAll(in: idle)
           if result.cloned == 0, let first = result.failures.first { throw CleanError(message: first) }
           report.cleanedIDs.append(item.id)
           report.cleanedBytes += result.freed

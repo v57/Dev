@@ -5,7 +5,8 @@
 //  Created by Dmitry on 01.09.26.
 //
 
-import AppKit
+import DevGraphics
+import Foundation
 import ComponentKit
 import SwiftUI
 
@@ -196,7 +197,7 @@ struct CreateIconView: View {
   @ViewBuilder
   func icon(_ appearance: IconAppearance) -> some View {
     if appearance == .default, create.rendered == create.settings, let image = create.render?.image {
-      Image(nsImage: image).resizable().interpolation(.high).aspectRatio(1, contentMode: .fit)
+      image.resizable().interpolation(.high).aspectRatio(1, contentMode: .fit)
     } else {
       liveIcon(appearance)
     }
@@ -285,7 +286,7 @@ struct CreateIconView: View {
     defer { isExporting = false }
     // Project-bound: the target IS the project root (no picker). Projectless:
     // prompt for an arbitrary folder, as before.
-    guard let dir = exportRootURL ?? chooseDirectory() else { return }
+    guard let dir = await exportDirectory() else { return }
     do {
       try await IconGenerator.export(
         symbol: create.settings.symbol, scale: create.settings.scale,
@@ -296,13 +297,9 @@ struct CreateIconView: View {
     }
   }
 
-  private func chooseDirectory() -> URL? {
-    let panel = NSOpenPanel()
-    panel.canChooseFiles = false
-    panel.canChooseDirectories = true
-    panel.allowsMultipleSelection = false
-    panel.message = "Choose a folder to write Assets.xcassets into"
-    return panel.runModal() == .OK ? panel.url : nil
+  private func exportDirectory() async -> URL? {
+    if let exportRootURL { return exportRootURL }
+    return await KitDesktop.chooseFolders(message: "Choose a folder to write Assets.xcassets into").first
   }
 }
 

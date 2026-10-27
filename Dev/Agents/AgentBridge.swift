@@ -5,6 +5,7 @@
 
 import Foundation
 import Observation
+import PlatformBroadcast
 import ComponentKit
 import SwiftUI
 
@@ -24,20 +25,18 @@ final class AgentBridge {
 
   private(set) var pending: Pending?
   @ObservationIgnored private var queue: [Pending] = []
-  @ObservationIgnored private var observers: [NSObjectProtocol] = []
+  @ObservationIgnored private var observers: [Broadcast.Observation] = []
   @ObservationIgnored weak var workflows: WorkflowStore?
   @ObservationIgnored weak var screenshots: ScreenshotsStore?
 
   init() {
     // A screenshot or test launch beside the real app must not answer for it.
     guard !LaunchOptions.isScreenshotMode else { return }
-    let center = DistributedNotificationCenter.default()
-    observers.append(center.addObserver(forName: AgentChannel.request, object: nil, queue: .main) { [weak self] note in
-      let info = note.userInfo as? [String: String] ?? [:]
+    observers.append(Broadcast.observe(AgentChannel.request) { [weak self] info in
       MainActor.assumeIsolated { self?.receive(info) }
     })
-    observers.append(center.addObserver(forName: AgentChannel.changed, object: nil, queue: .main) { [weak self] note in
-      guard let path = (note.userInfo as? [String: String])?["project"] else { return }
+    observers.append(Broadcast.observe(AgentChannel.changed) { [weak self] info in
+      guard let path = info["project"] else { return }
       MainActor.assumeIsolated {
         let root = URL(fileURLWithPath: path)
         self?.workflows?.reload(root)
@@ -93,8 +92,7 @@ final class AgentBridge {
   }
 
   private func reply(_ id: String, _ answer: String) {
-    DistributedNotificationCenter.default().postNotificationName(
-      AgentChannel.reply, object: nil, userInfo: ["id": id, "answer": answer], deliverImmediately: true)
+    Broadcast.post(AgentChannel.reply, ["id": id, "answer": answer])
   }
 }
 

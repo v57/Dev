@@ -3,7 +3,7 @@
 //  Dev
 //
 
-import AppKit
+import Foundation
 import ComponentKit
 import SwiftUI
 import VaultKit
@@ -97,11 +97,11 @@ struct WelcomeView: View {
     // The placeholder folder symbol isn't an icon: the item's own folder tile stands in.
     guard row.iconURL.map({ FileManager.default.fileExists(atPath: $0.path) }) == true, let image = row.iconImage
     else { return nil }
-    return Image(nsImage: image)
+    return image
   }
 
   private static func abbreviated(_ url: URL) -> String {
-    (url.path(percentEncoded: false) as NSString).abbreviatingWithTildeInPath
+    url.path(percentEncoded: false).abbreviatingHome
   }
 
   /// "Today", "Yesterday", or the date.

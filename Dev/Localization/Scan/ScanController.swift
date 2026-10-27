@@ -5,7 +5,7 @@
 //  Created by Dmitry on 10.09.26.
 //
 
-import AppKit
+import ComponentKit
 import ComponentKit
 import Foundation
 
@@ -88,14 +88,14 @@ final class ScanController {
   /// Lets the user pick another root folder (a catalog may live deep inside
   /// the repo, e.g. Resources/Localization).
   func chooseRoot() {
-    let panel = NSOpenPanel()
-    panel.canChooseFiles = false
-    panel.canChooseDirectories = true
-    panel.allowsMultipleSelection = false
-    panel.message = "Choose the repo folder to scan for Swift packages and Xcode projects"
-    panel.prompt = "Scan"
-    guard panel.runModal() == .OK, let url = panel.url else { return }
-    start(root: url.standardizedFileURL)
+    Task {
+      guard
+        let url = await KitDesktop.chooseFolders(
+          prompt: "Scan", message: "Choose the repo folder to scan for Swift packages and Xcode projects"
+        ).first
+      else { return }
+      start(root: url.standardizedFileURL)
+    }
   }
 
   /// Cancels the running scan and terminates its toolchain children. The

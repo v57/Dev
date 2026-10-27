@@ -19,6 +19,12 @@
 		C0DE90000000000000000003 /* CodeProgress in Frameworks */ = {isa = PBXBuildFile; productRef = C0DE90000000000000000002 /* CodeProgress */; };
 		C0DE90000000000000000005 /* CodeWorkspace in Frameworks */ = {isa = PBXBuildFile; productRef = C0DE90000000000000000004 /* CodeWorkspace */; };
 		C0DE90000000000000000007 /* CodeActions in Frameworks */ = {isa = PBXBuildFile; productRef = C0DE90000000000000000006 /* CodeActions */; };
+		DE5C0000000000000000000C /* DevDesktop in Frameworks */ = {isa = PBXBuildFile; productRef = DE5C00000000000000000004 /* DevDesktop */; };
+		DE5C0000000000000000000D /* DevGraphics in Frameworks */ = {isa = PBXBuildFile; productRef = DE5C00000000000000000005 /* DevGraphics */; };
+		9C47F0000000000000000100 /* PlatformDiskUsage in Frameworks */ = {isa = PBXBuildFile; productRef = 9C47F0000000000000000200 /* PlatformDiskUsage */; };
+		9C47F0000000000000000110 /* PlatformLanguageModel in Frameworks */ = {isa = PBXBuildFile; productRef = 9C47F0000000000000000210 /* PlatformLanguageModel */; };
+		9C47F0000000000000000120 /* PlatformImage in Frameworks */ = {isa = PBXBuildFile; productRef = 9C47F0000000000000000220 /* PlatformImage */; };
+		9C47F0000000000000000130 /* PlatformBroadcast in Frameworks */ = {isa = PBXBuildFile; productRef = 9C47F0000000000000000230 /* PlatformBroadcast */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -65,6 +71,12 @@
 				C0DE90000000000000000007 /* CodeActions in Frameworks */,
 				DE5C0000000000000000000A /* DevScreenshots in Frameworks */,
 				DE5C0000000000000000000B /* DevScreenshotsCapture in Frameworks */,
+				DE5C0000000000000000000C /* DevDesktop in Frameworks */,
+				DE5C0000000000000000000D /* DevGraphics in Frameworks */,
+				9C47F0000000000000000100 /* PlatformDiskUsage in Frameworks */,
+				9C47F0000000000000000110 /* PlatformLanguageModel in Frameworks */,
+				9C47F0000000000000000120 /* PlatformImage in Frameworks */,
+				9C47F0000000000000000130 /* PlatformBroadcast in Frameworks */,
 			);
 		};
 		000000000000000330000000 /* Frameworks */ = {
@@ -123,6 +135,12 @@
 				C0DE90000000000000000006 /* CodeActions */,
 				DE5C00000000000000000002 /* DevScreenshots */,
 				DE5C00000000000000000003 /* DevScreenshotsCapture */,
+				DE5C00000000000000000004 /* DevDesktop */,
+				DE5C00000000000000000005 /* DevGraphics */,
+				9C47F0000000000000000200 /* PlatformDiskUsage */,
+				9C47F0000000000000000210 /* PlatformLanguageModel */,
+				9C47F0000000000000000220 /* PlatformImage */,
+				9C47F0000000000000000230 /* PlatformBroadcast */,
 			);
 			productName = MyApp;
 			productReference = 000000000000000000000120 /* Dev.app */;
@@ -185,6 +203,7 @@
 				9B3A7F6AB825F8F67EEFD8FF /* XCRemoteSwiftPackageReference "Vault" */,
 				8DF881F3EAA5B613209FE067 /* XCRemoteSwiftPackageReference "Git" */,
 				C0DE90000000000000000001 /* XCRemoteSwiftPackageReference "Code" */,
+				9C47F0000000000000000001 /* XCRemoteSwiftPackageReference "Platform" */,
 			);
 			preferredProjectObjectVersion = 90;
 			productRefGroup = 000000000000000000000020 /* Products */;
@@ -557,6 +576,14 @@
 				kind = branch;
 			};
 		};
+		9C47F0000000000000000001 /* XCRemoteSwiftPackageReference "Platform" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/v57/Platform.git";
+			requirement = {
+				branch = main;
+				kind = branch;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -618,6 +645,36 @@
 			isa = XCSwiftPackageProductDependency;
 			package = C0DE90000000000000000001 /* XCRemoteSwiftPackageReference "Code" */;
 			productName = CodeActions;
+		};
+		DE5C00000000000000000004 /* DevDesktop */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = DE5C00000000000000000001 /* XCLocalSwiftPackageReference "." */;
+			productName = DevDesktop;
+		};
+		DE5C00000000000000000005 /* DevGraphics */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = DE5C00000000000000000001 /* XCLocalSwiftPackageReference "." */;
+			productName = DevGraphics;
+		};
+		9C47F0000000000000000200 /* PlatformDiskUsage */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 9C47F0000000000000000001 /* XCRemoteSwiftPackageReference "Platform" */;
+			productName = PlatformDiskUsage;
+		};
+		9C47F0000000000000000210 /* PlatformLanguageModel */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 9C47F0000000000000000001 /* XCRemoteSwiftPackageReference "Platform" */;
+			productName = PlatformLanguageModel;
+		};
+		9C47F0000000000000000220 /* PlatformImage */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 9C47F0000000000000000001 /* XCRemoteSwiftPackageReference "Platform" */;
+			productName = PlatformImage;
+		};
+		9C47F0000000000000000230 /* PlatformBroadcast */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 9C47F0000000000000000001 /* XCRemoteSwiftPackageReference "Platform" */;
+			productName = PlatformBroadcast;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

@@ -5,7 +5,7 @@
 //  Created by Dmitry on 10.09.26.
 //
 
-import AppKit
+import DevDesktop
 import Foundation
 import Observation
 import SQLiteKit
@@ -156,14 +156,13 @@ final class ImportedTranslationDB {
   /// Replaces the previous import on success; errors surface through
   /// `errorMessage` (shown by the calling view).
   func importViaPanel() async {
-    let panel = NSOpenPanel()
-    panel.title = "Import Translation Database"
-    panel.message = "Choose a sqlite file with a translations (language, source, target, app) table"
-    panel.prompt = "Import"
-    panel.allowsMultipleSelection = false
-    panel.canChooseDirectories = false
-    panel.allowedContentTypes = [.data]
-    guard panel.runModal() == .OK, let url = panel.url else { return }
+    guard
+      let url = await DevDesktop.chooseFiles(
+        title: "Import Translation Database",
+        message: "Choose a sqlite file with a translations (language, source, target, app) table", prompt: "Import",
+        contentTypes: [.data]
+      ).first
+    else { return }
     do {
       try await setImported(url)
     } catch {

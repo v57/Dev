@@ -6,7 +6,7 @@
 //
 
 import Foundation
-import FoundationModels
+import PlatformLanguageModel
 
 // MARK: - Why a key was skipped
 
@@ -120,41 +120,12 @@ nonisolated protocol CommentModel: Sendable {
 /// no network, no rate budget, measured at well under a second per comment.
 nonisolated struct OnDeviceCommentModel: CommentModel {
   var unavailableReason: String? {
-    // The framework ships with macOS 26; on 15 the pass reports why and skips.
-    guard #available(macOS 26, *) else { return "the on-device model needs macOS 26" }
-    if case .unavailable(let reason) = SystemLanguageModel.default.availability {
-      return OnDeviceCommentModel.text(for: reason)
-    }
-    return nil
+    // The framework ships with macOS 26; on 15 (and off the Mac) the pass reports why and skips.
+    OnDeviceLanguageModel.unavailableReason
   }
 
   func comment(for target: CommentTarget, snippet: String) async throws -> String {
-    guard #available(macOS 26, *) else { throw OnDeviceUnavailable() }
-    let session = LanguageModelSession(model: .default, instructions: Self.instructions)
-    return try await session.respond(to: Self.prompt(target, snippet: snippet)).content
-  }
-
-  /// Thrown by `comment` on a system without the framework. Never reached in
-  /// practice: the pass asks `unavailableReason` first.
-  struct OnDeviceUnavailable: Error {}
-
-  /// The reason in the user's terms. Compared rather than switched: the
-  /// framework's reason enum is not frozen, and a future case must not turn
-  /// into a compile error in an app that only needs a sentence.
-  @available(macOS 26, *)
-  private static func text(
-    for reason: SystemLanguageModel.Availability.UnavailableReason
-  ) -> String {
-    if reason == .deviceNotEligible {
-      return "this Mac is not eligible for Apple Intelligence"
-    }
-    if reason == .appleIntelligenceNotEnabled {
-      return "Apple Intelligence is not enabled in System Settings"
-    }
-    if reason == .modelNotReady {
-      return "the on-device model is still downloading"
-    }
-    return "the on-device model is unavailable"
+    try await OnDeviceLanguageModel.respond(to: Self.prompt(target, snippet: snippet), instructions: Self.instructions)
   }
 
   /// One sentence that describes USE. The rules are the whole point of the

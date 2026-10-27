@@ -83,10 +83,10 @@ nonisolated enum AgentPermissions {
 
 /// The distributed notifications the MCP process and the app talk over.
 nonisolated enum AgentChannel {
-  static let request = Notification.Name("dev.v57.dev.agent.request")
-  static let reply = Notification.Name("dev.v57.dev.agent.reply")
+  static let request = "dev.v57.dev.agent.request"
+  static let reply = "dev.v57.dev.agent.reply"
   /// Posted after the MCP process wrote a file the app shows (the screenshots file, a workflow).
-  static let changed = Notification.Name("dev.v57.dev.agent.changed")
+  static let changed = "dev.v57.dev.agent.changed"
 }
 
 /// The project folders the app knows, written by the app for the MCP process.

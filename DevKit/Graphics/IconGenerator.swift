@@ -1,24 +1,22 @@
-//
-//  IconGenerator.swift
-//  Dev
-//
 //  An app icon from flat sources (one background color, one glyph color, opacity allowed) in the style Icon
 //  Composer gives them: the export is an `AppIcon.icon` with Liquid Glass (top light, translucent glyph, shadow,
 //  specular edge), and actool's render of it is the preview and the AppIcon set for older systems.
 //
 
-import AppKit
-import SwiftUI
 import Foundation
+import SwiftUI
 
-enum IconError: Error, CustomStringConvertible {
+#if os(macOS)
+import AppKit
+
+public enum IconError: Error, CustomStringConvertible {
   case symbolNotFound(String)
   case renderFailed(String)
   case emptyGlyph(String)
   case outputFailed(String)
   case actoolFailed(String)
 
-  var description: String {
+  public var description: String {
     switch self {
     case .symbolNotFound(let s): return "SF Symbol \"\(s)\" not found on this system"
     case .renderFailed(let s): return "Could not render SF Symbol \"\(s)\""
@@ -150,22 +148,25 @@ enum SymbolRenderer {
 }
 
 /// The icon's two flat colors as Icon Composer writes them.
-nonisolated struct IconColor: Hashable, Sendable {
-  var r, g, b, a: Double
+public nonisolated struct IconColor: Hashable, Sendable {
+  public var r, g, b, a: Double
 
-  init(_ color: Color) {
+  public init(_ color: Color) {
     let ns = NSColor(color).usingColorSpace(.sRGB) ?? .white
     (r, g, b, a) = (ns.redComponent, ns.greenComponent, ns.blueComponent, ns.alphaComponent)
   }
 
   /// `srgb:r,g,b,a`, the form of a fill in `icon.json`.
-  var iconComposer: String { String(format: "srgb:%.5f,%.5f,%.5f,%.5f", r, g, b, a) }
+  public var iconComposer: String { String(format: "srgb:%.5f,%.5f,%.5f,%.5f", r, g, b, a) }
 }
 
 /// Builds an icon from flat sources: an Icon Composer `AppIcon.icon` (the background color as its automatic
 /// gradient, the glyph as one glass layer filled with the glyph color, Hub's shadow, specular and translucency), and
 /// an AppIcon set of actool's flattened render of it, so the icon looks the same on systems before macOS 26.
-enum IconGenerator {
+public enum IconGenerator {
+  /// Whether this system renders icons (actool and SF Symbols: the Mac).
+  public static let isAvailable = true
+
 
   /// The glyph's mask on a transparent 1024 canvas, white: the icon's layer, which its fill colors.
   static func renderGlyph(symbol: String, scale: CGFloat) throws -> NSBitmapImageRep {
@@ -221,25 +222,28 @@ enum IconGenerator {
 
   /// Icon Composer's look of an icon, as actool renders it for systems before macOS 26: straight RGBA pixels by
   /// size (32, 64, 256, 512 and 1024), and the size of the compiled Assets.car.
-  nonisolated struct Render: Sendable {
-    var pixels: [Int: [UInt8]]
-    var catalogBytes: Int
+  public nonisolated struct Render: Sendable {
+    public var pixels: [Int: [UInt8]]
+    public var catalogBytes: Int
 
     /// The largest render scaled to `size`, unless actool drew that size itself.
-    func pixels(size: Int) -> [UInt8] {
+    public func pixels(size: Int) -> [UInt8] {
       if let exact = pixels[size] { return exact }
       let source = pixels.keys.filter { $0 >= size }.min() ?? pixels.keys.max() ?? 0
       return IconGenerator.scaled(pixels[source] ?? [], from: source, to: size)
     }
 
-    var image: NSImage? {
-      guard let size = pixels.keys.max(), let data = pixels[size] else { return nil }
-      return IconGenerator.image(data, size: size)
+    /// The largest render, for display.
+    public var image: Image? {
+      guard let size = pixels.keys.max(), let data = pixels[size],
+        let image = IconGenerator.image(data, size: size)
+      else { return nil }
+      return Image(nsImage: image)
     }
   }
 
   /// Writes the icon to a temporary `AppIcon.icon` and compiles it with actool.
-  static func render(symbol: String, scale: CGFloat, background: IconColor, glyph: IconColor) async throws -> Render {
+  public static func render(symbol: String, scale: CGFloat, background: IconColor, glyph: IconColor) async throws -> Render {
     let work = FileManager.default.temporaryDirectory
       .appendingPathComponent("dev-icon-\(UUID().uuidString)", isDirectory: true)
     defer { try? FileManager.default.removeItem(at: work) }
@@ -291,7 +295,7 @@ enum IconGenerator {
   /// Writes the project's `AppIcon.icon` and `Assets.xcassets/AppIcon.appiconset` (actool's render as lossless PNGs:
   /// a palette bands the glass and rings the shadow; actool compiles the set only where there is no `.icon`), both
   /// into `outDir`.
-  static func export(symbol: String, scale: CGFloat, background: IconColor, glyph: IconColor, to outDir: URL)
+  public static func export(symbol: String, scale: CGFloat, background: IconColor, glyph: IconColor, to outDir: URL)
     async throws
   {
     let render = try await render(symbol: symbol, scale: scale, background: background, glyph: glyph)
@@ -405,3 +409,45 @@ enum IconGenerator {
     try Data(json.utf8).write(to: dir.appendingPathComponent("Contents.json"))
   }
 }
+#else
+
+/// Off the Mac there is no actool or SF Symbols renderer: `isAvailable` is false and rendering throws.
+public enum IconError: Error, CustomStringConvertible {
+  case unavailable
+
+  public var description: String { "App icons are made with Xcode's actool, on macOS" }
+}
+
+/// The icon's two flat colors as Icon Composer writes them.
+public nonisolated struct IconColor: Hashable, Sendable {
+  public var r, g, b, a: Double
+
+  public init(_ color: Color) {
+    let resolved = color.resolve(in: EnvironmentValues())
+    (r, g, b, a) = (Double(resolved.red), Double(resolved.green), Double(resolved.blue), Double(resolved.opacity))
+  }
+
+  /// `srgb:r,g,b,a`, the form of a fill in `icon.json`.
+  public var iconComposer: String { String(format: "srgb:%.5f,%.5f,%.5f,%.5f", r, g, b, a) }
+}
+
+public enum IconGenerator {
+  public static let isAvailable = false
+
+  public nonisolated struct Render: Sendable {
+    public var pixels: [Int: [UInt8]]
+    public var catalogBytes: Int
+
+    public func pixels(size: Int) -> [UInt8] { pixels[size] ?? [] }
+    public var image: Image? { nil }
+  }
+
+  public static func render(symbol: String, scale: CGFloat, background: IconColor, glyph: IconColor) async throws
+    -> Render
+  { throw IconError.unavailable }
+
+  public static func export(symbol: String, scale: CGFloat, background: IconColor, glyph: IconColor, to outDir: URL)
+    async throws
+  { throw IconError.unavailable }
+}
+#endif

@@ -4,8 +4,8 @@
 //
 
 import Foundation
-import os
-import Security
+import Synchronization
+import VaultKit
 
 // MARK: - ModelSettings
 
@@ -96,7 +96,7 @@ nonisolated enum ProviderKeychain {
   /// What the keychain answered per account, kept for the life of the app: the start buttons
   /// and the run's pages ask whether a model is configured on every redraw, and a keychain read
   /// is a trip to `securityd`. `save` and `delete` are the only writers, and they update it.
-  private static let cache = OSAllocatedUnfairLock(initialState: [String: String?]())
+  private static let cache = Mutex([String: String?]())
 
   static func read(account: String) -> String? {
     if let cached = cache.withLock({ $0[account] }) { return cached }
@@ -106,20 +106,7 @@ nonisolated enum ProviderKeychain {
   }
 
   private static func readKeychain(account: String) -> String? {
-    let query: [String: Any] = [
-      kSecClass as String: kSecClassGenericPassword,
-      kSecAttrService as String: service,
-      kSecAttrAccount as String: account,
-      kSecReturnData as String: true,
-      kSecMatchLimit as String: kSecMatchLimitOne,
-    ]
-    var item: CFTypeRef?
-    guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-          let data = item as? Data,
-          let value = String(data: data, encoding: .utf8),
-          !value.isEmpty
-    else { return nil }
-    return value
+    DevKeychain.read(service: service, account: account)
   }
 
   /// Saves (or replaces) the key; an empty key removes it.
@@ -127,33 +114,14 @@ nonisolated enum ProviderKeychain {
   static func save(_ key: String, account: String) -> Bool {
     let key = key.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !key.isEmpty else { return delete(account: account) }
-    let base: [String: Any] = [
-      kSecClass as String: kSecClassGenericPassword,
-      kSecAttrService as String: service,
-      kSecAttrAccount as String: account,
-    ]
-    let attributes: [String: Any] = [
-      kSecValueData as String: Data(key.utf8),
-      kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
-      kSecAttrLabel as String: "Dev: \(account) API key",
-    ]
     defer { cache.withLock { $0[account] = nil } }
-    let status = SecItemUpdate(base as CFDictionary, attributes as CFDictionary)
-    if status == errSecSuccess { return true }
-    guard status == errSecItemNotFound else { return false }
-    return SecItemAdd(base.merging(attributes) { $1 } as CFDictionary, nil) == errSecSuccess
+    return DevKeychain.write(key, service: service, account: account, label: "Dev: \(account) API key")
   }
 
   @discardableResult
   static func delete(account: String) -> Bool {
     defer { cache.withLock { $0[account] = nil } }
-    let query: [String: Any] = [
-      kSecClass as String: kSecClassGenericPassword,
-      kSecAttrService as String: service,
-      kSecAttrAccount as String: account,
-    ]
-    let status = SecItemDelete(query as CFDictionary)
-    return status == errSecSuccess || status == errSecItemNotFound
+    return DevKeychain.delete(service: service, account: account)
   }
 
   // MARK: - import

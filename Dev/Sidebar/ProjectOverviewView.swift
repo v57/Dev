@@ -3,7 +3,8 @@
 //  Dev
 //
 
-import AppKit
+import DevGraphics
+import PlatformImage
 import CodeWorkspace
 import DevScreenshots
 import DevScreenshotsCapture
@@ -397,9 +398,9 @@ struct ProjectOverviewView: View {
 
   @ViewBuilder
   private func iconImage(size: CGFloat) -> some View {
-    if let preview = facts.icon.preview.flatMap(NSImage.init(data:)) {
+    if let preview = facts.icon.preview.flatMap(Image.init(data:)) {
       // Trimmed to its shape and drawn square (an Icon Composer icon's whole canvas): clipped to the app icon's.
-      Image(nsImage: preview)
+      preview
         .resizable()
         .interpolation(.high)
         .frame(width: size * 0.82, height: size * 0.82)
@@ -407,7 +408,7 @@ struct ProjectOverviewView: View {
         .frame(width: size, height: size)
         .shadow(color: .black.opacity(0.15), radius: 6, y: 3)
     } else if let image = row.iconImage {
-      Image(nsImage: image)
+      image
         .resizable()
         .interpolation(.high)
         .aspectRatio(contentMode: .fit)
@@ -499,8 +500,8 @@ struct ScreenshotThumbnail: View {
       .font(.caption)
     }
     .kitContextMenu {
-      Button("Show in Finder", systemImage: "folder") {
-        NSWorkspace.shared.activateFileViewerSelecting([shot.final ?? shot.captured])
+      Button("Show in \(KitDesktop.fileManagerName)", systemImage: "folder") {
+        KitDesktop.reveal([shot.final ?? shot.captured])
       }
     }
   }
@@ -510,12 +511,12 @@ struct ScreenshotThumbnail: View {
 /// does not stall scrolling.
 struct AsyncImageFile: View {
   let url: URL
-  @State private var image: NSImage?
+  @State private var image: Image?
 
   var body: some View {
     Group {
       if let image {
-        Image(nsImage: image)
+        image
           .resizable()
           .interpolation(.high)
       } else {
@@ -523,24 +524,9 @@ struct AsyncImageFile: View {
       }
     }
     .task(id: url) {
-      image = await Task.detached(priority: .utility) { () -> NSImage? in
-        ImageThumbnails.thumbnail(url, maxPixel: 900)
-      }.value
+      let bitmap = await Task.detached(priority: .utility) { ImageFile.thumbnail(at: url, maxPixel: 900) }.value
+      image = bitmap.flatMap { Image(rgba: $0.rgba, width: $0.width, height: $0.height) }
     }
-  }
-}
-
-nonisolated enum ImageThumbnails {
-  /// A downscaled copy through ImageIO, never the full-size bitmap.
-  static func thumbnail(_ url: URL, maxPixel: Int) -> NSImage? {
-    guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
-    let options: [CFString: Any] = [
-      kCGImageSourceCreateThumbnailFromImageAlways: true,
-      kCGImageSourceThumbnailMaxPixelSize: maxPixel,
-      kCGImageSourceCreateThumbnailWithTransform: true,
-    ]
-    guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
-    return NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
   }
 }
 
@@ -573,7 +559,7 @@ enum ProjectOpener {
   static func open(_ root: URL) {
     switch target {
     case .finder:
-      NSWorkspace.shared.open(root)
+      KitDesktop.open(root)
     case .code:
       openWith(bundleID: "dev.v57.code", url: root)
     case .xcode:
@@ -586,10 +572,10 @@ enum ProjectOpener {
   }
 
   private static func openWith(bundleID: String, url: URL) {
-    guard let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else {
-      NSWorkspace.shared.open(url)
+    guard KitDesktop.isAppInstalled(bundleID) else {
+      KitDesktop.open(url)
       return
     }
-    NSWorkspace.shared.open([url], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
+    KitDesktop.open([url], withApp: bundleID)
   }
 }

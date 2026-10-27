@@ -1,8 +1,4 @@
-//
-//  PalettePNG.swift
-//  Dev
-//
-
+#if os(macOS)
 import Compression
 import Foundation
 
@@ -207,3 +203,4 @@ nonisolated private extension Data {
     append(bigEndian: PalettePNG.crc32(typed))
   }
 }
+#endif

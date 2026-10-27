@@ -3,8 +3,10 @@
 //  Dev
 //
 
-import AppKit
+import DevDesktop
+import DevGraphics
 import DevScreenshots
+import PlatformImage
 import SwiftUI
 
 /// Full-screen preview of a list of screenshots, opened by a click on one in the Overview or the
@@ -29,7 +31,7 @@ final class ScreenshotViewer {
   var index: Int
   /// Applies to the whole list: stepping keeps it.
   var dark: Bool
-  private var images: [URL: NSImage] = [:]
+  private var images: [URL: Image] = [:]
   private var loading: Set<URL> = []
 
   private init(slots: [Slot], index: Int, dark: Bool, framed: Bool) {
@@ -56,7 +58,7 @@ final class ScreenshotViewer {
   }
 
   /// The picture at screen size, once it has loaded.
-  func image(_ shot: ScreenshotLibrary.Shot) -> NSImage? {
+  func image(_ shot: ScreenshotLibrary.Shot) -> Image? {
     images[shot.picture(framed: framed).url]
   }
 
@@ -71,20 +73,17 @@ final class ScreenshotViewer {
   private func load(_ url: URL) {
     guard images[url] == nil, !loading.contains(url) else { return }
     loading.insert(url)
-    let maxPixel = Int((NSScreen.screens.map { max($0.frame.width, $0.frame.height) * $0.backingScaleFactor }.max() ?? 2880))
+    let maxPixel = DevDesktop.largestScreenPixels
     Task {
-      let image = await Task.detached(priority: .userInitiated) {
-        ImageThumbnails.thumbnail(url, maxPixel: maxPixel)
+      let bitmap = await Task.detached(priority: .userInitiated) {
+        ImageFile.thumbnail(at: url, maxPixel: maxPixel)
       }.value
       loading.remove(url)
-      images[url] = image
+      images[url] = bitmap.flatMap { Image(rgba: $0.rgba, width: $0.width, height: $0.height) }
     }
   }
 
   // MARK: - Presenting
-
-  private static var panel: ViewerPanel?
-  private static var keyMonitor: Any?
 
   /// Shows `shots` full screen from `selected`: each scene once, in the list's order, with its
   /// light and dark capture paired, in the selected one's appearance.
@@ -102,61 +101,24 @@ final class ScreenshotViewer {
     guard let index = slots.firstIndex(where: { $0.id == id }) else { return }
     let viewer = ScreenshotViewer(slots: slots, index: index, dark: selected.appearance == .dark, framed: framed)
     viewer.preload()
-    show(viewer)
-  }
-
-  private static func show(_ viewer: ScreenshotViewer) {
-    dismiss(animated: false)
-    let screen = NSApp.keyWindow?.screen ?? NSScreen.main ?? NSScreen.screens[0]
-    let panel = ViewerPanel(
-      contentRect: screen.frame, styleMask: [.borderless], backing: .buffered, defer: false)
-    panel.level = NSWindow.Level(rawValue: NSWindow.Level.mainMenu.rawValue + 1)
-    panel.collectionBehavior = [.fullScreenAuxiliary, .canJoinAllSpaces]
-    panel.isOpaque = false
-    panel.backgroundColor = .clear
-    panel.hidesOnDeactivate = true
-    panel.isReleasedWhenClosed = false
-    panel.contentView = NSHostingView(rootView: ScreenshotViewerView(viewer: viewer) { dismiss() })
-    panel.setFrame(screen.frame, display: true)
-    panel.alphaValue = 0
-    panel.makeKeyAndOrderFront(nil)
-    NSAnimationContext.runAnimationGroup { $0.duration = 0.18; panel.animator().alphaValue = 1 }
-    self.panel = panel
-
-    keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-      guard event.window === Self.panel else { return event }
-      switch event.keyCode {
-      case 123, 126: viewer.step(-1)  // ← ↑
-      case 124, 125: viewer.step(1)  // → ↓
-      case 53, 49: dismiss()  // Esc, Space
-      default:
-        guard event.charactersIgnoringModifiers?.lowercased() == "d",
-              event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty
-        else { return event }
-        viewer.toggleDark()
+    FullScreenViewer.present(ScreenshotViewerView(viewer: viewer) { dismiss() }) { key in
+      switch key {
+      case .previous: viewer.step(-1)
+      case .next: viewer.step(1)
+      case .close: dismiss()
+      case .character("d"): viewer.toggleDark()
+      case .character: return false
       }
-      return nil
+      return true
     }
   }
+
+  /// Whether pictures open full screen here (else a click on one does nothing).
+  static var isAvailable: Bool { FullScreenViewer.isAvailable }
 
   static func dismiss(animated: Bool = true) {
-    if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
-    keyMonitor = nil
-    guard let panel else { return }
-    self.panel = nil
-    guard animated else { panel.orderOut(nil); return }
-    NSAnimationContext.runAnimationGroup { context in
-      context.duration = 0.15
-      panel.animator().alphaValue = 0
-    } completionHandler: {
-      panel.orderOut(nil)
-    }
+    FullScreenViewer.dismiss(animated: animated)
   }
-}
-
-/// A borderless panel that still takes the keyboard.
-private final class ViewerPanel: NSPanel {
-  override var canBecomeKey: Bool { true }
 }
 
 private struct ScreenshotViewerView: View {
@@ -176,7 +138,7 @@ private struct ScreenshotViewerView: View {
         topBar(shot)
         ZStack {
           if let image = viewer.image(shot) {
-            Image(nsImage: image)
+            image
               .resizable()
               .interpolation(.high)
           } else {

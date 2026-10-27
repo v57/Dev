@@ -182,7 +182,7 @@ struct SidebarView: View {
       .kitContextMenu {
         if let root = row.rootURL {
           Button("Open in \(ProjectOpener.appName)", systemImage: "arrow.up.forward.app") { ProjectOpener.open(root) }
-          Button("Show in Finder", systemImage: "folder") { NSWorkspace.shared.activateFileViewerSelecting([root]) }
+          Button("Show in \(KitDesktop.fileManagerName)", systemImage: "folder") { KitDesktop.reveal([root]) }
           OtherPlacesMenu(root: root)
           Divider()
           if installs.canInstall(root), let name = installs.appName(root) {
@@ -193,7 +193,7 @@ struct SidebarView: View {
               Button("Install \(name) on This Mac", systemImage: "arrow.down.app") { installs.install(root) }
             }
             if let log = installs.logURL(root) {
-              Button("Show Install Log", systemImage: "doc.text") { NSWorkspace.shared.open(log) }
+              Button("Show Install Log", systemImage: "doc.text") { KitDesktop.open(log) }
             }
             Divider()
           }
@@ -368,7 +368,7 @@ private struct ProjectRow: View {
     if let icon = row.vaultIcon.flatMap(Image.init(data:)) {
       Avatar(name: row.name, image: icon, kind: .thing, size: 18)
     } else if let icon = row.iconImage {
-      Image(nsImage: icon)
+      icon
         .resizable()
         .interpolation(.high)
         .aspectRatio(contentMode: .fit)

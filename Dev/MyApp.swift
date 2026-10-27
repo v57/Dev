@@ -1,7 +1,8 @@
-import AppKit
 import CodeWorkspace
 import ComponentKit
+import DevDesktop
 import DevScreenshotsCapture
+import Foundation
 import SwiftUI
 import UpdateKit
 import VaultKit
@@ -21,15 +22,14 @@ import VaultUI
         }
         // DevTests runs inside a bare app: no window, no vault sync, no update check.
         if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
-            NSApplication.shared.setActivationPolicy(.accessory)
-            NSApplication.shared.run()
+            DevDesktop.runBareHost()
         }
         MyApp.main()
     }
 }
 
 struct MyApp: App {
-    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    @DevAppDelegateAdaptor(DevAppDelegate.self) private var appDelegate
 
     /// Updates from GitHub Releases (the universal Dev.zip, built by Tools/release/release.sh):
     /// checked daily once the user turns on automatic checks (never before), installed in place
@@ -37,6 +37,7 @@ struct MyApp: App {
     private let updater = AppUpdater(github: "v57/Dev", assetName: "Dev.zip")
 
     init() {
+        AppLifecycle.install()
         if let hangLog = LaunchOptions.hangLog { MainThreadWatchdog.start(logTo: hangLog) }
         updater.start()
         // Projects added here sync with the other v57 apps and devices through the vault.
@@ -108,46 +109,33 @@ struct DevWindow: View {
 /// them. This runs at the application level (not through the SwiftUI alert)
 /// because termination can arrive while no view is showing the prompt — and a
 /// modal alert here can never leave the app stuck half-terminated.
-final class AppDelegate: NSObject, NSApplicationDelegate {
-  /// A screenshot launch in the background restores no window: it opens one
-  /// through File ▸ New Window, so the tests and design checks always have one.
-  func applicationDidFinishLaunching(_ notification: Notification) {
-    guard LaunchOptions.isScreenshotMode else { return }
-    DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-      guard !NSApp.windows.contains(where: \.isVisible) else { return }
-      let items = NSApp.mainMenu?.items.flatMap { $0.submenu?.items ?? [] } ?? []
-      if let newWindow = items.first(where: { $0.keyEquivalent == "n" && $0.keyEquivalentModifierMask == .command }),
-         let action = newWindow.action {
-        NSApp.sendAction(action, to: newWindow.target, from: newWindow)
-      }
+enum AppLifecycle {
+  static func install() {
+    // A screenshot launch in the background restores no window: it opens one
+    // through File ▸ New Window, so the tests and design checks always have one.
+    DevAppDelegate.didFinishLaunching = {
+      guard LaunchOptions.isScreenshotMode else { return }
+      DispatchQueue.main.asyncAfter(deadline: .now() + 1) { DevDesktop.openWindowIfNone() }
     }
+    // Everything the translation store still holds for its writer lands before the app goes.
+    DevAppDelegate.willTerminate = { TranslationData.shared.flushBeforeTerminating() }
+    DevAppDelegate.shouldTerminate = shouldTerminate
   }
 
-  /// Everything the translation store still holds for its writer lands before the app goes.
-  @MainActor
-  func applicationWillTerminate(_ notification: Notification) {
-    TranslationData.shared.flushBeforeTerminating()
-  }
-
-  @MainActor
-  func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-    guard let store = LocalizationStore.active, store.hasUnsavedChanges else {
-      return .terminateNow
-    }
-    let alert = NSAlert()
-    alert.messageText = store.unsavedChangesTitle
-    alert.informativeText = "The edits in this window are not written to \(store.unsavedCatalogName) yet. Nothing saves on its own."
-    alert.addButton(withTitle: "Save")
-    alert.addButton(withTitle: "Discard")
-    alert.addButton(withTitle: "Cancel")
-    switch alert.runModal() {
-    case .alertFirstButtonReturn:
+  private static func shouldTerminate() -> Bool {
+    guard let store = LocalizationStore.active, store.hasUnsavedChanges else { return true }
+    let answer = DevDesktop.ask(
+      title: store.unsavedChangesTitle,
+      message: "The edits in this window are not written to \(store.unsavedCatalogName) yet. Nothing saves on its own.",
+      buttons: ["Save", "Discard", "Cancel"])
+    switch answer {
+    case 0:
       // A failed write surfaces its own alert and keeps the app open.
-      return store.saveBeforeTerminating() ? .terminateNow : .terminateCancel
-    case .alertSecondButtonReturn:
-      return .terminateNow
+      return store.saveBeforeTerminating()
+    case 1:
+      return true
     default:
-      return .terminateCancel
+      return false
     }
   }
 }

@@ -4,7 +4,7 @@
 //
 
 import Foundation
-import Security
+import VaultKit
 
 // MARK: - ServerConnection
 
@@ -161,52 +161,49 @@ nonisolated enum ServerKeychain {
 
   // MARK: - generic password items
 
-  /// Reads a generic-password item: one item per (service, account), the value
-  /// in `kSecValueData`.
   static func read(service: String, account: String) -> String? {
-    let query: [String: Any] = [
-      kSecClass as String: kSecClassGenericPassword,
-      kSecAttrService as String: service,
-      kSecAttrAccount as String: account,
-      kSecReturnData as String: true,
-      kSecMatchLimit as String: kSecMatchLimitOne,
-    ]
-    var item: CFTypeRef?
-    guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-          let data = item as? Data,
-          let value = String(data: data, encoding: .utf8),
-          !value.isEmpty else { return nil }
-    return value
+    DevKeychain.read(service: service, account: account)
   }
 
   @discardableResult
   static func write(service: String, account: String, value: String) -> Bool {
-    let data = Data(value.utf8)
-    let base: [String: Any] = [
-      kSecClass as String: kSecClassGenericPassword,
-      kSecAttrService as String: service,
-      kSecAttrAccount as String: account,
-    ]
-    let attributes: [String: Any] = [
-      kSecValueData as String: data,
-      kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
-    ]
-    let updated = SecItemUpdate(base as CFDictionary, attributes as CFDictionary)
-    if updated == errSecSuccess { return true }
-    guard updated == errSecItemNotFound else { return false }
-    var insert = base
-    insert.merge(attributes) { _, new in new }
-    return SecItemAdd(insert as CFDictionary, nil) == errSecSuccess
+    DevKeychain.write(value, service: service, account: account)
   }
 
   @discardableResult
   static func remove(service: String, account: String) -> Bool {
-    let query: [String: Any] = [
-      kSecClass as String: kSecClassGenericPassword,
-      kSecAttrService as String: service,
-      kSecAttrAccount as String: account,
-    ]
-    let status = SecItemDelete(query as CFDictionary)
-    return status == errSecSuccess || status == errSecItemNotFound
+    DevKeychain.delete(service: service, account: account)
+  }
+}
+
+// MARK: - DevKeychain
+
+/// Dev's own secrets (provider API keys, server keys): one item per service and account in the vault's keychain
+/// (VaultKit: the keychain on Apple platforms, the Secret Service on Linux), this device's only. Items an earlier Dev
+/// kept in the login keychain move there on first read. Every failure reads as nil or false.
+nonisolated enum DevKeychain {
+  static func read(service: String, account: String) -> String? {
+    let keychain = VaultKeychain(service: service, accessGroup: nil)
+    let data = (try? keychain.read(account, options: .thisDevice))
+      ?? keychain.adoptLoginKeychainItem(account, options: .thisDevice)
+    guard let data, let value = String(data: data, encoding: .utf8), !value.isEmpty else { return nil }
+    return value
+  }
+
+  static func write(_ value: String, service: String, account: String, label: String? = nil) -> Bool {
+    let keychain = VaultKeychain(service: service, accessGroup: nil)
+    do {
+      try keychain.write(Data(value.utf8), account: account, options: .init(synchronizable: false, label: label))
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  static func delete(service: String, account: String) -> Bool {
+    let keychain = VaultKeychain(service: service, accessGroup: nil)
+    // An item an earlier Dev kept in the login keychain goes too, so it isn't adopted again.
+    keychain.adoptLoginKeychainItem(account, options: .thisDevice)
+    return (try? keychain.delete(account, options: .thisDevice)) != nil
   }
 }

@@ -3,8 +3,10 @@
 //  Dev
 //
 
-import AppKit
+import ComponentKit
+import DevDesktop
 import Foundation
+import PlatformDiskUsage
 import Observation
 import UniformTypeIdentifiers
 
@@ -58,15 +60,13 @@ final class StorageStore {
 
   private var scanTask: Task<Void, Never>?
   private var previous: StorageSnapshot?
-  @ObservationIgnored private var activation: NSObjectProtocol?
+  @ObservationIgnored private var activation: AnyObject?
 
   init() {
     loadSnapshot()
     refreshVolume()
-    activation = NotificationCenter.default.addObserver(
-      forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
-    ) { [weak self] _ in
-      MainActor.assumeIsolated { self?.hasFullDiskAccess = FullDiskAccess.isGranted }
+    activation = DevDesktop.onActivation { [weak self] in
+      self?.hasFullDiskAccess = FullDiskAccess.isGranted
     }
   }
 
@@ -494,17 +494,18 @@ final class StorageStore {
 
   /// Asks where to save the selection report and writes it there.
   func exportSelection() {
-    let panel = NSSavePanel()
-    panel.title = "Export Selection"
-    panel.nameFieldStringValue = "Storage selection \(Date().formatted(.iso8601.year().month().day())).md"
-    panel.allowedContentTypes = [.init(filenameExtension: "md") ?? .plainText]
-    panel.directoryURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
-    guard panel.runModal() == .OK, let url = panel.url else { return }
-    do {
-      try selectionReport().write(to: url, atomically: true, encoding: .utf8)
-      NSWorkspace.shared.activateFileViewerSelecting([url])
-    } catch {
-      NSAlert(error: error).runModal()
+    Task {
+      guard
+        let url = await KitDesktop.chooseSaveLocation(
+          title: "Export Selection", name: "Storage selection \(Date().formatted(.iso8601.year().month().day())).md",
+          directory: FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first)
+      else { return }
+      do {
+        try selectionReport().write(to: url, atomically: true, encoding: .utf8)
+        KitDesktop.reveal([url])
+      } catch {
+        DevDesktop.showError(error)
+      }
     }
   }
 
@@ -513,11 +514,11 @@ final class StorageStore {
   func reveal(_ item: StorageItem) {
     let urls = item.urls.filter { FileManager.default.fileExists(atPath: $0.path) }
     guard !urls.isEmpty else { return }
-    NSWorkspace.shared.activateFileViewerSelecting(urls)
+    KitDesktop.reveal(urls)
   }
 
   func openTrash() {
-    NSWorkspace.shared.open(URL(fileURLWithPath: NSHomeDirectory() + "/.Trash"))
+    KitDesktop.open(URL(fileURLWithPath: NSHomeDirectory() + "/.Trash"))
   }
 
   // MARK: Persistence
