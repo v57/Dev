@@ -6,7 +6,9 @@
 //
 
 import ComponentKit
+import Observation
 import ComponentKit
+import Observation
 import Foundation
 
 /// Run state for Scan Strings: one scan at a time, its live progress, the

@@ -156,9 +156,7 @@ nonisolated enum StorageScanner {
   }
 
   static func volumeCapacity() -> (total: Int64, available: Int64) {
-    let values = try? URL(fileURLWithPath: NSHomeDirectory()).resourceValues(
-      forKeys: [.volumeTotalCapacityKey, .volumeAvailableCapacityForImportantUsageKey])
-    return (Int64(values?.volumeTotalCapacity ?? 0), values?.volumeAvailableCapacityForImportantUsage ?? 0)
+    FileAccess.volumeCapacity(at: NSHomeDirectory())
   }
 }
 
@@ -252,7 +250,7 @@ nonisolated enum StorageCleaner {
     _ items: [StorageItem], deleteImmediately: Bool, into report: inout StorageCleanReport
   ) {
     let trash = NSHomeDirectory() + "/.Trash"
-    let owner = "\(getuid()):\(getgid())"
+    let owner = "\(FileAccess.userID):\(FileAccess.groupID)"
     var script = "T=\(StorageSystemScan.quoted(trash))\n"
     for (index, item) in items.enumerated() {
       var body: [String] = []

@@ -33,6 +33,7 @@
 //  the precedent and never called: the redesign carries its own client (see `Router`).
 
 import Foundation
+import PlatformHTTP
 
 extension Translation {
   /// One streamed chat completion: what the provider wrote, as it wrote it.
@@ -142,10 +143,10 @@ extension Translation {
         throw BackendError.network("could not encode request: \(error.localizedDescription)")
       }
 
-      let bytes: URLSession.AsyncBytes
+      let bytes: HTTPBytes
       let response: URLResponse
       do {
-        (bytes, response) = try await URLSession.shared.bytes(for: request)
+        (bytes, response) = try await HTTPBytes.response(for: request)
       } catch {
         if Task.isCancelled { throw CancellationError() }
         throw BackendError.network(error.localizedDescription)
@@ -193,7 +194,7 @@ extension Translation {
     /// the stream; a frame that carries no text (a role announcement, a keep-alive, the
     /// final usage-only frame) is read for what it has and passed over.
     private func frames(
-      of bytes: URLSession.AsyncBytes, onChunk: (String) -> Void
+      of bytes: HTTPBytes, onChunk: (String) -> Void
     ) async throws -> Usage? {
       var usage: Usage?
       var arrived = false
@@ -224,7 +225,7 @@ extension Translation {
     /// with the message in it — in the shape of the wire it was asked on — and it is
     /// handed over as a single chunk so the caller's scanner sees the same thing either way.
     private func whole(
-      of bytes: URLSession.AsyncBytes, onChunk: (String) -> Void
+      of bytes: HTTPBytes, onChunk: (String) -> Void
     ) async throws -> Usage? {
       var data = Data()
       do {
@@ -278,7 +279,7 @@ extension Translation {
 
     /// A short excerpt of a failed response's body, bounded so a provider that answers an
     /// error with a megabyte of HTML cannot fill memory with it.
-    private func body(of bytes: URLSession.AsyncBytes) async throws -> String? {
+    private func body(of bytes: HTTPBytes) async throws -> String? {
       var data = Data()
       for try await byte in bytes {
         data.append(byte)

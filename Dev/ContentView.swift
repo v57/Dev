@@ -1,5 +1,7 @@
 import Foundation
 import ComponentKit
+import DevDesktop
+import DevGraphics
 import PlatformBroadcast
 import DevScreenshots
 import SwiftUI
@@ -372,7 +374,11 @@ struct ContentView: View {
   private var detailPane: some View {
     switch model.selection {
     case .tool(.icon):
-      CreateIconView()
+      if IconGenerator.isAvailable {
+        CreateIconView()
+      } else {
+        UnavailableToolView.appIcon
+      }
     case .tool:
       EmptyState(systemImage: "sidebar.left", title: "Select a Project").kitPane()
     case .project(let id):
@@ -384,9 +390,21 @@ struct ContentView: View {
     case .server(let id):
       ServerDetailView(serverID: id, store: servers)
     case .storage:
-      StorageView()
+      if DevCapabilities.storageCleaner {
+        StorageView()
+      } else {
+        UnavailableToolView(
+          title: "Storage", systemImage: "internaldrive",
+          reason: "The storage cleaner knows the Mac's folders: Library caches, Xcode's builds and simulators, APFS clones.")
+      }
     case .vms:
-      VMsView(projects: model.projects)
+      if DevCapabilities.virtualMachines {
+        VMsView(projects: model.projects)
+      } else {
+        UnavailableToolView(
+          title: "Virtual Machines", systemImage: "desktopcomputer",
+          reason: "Dev runs its CI machines in UTM, which only the Mac has.")
+      }
     case nil:
       WelcomeView(model: model)
     }

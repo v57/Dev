@@ -3,6 +3,7 @@
 //  Dev
 //
 
+import DevDesktop
 import DevGraphics
 import PlatformImage
 import CodeWorkspace
@@ -543,13 +544,17 @@ enum ProjectOpener {
       switch self {
       case .xcode: "Xcode"
       case .code: "Code"
-      case .finder: "Finder"
+      case .finder: KitDesktop.fileManagerName
       }
     }
   }
 
+  /// Where projects can open on this system: Xcode only where Xcode is.
+  static var targets: [Target] { Target.allCases.filter { $0 != .xcode || DevCapabilities.xcode } }
+
   static var target: Target {
-    Target(rawValue: UserDefaults.standard.string(forKey: key) ?? "") ?? .xcode
+    let picked = Target(rawValue: UserDefaults.standard.string(forKey: key) ?? "") ?? .xcode
+    return targets.contains(picked) ? picked : .finder
   }
 
   static var appName: String { target.title }

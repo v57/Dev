@@ -3,6 +3,7 @@
 //  Dev
 //
 
+import DevDesktop
 import Foundation
 
 // MARK: - Workflow
@@ -63,7 +64,7 @@ nonisolated struct Workflow: Codable, Hashable, Identifiable, Sendable {
 
     var runnerTitle: String {
       if let vmName { return "\(vmName) (VM)" }
-      return "This Mac"
+      return DevDesktop.thisComputer
     }
 
     /// What the step will run, for the inspector.

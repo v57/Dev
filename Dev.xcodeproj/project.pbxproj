@@ -25,6 +25,7 @@
 		9C47F0000000000000000110 /* PlatformLanguageModel in Frameworks */ = {isa = PBXBuildFile; productRef = 9C47F0000000000000000210 /* PlatformLanguageModel */; };
 		9C47F0000000000000000120 /* PlatformImage in Frameworks */ = {isa = PBXBuildFile; productRef = 9C47F0000000000000000220 /* PlatformImage */; };
 		9C47F0000000000000000130 /* PlatformBroadcast in Frameworks */ = {isa = PBXBuildFile; productRef = 9C47F0000000000000000230 /* PlatformBroadcast */; };
+		9C47F0000000000000000140 /* PlatformHTTP in Frameworks */ = {isa = PBXBuildFile; productRef = 9C47F0000000000000000240 /* PlatformHTTP */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -77,6 +78,7 @@
 				9C47F0000000000000000110 /* PlatformLanguageModel in Frameworks */,
 				9C47F0000000000000000120 /* PlatformImage in Frameworks */,
 				9C47F0000000000000000130 /* PlatformBroadcast in Frameworks */,
+				9C47F0000000000000000140 /* PlatformHTTP in Frameworks */,
 			);
 		};
 		000000000000000330000000 /* Frameworks */ = {
@@ -141,6 +143,7 @@
 				9C47F0000000000000000210 /* PlatformLanguageModel */,
 				9C47F0000000000000000220 /* PlatformImage */,
 				9C47F0000000000000000230 /* PlatformBroadcast */,
+				9C47F0000000000000000240 /* PlatformHTTP */,
 			);
 			productName = MyApp;
 			productReference = 000000000000000000000120 /* Dev.app */;
@@ -675,6 +678,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 9C47F0000000000000000001 /* XCRemoteSwiftPackageReference "Platform" */;
 			productName = PlatformBroadcast;
+		};
+		9C47F0000000000000000240 /* PlatformHTTP */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 9C47F0000000000000000001 /* XCRemoteSwiftPackageReference "Platform" */;
+			productName = PlatformHTTP;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

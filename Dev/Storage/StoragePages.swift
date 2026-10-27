@@ -863,8 +863,7 @@ nonisolated struct AppInfo: Sendable {
     } else if isHomebrewCask(bundlePath) {
       info.source = "Homebrew cask"
     }
-    if let item = MDItemCreate(nil, bundlePath as CFString),
-       let date = MDItemCopyAttribute(item, kMDItemLastUsedDate) as? Date {
+    if let date = DevDesktop.lastUsed(bundlePath) {
       info.lastUsed = date
     }
     return info

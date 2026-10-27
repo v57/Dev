@@ -1,4 +1,3 @@
-#if os(macOS)
   import DevScreenshots
   import Foundation
 
@@ -27,4 +26,3 @@
       return result.succeeded ? Int(result.trimmed) : nil
     }
   }
-#endif

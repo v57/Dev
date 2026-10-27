@@ -1,4 +1,3 @@
-#if os(macOS)
   import DevScreenshots
   import Foundation
 
@@ -128,4 +127,3 @@
       return String(decoding: data, as: UTF8.self)
     }
   }
-#endif

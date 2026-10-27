@@ -16,7 +16,7 @@ nonisolated extension StorageDiscovery {
   /// files (`T`). macOS clears old temp files on its own; what is listed is
   /// what is still there.
   mutating func addTemporary() {
-    let uid = getuid()
+    let uid = FileAccess.userID
     // One item per session, so the ones still running can be told apart by
     // age from the ones long done.
     for project in children(of: "/private/tmp/claude-\(uid)") {
@@ -65,9 +65,8 @@ nonisolated extension StorageDiscovery {
     }
   }
 
-  static func isOwned(_ path: String, by uid: uid_t) -> Bool {
-    var info = stat()
-    return lstat(path, &info) == 0 && info.st_uid == uid
+  static func isOwned(_ path: String, by uid: UInt32) -> Bool {
+    FileAccess.owner(ofPath: path) == uid
   }
 
   /// macOS's own share: the assets it downloads (Siri, dictation, translation

@@ -5,6 +5,7 @@
 
 import Foundation
 import ComponentKit
+import DevDesktop
 import SwiftUI
 
 /// The Workflows tab: a project's CI. Left, its workflows and their runs;
@@ -538,7 +539,7 @@ struct WorkflowsView: View {
 
   /// Where a step can run: this Mac, and a command also on each VM (a VM that has gone keeps its row).
   private func runners(for step: Workflow.Step) -> [KitSegment<String>] {
-    var runners = [KitSegment("This Mac", value: "mac", systemImage: "laptopcomputer")]
+    var runners = [KitSegment(DevDesktop.thisComputer, value: "mac", systemImage: "laptopcomputer")]
     guard step.kind == .command else { return runners }
     runners += vms.machines.map { KitSegment("\($0.name) (VM)", value: "vm:" + $0.name, systemImage: "desktopcomputer") }
     if let name = step.vmName, !vms.machines.contains(where: { $0.name == name }) {

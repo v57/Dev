@@ -110,7 +110,7 @@ struct ScanStringsView: View {
         }
         .padding(8)
       }
-      .background(Color(nsColor: .textBackgroundColor))
+      .background(.kitWindow)
       .onChange(of: store.scan.log.count) { _, _ in
         if let last = store.scan.log.indices.last {
           proxy.scrollTo(last, anchor: .bottom)

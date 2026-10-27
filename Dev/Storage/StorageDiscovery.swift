@@ -4,6 +4,7 @@
 //
 
 import Foundation
+import PlatformDiskUsage
 
 /// Builds the list of items a scan measures. Each source adds what it finds;
 /// an exact path is owned by the first source that names it, so a specific
@@ -78,26 +79,8 @@ nonisolated struct StorageDiscovery {
   /// for an app bundle macOS guards with App Management, which root does not
   /// get past either — that refusal is reported when the move fails.
   static func isMovable(_ path: String) -> Bool {
-    var info = stat()
-    guard lstat(path, &info) == 0 else { return true }
-    let parent = (path as NSString).deletingLastPathComponent
-    guard isWritable(parent) else { return false }
-    return (info.st_mode & S_IFMT) != S_IFDIR || isWritable(path)
+    FileAccess.isMovable(path)
   }
-
-  private static func isWritable(_ path: String) -> Bool {
-    var info = stat()
-    guard stat(path, &info) == 0 else { return false }
-    if info.st_uid == getuid() { return info.st_mode & S_IWUSR != 0 }
-    if userGroups.contains(info.st_gid) { return info.st_mode & S_IWGRP != 0 }
-    return info.st_mode & S_IWOTH != 0
-  }
-
-  private static let userGroups: Set<gid_t> = {
-    var groups = [gid_t](repeating: 0, count: Int(NGROUPS_MAX))
-    let count = getgroups(Int32(groups.count), &groups)
-    return Set(groups.prefix(Int(max(count, 0))))
-  }()
 
   /// True when `path` is exactly one of the items' paths.
   func isClaimed(_ path: String) -> Bool { claimed.contains(path) }
@@ -186,9 +169,7 @@ nonisolated enum StorageNames {
 
   static func relative(_ date: Date?) -> String? {
     guard let date else { return nil }
-    let formatter = RelativeDateTimeFormatter()
-    formatter.unitsStyle = .full
-    return formatter.localizedString(for: date, relativeTo: Date())
+    return date.formatted(.relative(presentation: .numeric, unitsStyle: .wide))
   }
 
   /// The executable a tool installs under, or nil when it is not installed.

@@ -1,7 +1,8 @@
-#if os(macOS)
   import DevScreenshots
   import Foundation
-  import ImageIO
+  #if os(macOS)
+    import ImageIO
+  #endif
 
   /// Captures a project's scenes as `.dev/screenshots.json` describes them, into its output folder:
   /// `<output>/<mac|device>/<locale>/<scene>[-dark].png`, and `manifest.json` with the commit each picture was
@@ -41,6 +42,16 @@
       self.init(root: root, config: config, options: options)
     }
 
+    /// Whether this system captures pictures (the Mac: its apps and the iOS simulators).
+    public static var isAvailable: Bool {
+      #if os(macOS)
+        true
+      #else
+        false
+      #endif
+    }
+
+  #if os(macOS)
     /// Takes the pictures and saves the merged manifest. A scene that fails is listed in the manifest's failures and
     /// the others go on; a missing app or simulator throws.
     @discardableResult
@@ -187,5 +198,11 @@
       else { return (0, 0) }
       return (properties[kCGImagePropertyPixelWidth] as? Int ?? 0, properties[kCGImagePropertyPixelHeight] as? Int ?? 0)
     }
+  #else
+    /// Off the Mac there is nothing to capture with: throws.
+    @discardableResult
+    public func run(log: @escaping (String) -> Void = { print($0) }) throws -> ScreenshotManifest {
+      throw CaptureError("capturing screenshots needs macOS (its apps and the iOS simulators)")
+    }
+  #endif
   }
-#endif

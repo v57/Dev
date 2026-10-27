@@ -188,3 +188,24 @@ extension DevDesktop {
     #endif
   }
 }
+
+extension DevDesktop {
+  /// The machine Dev runs on, as a workflow step's runner: "This Mac", or "This Computer".
+  public nonisolated static var thisComputer: String {
+    #if os(macOS)
+      "This Mac"
+    #else
+      "This Computer"
+    #endif
+  }
+
+  /// When the user last opened the app (or file) at `path`, as Spotlight recorded it; nil where nothing records it.
+  public nonisolated static func lastUsed(_ path: String) -> Date? {
+    #if canImport(AppKit)
+      guard let item = MDItemCreate(nil, path as CFString) else { return nil }
+      return MDItemCopyAttribute(item, kMDItemLastUsedDate) as? Date
+    #else
+      nil
+    #endif
+  }
+}

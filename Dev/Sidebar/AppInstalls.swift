@@ -123,7 +123,8 @@ import PlatformBroadcast
   /// Follows the sidebar's projects: finds each one's Mac app (once per change of its top-level files), watches its
   /// folders and checks whether the installed app is current.
   func track(_ roots: [URL]) {
-    guard !LaunchOptions.isScreenshotMode else { return }
+    // Installing builds the Mac app with xcodebuild: without Xcode no project is installable, so no Install shows.
+    guard !LaunchOptions.isScreenshotMode, DevCapabilities.xcode else { return }
     let roots = roots.map(\.standardizedFileURL)
     guard roots != tracked else { return }
     tracked = roots

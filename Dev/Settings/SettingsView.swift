@@ -29,7 +29,7 @@ struct SettingsView: View {
 
 /// Where projects open and what the sidebar shows.
 struct GeneralSettingsView: View {
-  @AppStorage(ProjectOpener.key) private var openIn = ProjectOpener.Target.xcode.rawValue
+  @AppStorage(ProjectOpener.key) private var openIn = ProjectOpener.target.rawValue
   @AppStorage(SidebarPreferences.showReviewBadge) private var showsReviewBadge = true
   @AppStorage(SidebarPreferences.offerNonGitFolders) private var offersFolders = true
   @AppStorage(SidebarPreferences.onlyXcodeProjects) private var onlyXcodeProjects = true
@@ -37,7 +37,7 @@ struct GeneralSettingsView: View {
   var body: some View {
     FormCard {
       FormRow("Open projects in", systemImage: "arrow.up.forward.app", hue: .blue) {
-        KitPicker("Open projects in", selection: $openIn, options: ProjectOpener.Target.allCases.map { ($0.title, $0.rawValue) })
+        KitPicker("Open projects in", selection: $openIn, options: ProjectOpener.targets.map { ($0.title, $0.rawValue) })
       }
       FormRow("Show strings to review in the sidebar", systemImage: "text.badge.checkmark", hue: .orange) {
         Toggle("Show strings to review in the sidebar", isOn: $showsReviewBadge)

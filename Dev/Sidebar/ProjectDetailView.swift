@@ -6,6 +6,8 @@
 //
 
 import ComponentKit
+import DevGraphics
+import DevScreenshotsCapture
 import SwiftUI
 
 /// Detail pane for a SELECTED sidebar project: the tab the toolbar picked
@@ -47,14 +49,22 @@ struct ProjectDetailView: View {
       case .overview:
         ProjectOverviewView(model: model, row: row)
       case .icon:
-        CreateIconView(exportRootURL: row.rootURL)
+        if IconGenerator.isAvailable {
+          CreateIconView(exportRootURL: row.rootURL)
+        } else {
+          UnavailableToolView.appIcon
+        }
       case .localization:
         LocalizationView(
           projectCatalogURL: row.catalogURL,
           projectRootURL: row.rootURL,
           onCatalogCreated: { model.refresh() })
       case .screenshots:
-        if let root = row.rootURL {
+        if !ScreenshotCapture.isAvailable {
+          UnavailableToolView(
+            title: "Screenshots", systemImage: "photo.on.rectangle",
+            reason: "Dev captures screenshots in Xcode's simulators and frames them for App Store Connect.")
+        } else if let root = row.rootURL {
           ScreenshotsView(root: root, projectName: row.name)
         } else {
           noFolder("Drop the project's folder on the sidebar to capture its screenshots.")

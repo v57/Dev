@@ -1,4 +1,3 @@
-#if os(macOS)
   import Foundation
 
   /// Runs a command line tool and waits for it.
@@ -73,4 +72,3 @@
     init(_ message: String) { self.message = message }
     var errorDescription: String? { message }
   }
-#endif

@@ -1,4 +1,3 @@
-#if os(macOS)
   import DevScreenshots
   import Foundation
 
@@ -111,4 +110,3 @@
       return keys
     }
   }
-#endif
