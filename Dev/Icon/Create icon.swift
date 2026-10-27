@@ -9,24 +9,23 @@ import AppKit
 import ComponentKit
 import SwiftUI
 
+/// An icon's flat sources: one background color and one glyph color (opacity allowed). Icon Composer adds the
+/// rest: the background's top light, the glyph's glass, its shadow and specular edge.
 struct IconSettings: Hashable {
   var symbol: String = "hammer.fill"
   /// Glyph size as a fraction of the 50% baseline (±). Range 0.5...2.0 (50%–200%).
   var scale: CGFloat = 1
-  var primary: Color = Color(.displayP3, red: 0.918, green: 0.208, blue: 0.282, opacity: 1)
-  var secondary: Color = .orange
+  var background: Color = Color(.displayP3, red: 0.918, green: 0.208, blue: 0.282, opacity: 1)
   var glyph: Color = Color(white: 1)
-  var gradient: Bool = false
-  /// Flat palette size after ImageMagick quantization (2/4/8/16).
-  var palette: Int = 2
-  /// Switched between live SwiftUI view and the generated PNG.
-  var preview: Bool = false
 }
 
 @Observable class CreateIcon {
   var settings: IconSettings = IconSettings()
-  var result: NSImage?
-  var resultSize: Int64 = 0
+  /// actool's render of `rendered`, the settings it was made from.
+  var render: IconGenerator.Render?
+  var rendered: IconSettings?
+  var isRendering = false
+  var renderError: String?
 }
 
 struct CreateIconView: View {
@@ -54,8 +53,10 @@ struct CreateIconView: View {
     }
     .kitPane()
     .task(id: create.settings) {
-      guard create.settings.preview else { return }
-      await generateImage()
+      // Each change waits a moment, so a slider drag renders once at its end.
+      try? await Task.sleep(for: .milliseconds(350))
+      guard !Task.isCancelled else { return }
+      await renderIcon()
     }
     .kitNotice(
       alertMessage ?? "", isPresented: Binding(get: { alertMessage != nil }, set: { if !$0 { alertMessage = nil } }))
@@ -86,40 +87,20 @@ struct CreateIconView: View {
         }
       }
 
-      FormCard("Background") {
-        FormRow("Gradient", systemImage: "drop.fill", hue: .pink) {
-          Toggle("Gradient", isOn: $create.settings.gradient).labelsHidden().toggleStyle(.kitSwitch)
+      FormCard("Colors") {
+        FormRow("Background", help: "Icon Composer lights it from the top", systemImage: "square.fill", hue: .pink) {
+          ColorPicker("Background", selection: $create.settings.background, supportsOpacity: false).labelsHidden()
         }
-        FormRow("Top", systemImage: "drop.fill", hue: .pink) {
-          ColorPicker("Top", selection: $create.settings.primary).labelsHidden()
-        }
-        FormRow("Bottom", systemImage: "drop.fill", hue: .pink) {
-          ColorPicker("Bottom", selection: $create.settings.secondary).labelsHidden()
-        }
-        .disabled(!create.settings.gradient)
-      }
-
-      FormCard("Glyph") {
-        FormRow("Color", systemImage: "drop.fill", hue: .pink) {
-          ColorPicker("Color", selection: $create.settings.glyph).labelsHidden()
+        FormRow("Glyph", help: "Opacity allowed; it becomes glass", systemImage: "drop.fill", hue: .pink) {
+          ColorPicker("Glyph", selection: $create.settings.glyph).labelsHidden()
         }
       }
 
-      FormCard("Quantize") {
-        FormRow("Palette", systemImage: "square.grid.2x2", hue: .purple) {
-          KitPicker("Palette", selection: $create.settings.palette, options: [2, 4, 8, 16].map { ("\($0) colors", $0) })
+      FormCard("Icon Composer") {
+        FormRow("Render", help: renderStatus, systemImage: "sparkles", hue: .blue) {
+          EmptyView()
         }
-      }
-
-      FormCard("Preview") {
-        FormRow(
-          "Generated PNG",
-          help: create.settings.preview && create.resultSize > 0
-            ? "\(create.resultSize) bytes" : "Shows the quantized PNG instead of the live view",
-          systemImage: "photo", hue: .blue
-        ) {
-          Toggle("Generated PNG", isOn: $create.settings.preview).labelsHidden().toggleStyle(.kitSwitch)
-        }
+        .status(create.isRendering ? .working : .idle)
       }
 
       VStack(alignment: .leading, spacing: 6) {
@@ -134,11 +115,11 @@ struct CreateIconView: View {
         .status(isExporting ? .working : .idle)
         .disabled(isExporting)
         if let root = exportRootURL {
-          Text("Writes \(root.lastPathComponent)/Assets.xcassets/AppIcon.appiconset")
+          Text("Writes \(root.lastPathComponent)/AppIcon.icon and Assets.xcassets/AppIcon.appiconset")
             .kitFont(.caption)
             .lineLimit(2)
             .truncationMode(.middle)
-            .help(root.appendingPathComponent("Assets.xcassets").appendingPathComponent("AppIcon.appiconset").path)
+            .help(root.appendingPathComponent("AppIcon.icon").path)
         }
       }
       .padding(.horizontal, 12)
@@ -151,21 +132,11 @@ struct CreateIconView: View {
     ScrollView {
       VStack(spacing: 24) {
         HStack(alignment: .bottom, spacing: 22) {
-          Group {
-            if create.settings.preview, appearance == .default, let result = create.result {
-              Image(nsImage: result)
-                .resizable().interpolation(.high)
-                .frame(width: 232, height: 232)
-                .clipShape(RoundedRectangle(cornerRadius: 232 * 0.22))
-            } else {
-              liveIcon(appearance).frame(width: 232, height: 232)
-            }
-          }
-          .shadow(color: .black.opacity(0.25), radius: 20, y: 10)
-          .padding(.trailing, 14)
+          icon(appearance).frame(width: 288, height: 288)
+            .padding(.trailing, 14)
           ForEach([128, 64, 32, 16], id: \.self) { size in
             VStack(spacing: 6) {
-              liveIcon(appearance).frame(width: CGFloat(size), height: CGFloat(size))
+              icon(appearance).frame(width: CGFloat(size), height: CGFloat(size))
               Text("\(size) pt").kitFont(.caption)
             }
           }
@@ -207,7 +178,7 @@ struct CreateIconView: View {
       ForEach([Color.blue, Color.white], id: \.self) { color in
         RoundedRectangle(cornerRadius: 8).fill(color).frame(width: 36, height: 36)
       }
-      liveIcon(item).frame(width: 36, height: 36)
+      icon(item).frame(width: 44, height: 44)
       ForEach([Color.mint, Color.orange], id: \.self) { color in
         RoundedRectangle(cornerRadius: 8).fill(color).frame(width: 36, height: 36)
       }
@@ -220,79 +191,92 @@ struct CreateIconView: View {
     .accessibilityLabel("\(item.title) Dock preview")
   }
 
+  /// The icon as macOS shows it at this size, margin included: Icon Composer's render in Default once it matches
+  /// the settings, the live approximation otherwise and in the other appearances (the system draws those itself).
+  @ViewBuilder
+  func icon(_ appearance: IconAppearance) -> some View {
+    if appearance == .default, create.rendered == create.settings, let image = create.render?.image {
+      Image(nsImage: image).resizable().interpolation(.high).aspectRatio(1, contentMode: .fit)
+    } else {
+      liveIcon(appearance)
+    }
+  }
+
+  /// An approximation of Icon Composer's look, drawn at once while the render runs: the background lit from the
+  /// top, the glyph's glass fading downward with a soft shadow, on the macOS icon grid (824 of 1024 points).
   func liveIcon(_ appearance: IconAppearance) -> some View {
     GeometryReader { view in
+      let side = view.size.width * 824 / 1024
+      let shape = RoundedRectangle(cornerRadius: side * 0.225, style: .continuous)
       ZStack {
         appearanceBackground(appearance)
         Image(systemName: create.settings.symbol)
-          .font(.system(size: view.size.width * 0.5 * create.settings.scale))
+          .font(.system(size: side * 1024 / 824 * 0.5 * create.settings.scale))
           .foregroundStyle(glyphStyle(appearance))
-          .shadow(radius: view.size.width > 100 ? 16 : 2)
+          .shadow(color: .black.opacity(0.2), radius: side * 0.02, y: side * 0.015)
       }
-      .clipShape(RoundedRectangle(cornerRadius: view.size.width * 0.225))
-      .overlay(
-        RoundedRectangle(cornerRadius: view.size.width * 0.225)
-          .strokeBorder(appearance == .clear ? Color.white.opacity(0.6) : .clear, lineWidth: 1.5))
-      .compatInteractiveGlass(in: RoundedRectangle(cornerRadius: view.size.width * 0.225))
+      .frame(width: side, height: side)
+      .clipShape(shape)
+      .overlay(shape.strokeBorder(.white.opacity(appearance == .clear ? 0.6 : 0.18), lineWidth: max(0.5, side / 160)))
+      .compatInteractiveGlass(in: shape)
+      .shadow(color: .black.opacity(0.2), radius: side * 0.03, y: side * 0.02)
+      .frame(width: view.size.width, height: view.size.height)
     }
     .aspectRatio(1, contentMode: .fit)
   }
 
-  /// The background for the appearance the preview shows: the icon's own in
-  /// Default, near black in Dark, frosted in Clear, a dark tint in Tinted.
+  /// The background for the appearance the preview shows: the icon's own, lit from the top, in Default; near
+  /// black in Dark, frosted in Clear, a dark tint in Tinted.
   @ViewBuilder
   func appearanceBackground(_ appearance: IconAppearance) -> some View {
     switch appearance {
-    case .default: background
+    case .default:
+      let color = create.settings.background
+      Rectangle().fill(LinearGradient(
+        colors: [color.mix(with: .white, by: 0.22), color], startPoint: .top, endPoint: .center))
     case .dark: Rectangle().fill(Color(white: 0.11))
     case .clear: Rectangle().fill(.white.opacity(0.22))
     case .tinted: Rectangle().fill(Color(red: 0.12, green: 0.16, blue: 0.25))
     }
   }
 
-  func glyphStyle(_ appearance: IconAppearance) -> Color {
-    switch appearance {
-    case .default: create.settings.glyph.opacity(0.8)
-    case .dark: create.settings.primary
-    case .clear: .white
-    case .tinted: Color(red: 0.66, green: 0.76, blue: 0.95)
-    }
+  func glyphStyle(_ appearance: IconAppearance) -> LinearGradient {
+    let glyph = create.settings.glyph
+    let colors: [Color] =
+      switch appearance {
+      case .default: [glyph, glyph.mix(with: create.settings.background, by: 0.3)]
+      case .dark: [create.settings.background, create.settings.background.opacity(0.7)]
+      case .clear: [.white, .white.opacity(0.7)]
+      case .tinted: [Color(red: 0.66, green: 0.76, blue: 0.95), Color(red: 0.66, green: 0.76, blue: 0.95).opacity(0.7)]
+      }
+    return LinearGradient(colors: colors, startPoint: .top, endPoint: .bottom)
   }
 
-  @ViewBuilder
-  var background: some View {
-    if create.settings.gradient {
-      Rectangle().fill(LinearGradient(
-        colors: [create.settings.primary, create.settings.secondary],
-        startPoint: .top, endPoint: .bottom))
-    } else {
-      Rectangle().fill(create.settings.primary)
-    }
+  private var renderStatus: String {
+    if let error = create.renderError { return error }
+    if create.isRendering { return "Rendering with actool…" }
+    guard let render = create.render else { return "actool renders the icon as Icon Composer draws it" }
+    let size = ByteCountFormatter.string(fromByteCount: Int64(render.catalogBytes), countStyle: .file)
+    return "Assets.car \(size); release archives store it as HEVC"
   }
 
   // MARK: - generation
 
-  func generateImage() async {
+  func renderIcon() async {
+    let settings = create.settings
+    create.isRendering = true
+    defer { create.isRendering = false }
     do {
-      // Render the master, then quantize the SAME way export does so the
-      // preview shows the real flat-palette output (not the smooth master).
-      let icon = try IconGenerator.renderMaster(
-        symbol: create.settings.symbol,
-        scale: create.settings.scale,
-        primary: create.settings.primary,
-        secondary: create.settings.secondary,
-        glyphColor: create.settings.glyph,
-        gradient: create.settings.gradient)
-      let files = try await IconGenerator.palettePNGs(
-        of: icon, sizes: [1024], colors: create.settings.palette)
-      if let data = files.first?.data {
-        create.result = NSImage(data: data)
-        create.resultSize = Int64(data.count)
-      }
+      let render = try await IconGenerator.render(
+        symbol: settings.symbol, scale: settings.scale,
+        background: IconColor(settings.background), glyph: IconColor(settings.glyph))
+      guard !Task.isCancelled else { return }
+      create.render = render
+      create.rendered = settings
+      create.renderError = nil
     } catch {
-      create.result = nil
-      create.resultSize = 0
-      alertMessage = error.localizedDescription
+      guard !Task.isCancelled else { return }
+      create.renderError = "\(error)"
     }
   }
 
@@ -303,22 +287,9 @@ struct CreateIconView: View {
     // prompt for an arbitrary folder, as before.
     guard let dir = exportRootURL ?? chooseDirectory() else { return }
     do {
-      try await IconGenerator.exportIconSet(
-        symbol: create.settings.symbol,
-        scale: create.settings.scale,
-        primary: create.settings.primary,
-        secondary: create.settings.secondary,
-        glyphColor: create.settings.glyph,
-        gradient: create.settings.gradient,
-        palette: create.settings.palette,
-        to: dir)
-      try IconGenerator.exportIconComposer(
-        symbol: create.settings.symbol,
-        scale: create.settings.scale,
-        primary: create.settings.primary,
-        glyphColor: create.settings.glyph,
-        gradient: create.settings.gradient,
-        to: dir)
+      try await IconGenerator.export(
+        symbol: create.settings.symbol, scale: create.settings.scale,
+        background: IconColor(create.settings.background), glyph: IconColor(create.settings.glyph), to: dir)
       alertMessage = "Exported \(dir.path)/Assets.xcassets/AppIcon.appiconset and \(dir.path)/AppIcon.icon"
     } catch {
       alertMessage = error.localizedDescription
