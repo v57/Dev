@@ -10,39 +10,93 @@ import VaultKit
 ///
 /// Dev lists only Xcode projects: the vault notes each project's kinds (`VaultProject.Kind`), and the others
 /// stay in the other apps (Settings ▸ General ▸ Show only Xcode projects).
+///
+/// One per account (../Ideas/Accounts.md): a window lists the projects of the account it shows. Dev's own project
+/// list (`TranslationData`) holds every account's; an account's window lists the folders its vault has, and
+/// Personal's lists the rest, leaving out those only another account has.
 @MainActor final class VaultProjects {
-  static let shared = VaultProjects()
+  /// Personal's: today's vault, and what screenshot mode and code outside a window use.
+  static let shared = VaultProjects(vault: .shared)
+  private static var accounts: [String: VaultProjects] = [:]
 
-  private let vault = Vault.shared
+  /// The projects of the account `vault` belongs to.
+  static func of(_ vault: Vault) -> VaultProjects {
+    if vault.isPersonal { return shared }
+    if let projects = accounts[vault.accountID], projects.vault === vault { return projects }
+    let projects = VaultProjects(vault: vault)
+    accounts[vault.accountID] = projects
+    return projects
+  }
+
+  let vault: Vault
   private var observer: VaultChangeObserver?
   private weak var model: SidebarViewModel?
 
+  private init(vault: Vault) {
+    self.vault = vault
+  }
+
+  /// Personal keeps the keys it had before accounts.
+  private func key(_ name: String) -> String { vault.isPersonal ? name : "\(name).\(vault.accountID)" }
+
   /// Vault projects removed in Dev, by id.
   private var dismissed: Set<String> {
-    get { Set(UserDefaults.standard.stringArray(forKey: "DismissedVaultProjects") ?? []) }
-    set { UserDefaults.standard.set(Array(newValue), forKey: "DismissedVaultProjects") }
+    get { Set(UserDefaults.standard.stringArray(forKey: key("DismissedVaultProjects")) ?? []) }
+    set { UserDefaults.standard.set(Array(newValue), forKey: key("DismissedVaultProjects")) }
   }
 
   /// Folders Dev added because the vault had them, so they leave when the vault drops them.
   private var adopted: Set<String> {
-    get { Set(UserDefaults.standard.stringArray(forKey: "AdoptedVaultProjects") ?? []) }
-    set { UserDefaults.standard.set(Array(newValue), forKey: "AdoptedVaultProjects") }
+    get { Set(UserDefaults.standard.stringArray(forKey: key("AdoptedVaultProjects")) ?? []) }
+    set { UserDefaults.standard.set(Array(newValue), forKey: key("AdoptedVaultProjects")) }
   }
 
-  /// Starts following the vault for the sidebar (at launch, outside screenshot mode).
+  /// Starts following the vault for a window's sidebar (outside screenshot mode); the window's last model wins.
   func start(model: SidebarViewModel) {
-    guard !LaunchOptions.isScreenshotMode, observer == nil else { return }
+    guard !LaunchOptions.isScreenshotMode else { return }
     self.model = model
-    observer = VaultChangeObserver { [weak self] in
-      Task { @MainActor in
-        self?.vault.reload()
-        await self?.follow()
+    if observer == nil {
+      observer = VaultChangeObserver { [weak self] in
+        Task { @MainActor in
+          self?.vault.reload()
+          await self?.follow()
+        }
       }
     }
     Task {
       model.refresh()
       publish(model.projects.compactMap(\.rootURL))
       await follow()
+    }
+  }
+
+  /// The window switched to another account: stop adding this one's projects to its sidebar.
+  func stop(model: SidebarViewModel) {
+    if self.model === model { self.model = nil }
+  }
+
+  /// Which of Dev's project folders this account's window lists.
+  func listing() -> Listing {
+    guard !LaunchOptions.isScreenshotMode else { return Listing(isPersonal: true, own: [], others: []) }
+    let vaults = Vaults.shared
+    let others = vaults.allAccounts.filter { $0.id != vault.accountID }.compactMap { vaults.vault(for: $0) }
+    return Listing(
+      isPersonal: vault.isPersonal, own: Set(vault.localProjects.compactMap(\.localPath)),
+      others: Set(others.flatMap { $0.localProjects.compactMap(\.localPath) }))
+  }
+
+  struct Listing {
+    var isPersonal: Bool
+    /// The folders this account's vault has on this Mac.
+    var own: Set<String>
+    /// The folders the other accounts' vaults have.
+    var others: Set<String>
+
+    /// An account lists its own folders; Personal also lists those no account has (a catalog without a folder
+    /// too).
+    func lists(_ root: URL?) -> Bool {
+      guard let path = root?.standardizedFileURL.path else { return isPersonal }
+      return own.contains(path) || (isPersonal && !others.contains(path))
     }
   }
 
@@ -83,7 +137,7 @@ import VaultKit
   func add(_ project: VaultProject, model: SidebarViewModel) async -> Int64? {
     guard let path = project.localPath else { return nil }
     dismissed.remove(project.id)
-    return await model.addSuggestedDirectories([URL(fileURLWithPath: path, isDirectory: true)])
+    return await model.addSuggestedDirectories([URL(fileURLWithPath: path, isDirectory: true)], publishing: false)
   }
 
   /// Follows the vault again after Show only Xcode projects changed.
@@ -107,7 +161,7 @@ import VaultKit
     }
     if !missing.isEmpty {
       adopted.formUnion(missing)
-      await model.addSuggestedDirectories(missing.map { URL(fileURLWithPath: $0, isDirectory: true) })
+      await model.addSuggestedDirectories(missing.map { URL(fileURLWithPath: $0, isDirectory: true) }, publishing: false)
     }
     let inVault = Set(vault.localProjects.compactMap(\.localPath))
     for path in adopted where !inVault.contains(path) {

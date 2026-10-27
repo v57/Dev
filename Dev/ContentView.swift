@@ -2,6 +2,8 @@ import AppKit
 import ComponentKit
 import DevScreenshots
 import SwiftUI
+import VaultKit
+import VaultUI
 
 /// Thin host for the project-centric split view: owns the ONE sidebar view
 /// model (single source of truth for project/tool selection) and the shared
@@ -18,6 +20,8 @@ struct ContentView: View {
   /// action only works from a view update.
   @State private var settingsRequests = 0
   @State private var model = SidebarViewModel()
+  /// The window's account (`DevWindow`); its projects fill the sidebar.
+  @Environment(\.vault) private var vault
   /// The demo project a screenshot launch imported: scenes that open a tool come back to it.
   @State private var demoProject: Int64?
   @State private var createIcon = CreateIcon()
@@ -129,8 +133,10 @@ struct ContentView: View {
       guard !LaunchOptions.isScreenshotMode else { return }
       ImportedTranslationDB.shared.restoreIfNeeded()
     }
-    // The projects the v57 apps share (added in Git and the others) join the sidebar.
-    .task { VaultProjects.shared.start(model: model) }
+    // The projects the v57 apps share (added in Git and the others) join the sidebar: the window's account's.
+    .onChange(of: vault?.accountID, initial: true) {
+      model.show(VaultProjects.of(vault ?? .shared))
+    }
     // A folder opened in Dev (Shell's Open With, `open -a Dev <folder>`): added like a drop, then shown.
     .onOpenURL { url in
       guard url.isFileURL else { return }

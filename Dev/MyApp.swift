@@ -5,6 +5,7 @@ import DevScreenshotsCapture
 import SwiftUI
 import UpdateKit
 import VaultKit
+import VaultUI
 
 /// `Dev --screenshots <command>` is `dev-screenshots` (release.sh's screenshots step runs it this way);
 /// `Dev --mcp` serves MCP over stdin/stdout for agents and never opens a window; a test run hosts DevTests in a bare
@@ -39,18 +40,26 @@ struct MyApp: App {
         if let hangLog = LaunchOptions.hangLog { MainThreadWatchdog.start(logTo: hangLog) }
         updater.start()
         // Projects added here sync with the other v57 apps and devices through the vault.
-        // It also keeps their app icons, found with Code's ProjectIcon, for Dev's sidebar and the other apps.
+        // It also keeps their app icons, found with Code's ProjectIcon, for Dev's sidebar and the other apps, in
+        // every account's vault (one sync engine carries them all).
         if !LaunchOptions.isScreenshotMode {
             Vault.shared.startSync()
-            Vault.shared.findProjectIcons(with: { ProjectIcon.find(in: $0) }) { ProjectIcon.thumbnail(of: $0) }
+            let vaults = Vaults.shared
+            for account in vaults.allAccounts {
+                vaults.vault(for: account)?.findProjectIcons(with: { ProjectIcon.find(in: $0) }) {
+                    ProjectIcon.thumbnail(of: $0)
+                }
+            }
         }
     }
 
     var body: some Scene {
         // Dev keeps the system accent: the kit's controls take it, like the system's did. A screenshot
         // launch builds every row and section at once, so a scene never captures a lazy placeholder.
-        WindowGroup {
-            ContentView().componentKit().kitLazyLoading(!LaunchOptions.isScreenshotMode)
+        // A window's value is the account it shows (nil: Personal), so the account picker's "Open … in a New
+        // Window" opens one on another account and a restored window comes back on its own.
+        WindowGroup(for: String.self) { $account in
+            DevWindow(account: $account).componentKit().kitLazyLoading(!LaunchOptions.isScreenshotMode)
         }
         .defaultSize(width: 1280, height: 800)
         .commands {
@@ -70,6 +79,27 @@ struct MyApp: App {
         }
         // KitSettings(…, window: .hiddenTitleBar) runs its sidebar up under the traffic lights.
         .windowStyle(.hiddenTitleBar)
+    }
+}
+
+/// A main window on one account (../Ideas/Accounts.md): its sidebar lists that account's projects. Switching
+/// doesn't rebuild the window, so an unsaved catalog or a running workflow stays; the sidebar follows the account.
+struct DevWindow: View {
+    @Binding var account: String?
+    @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        VaultAccountScope(
+            selection: Binding { account ?? VaultAccount.personal.id } set: { account = $0 }, rebuildsContent: false,
+            manage: { [openSettings] in
+                UserDefaults.standard.set("accounts", forKey: "settings.tab")
+                openSettings()
+            },
+            openInNewWindow: { [openWindow] in openWindow(value: $0) }
+        ) { _ in
+            ContentView()
+        }
     }
 }
 

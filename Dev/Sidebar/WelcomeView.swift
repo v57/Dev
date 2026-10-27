@@ -57,7 +57,7 @@ struct WelcomeView: View {
           id: project.id
         ) {
           Task {
-            if let id = await VaultProjects.shared.add(project, model: model) { model.selection = .project(id) }
+            if let id = await model.vaultProjects.add(project, model: model) { model.selection = .project(id) }
           }
         }
       }
@@ -83,7 +83,7 @@ struct WelcomeView: View {
   /// The vault's projects on this Mac that Dev could list but doesn't, matching the search.
   private var otherProjects: [VaultProject] {
     let listed = Set(model.projects.compactMap { $0.rootURL?.standardizedFileURL.path })
-    return VaultProjects.shared.otherProjects(listed: listed).filter { matches($0.name, $0.localPath) }
+    return model.vaultProjects.otherProjects(listed: listed).filter { matches($0.name, $0.localPath) }
   }
 
   private func matches(_ name: String, _ path: String?) -> Bool {

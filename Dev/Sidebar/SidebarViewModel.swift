@@ -183,6 +183,18 @@ final class SidebarViewModel {
   /// Fresh per-project rows, rebuilt by `refresh()`.
   private(set) var projects: [SidebarProjectRow] = []
 
+  /// The projects of the account the window shows: its rows are that account's.
+  private(set) var vaultProjects = VaultProjects.shared
+
+  /// The window switched accounts: list the new one's projects (the selection goes if it isn't one of them).
+  func show(_ vaultProjects: VaultProjects) {
+    guard vaultProjects !== self.vaultProjects else { return }
+    self.vaultProjects.stop(model: self)
+    self.vaultProjects = vaultProjects
+    vaultProjects.start(model: self)
+    refresh()
+  }
+
   init() {
     observeSaves()
     // The project list is the store's: it is read once the store has opened.
@@ -238,10 +250,13 @@ final class SidebarViewModel {
     let fetched = TranslationData.shared.projects
     let fm = FileManager.default
     // Only Xcode projects: the vault knows the others' kinds and Dev leaves them to the other apps.
-    let hidden = VaultProjects.shared.hiddenRoots()
-    let icons = VaultProjects.shared.icons()
+    let hidden = vaultProjects.hiddenRoots()
+    let icons = vaultProjects.icons()
+    // The window's account: its own folders (and on Personal, those no account has).
+    let listing = vaultProjects.listing()
     projects = fetched
       .filter { project in project.rootURL.map { !hidden.contains($0.standardizedFileURL.path) } ?? true }
+      .filter { listing.lists($0.rootURL) }
       .sorted {
         $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending
       }
@@ -356,7 +371,7 @@ final class SidebarViewModel {
       selection = nil
     }
     // Removed here only: Git and the other apps keep it, and Dev doesn't bring it back.
-    VaultProjects.shared.dismiss(rootURL: rootURL)
+    vaultProjects.dismiss(rootURL: rootURL)
     refresh()
   }
 
@@ -440,7 +455,7 @@ final class SidebarViewModel {
     }
     // The other v57 apps list the folder too, and the vault notes which are
     // Xcode projects: the others leave the list.
-    VaultProjects.shared.publish(resolved.compactMap(\.rootURL))
+    vaultProjects.publish(resolved.compactMap(\.rootURL))
     refresh()
     let shown = resolved.filter { project in projects.contains { $0.id == project.id } }
     let firstID = shown.first?.id
@@ -476,9 +491,10 @@ final class SidebarViewModel {
   }
 
   /// Adds the suggested directories the reader picked, each as one project
-  /// exactly as dropped — no repo search, because they hold none.
+  /// exactly as dropped — no repo search, because they hold none. They join the
+  /// window's account, unless they came from its vault (`publishing: false`).
   @discardableResult
-  func addSuggestedDirectories(_ urls: [URL]) async -> Int64? {
+  func addSuggestedDirectories(_ urls: [URL], publishing: Bool = true) async -> Int64? {
     importSuggestions = []
     guard !urls.isEmpty else { return nil }
     let catalogByRoot = await Self.discoverCatalogs(in: urls)
@@ -486,7 +502,7 @@ final class SidebarViewModel {
     let added = urls.map { root in
       Reconcile.resolveDirectoryProject(rootDir: root, catalogURL: catalogByRoot[root] ?? nil)
     }
-    VaultProjects.shared.publish(added.compactMap(\.rootURL))
+    if publishing { vaultProjects.publish(added.compactMap(\.rootURL)) }
     refresh()
     return added.first { project in projects.contains { $0.id == project.id } }?.id
   }

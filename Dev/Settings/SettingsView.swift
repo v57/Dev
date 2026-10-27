@@ -5,6 +5,7 @@
 
 import ComponentKit
 import SwiftUI
+import VaultUI
 
 /// The app's Settings window (⌘,): General, Translation, Agents (the MCP
 /// server) and Advanced (the imported translation database and clearing the
@@ -17,6 +18,7 @@ struct SettingsView: View {
       SettingsPane("General", systemImage: "gearshape", id: "general") { GeneralSettingsView() }
       SettingsPane("Translation", systemImage: "globe", hue: .blue, id: "translation") { TranslationSettingsView() }
       SettingsPane("Agents", systemImage: "powerplug", id: "agents") { AgentsSettingsView() }
+      SettingsPane("Accounts", systemImage: "person.2", hue: .indigo, id: "accounts") { VaultAccountsSettings() }
       SettingsPane("Advanced", systemImage: "slider.horizontal.3", id: "advanced") { AdvancedSettingsView() }
     }
     .frame(width: 640, height: 560)
