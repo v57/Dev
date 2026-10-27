@@ -4,6 +4,7 @@
 //
 
 import AppKit
+import CodeWorkspace
 import DevScreenshots
 import DevScreenshotsCapture
 import ComponentKit
@@ -32,6 +33,8 @@ nonisolated struct ProjectFacts: Sendable {
     var bytes: Int64 = 0
     var hasIconComposer = false
     var modified: Date?
+    /// A PNG of the icon found deeper in the project, when the row's own set doesn't exist.
+    var preview: Data?
   }
 
   static func load(root: URL, iconSet: URL?) async -> ProjectFacts {
@@ -62,7 +65,14 @@ nonisolated struct ProjectFacts: Sendable {
       facts.kind = "Rust project"
     }
 
-    let set = iconSet ?? root.appendingPathComponent("Assets.xcassets/AppIcon.appiconset")
+    // The row's icon set, else the app icon Code's ProjectIcon finds deeper in the project: a set or an AppIcon.icon.
+    var set = iconSet ?? root.appendingPathComponent("Assets.xcassets/AppIcon.appiconset")
+    var found: URL?
+    if !FileManager.default.fileExists(atPath: set.path), let file = ProjectIcon.find(in: root) {
+      found = file.deletingLastPathComponent()
+      if let found, found.pathExtension == "appiconset" { set = found }
+      facts.icon.preview = ProjectIcon.thumbnail(of: file, pixels: 256)
+    }
     if let data = try? Data(contentsOf: set.appendingPathComponent("Contents.json")),
        let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
        let images = json["images"] as? [[String: Any]] {
@@ -83,6 +93,7 @@ nonisolated struct ProjectFacts: Sendable {
     facts.icon.hasIconComposer = FileManager.default.fileExists(atPath: root.appendingPathComponent("AppIcon.icon").path)
       || FileManager.default.fileExists(atPath: set.deletingLastPathComponent().deletingLastPathComponent()
         .appendingPathComponent("AppIcon.icon").path)
+      || found?.pathExtension == "icon"
     return facts
   }
 }
@@ -215,7 +226,7 @@ struct ProjectOverviewView: View {
       trailing: facts.icon.modified.map { "Exported \($0.formatted(date: .abbreviated, time: .omitted))" }
     ) {
       HStack(alignment: .center, spacing: 16) {
-        if facts.icon.hasSet {
+        if facts.icon.hasSet || facts.icon.hasIconComposer {
           iconImage(size: 96)
         } else {
           RoundedRectangle(cornerRadius: 22)
@@ -243,14 +254,26 @@ struct ProjectOverviewView: View {
             }
           }
           .font(.callout)
+        } else if facts.icon.hasIconComposer {
+          Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 5) {
+            GridRow {
+              Text("Glass").foregroundStyle(.secondary)
+              Text("AppIcon.icon").fontWeight(.semibold)
+            }
+            GridRow {
+              Text("Sizes").foregroundStyle(.secondary)
+              Text("Rendered by Xcode")
+            }
+          }
+          .font(.callout)
         } else {
-          Text("No AppIcon.appiconset yet.")
+          Text("No app icon yet.")
             .foregroundStyle(.secondary)
         }
       }
     } footer: {
       Spacer()
-      Button(facts.icon.hasSet ? "Edit Icon" : "Make an Icon") { model.projectTool = .icon }
+      Button(facts.icon.hasSet || facts.icon.hasIconComposer ? "Edit Icon" : "Make an Icon") { model.projectTool = .icon }
     }
   }
 
@@ -374,7 +397,16 @@ struct ProjectOverviewView: View {
 
   @ViewBuilder
   private func iconImage(size: CGFloat) -> some View {
-    if let image = row.iconImage {
+    if let preview = facts.icon.preview.flatMap(NSImage.init(data:)) {
+      // Trimmed to its shape and drawn square (an Icon Composer icon's whole canvas): clipped to the app icon's.
+      Image(nsImage: preview)
+        .resizable()
+        .interpolation(.high)
+        .frame(width: size * 0.82, height: size * 0.82)
+        .clipShape(RoundedRectangle(cornerRadius: size * 0.82 * 0.225, style: .continuous))
+        .frame(width: size, height: size)
+        .shadow(color: .black.opacity(0.15), radius: 6, y: 3)
+    } else if let image = row.iconImage {
       Image(nsImage: image)
         .resizable()
         .interpolation(.high)
