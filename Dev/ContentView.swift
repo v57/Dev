@@ -136,6 +136,7 @@ struct ContentView: View {
     // The projects the v57 apps share (added in Git and the others) join the sidebar: the window's account's.
     .onChange(of: vault?.accountID, initial: true) {
       model.show(VaultProjects.of(vault ?? .shared))
+      workflows.vault = vault
     }
     // A folder opened in Dev (Shell's Open With, `open -a Dev <folder>`): added like a drop, then shown.
     .onOpenURL { url in

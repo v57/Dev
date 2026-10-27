@@ -80,7 +80,18 @@ final class ReleaseRunner {
 
   func state(_ step: ReleaseStep) -> StepState { states[step] ?? .idle }
 
-  func run(_ steps: [ReleaseStep], in root: URL, version: String, dryRun: Bool = false) {
+  /// The environment that hands release.sh a vault account's GitHub sign-in (Git and Markdown share it): gh takes
+  /// it from GH_TOKEN, so a GitHub release needs no separate `gh auth login`. Empty while the account is signed
+  /// out, and gh uses its own login.
+  static func gitHubEnvironment(forAccount accountID: String) -> [String: String] {
+    guard let token = (try? KeychainTokenStore.forAccount(accountID).load())?.token else { return [:] }
+    return ["GH_TOKEN": token]
+  }
+
+  func run(
+    _ steps: [ReleaseStep], in root: URL, version: String, dryRun: Bool = false,
+    accountID: String = KeychainTokenStore.personalAccountID
+  ) {
     guard !isRunning, let script = Self.scriptURL else { return }
     states = [:]
     log = []
@@ -92,10 +103,8 @@ final class ReleaseRunner {
     if !version.isEmpty { arguments += ["--version", version] }
     if dryRun { arguments.append("--dry-run") }
     arguments += steps.map(\.rawValue)
-    // The GitHub sign-in the v57 apps share (Git, Markdown): gh takes it from GH_TOKEN, so a GitHub
-    // release needs no separate `gh auth login`.
-    var environment: [String: String] = [:]
-    if let token = (try? KeychainTokenStore.shared.load())?.token { environment["GH_TOKEN"] = token }
+    // The GitHub sign-in of the project's account.
+    var environment = Self.gitHubEnvironment(forAccount: accountID)
     // The screenshots step runs this app as dev-screenshots (`Dev --screenshots`).
     if let executable = Bundle.main.executablePath { environment["DEV_APP_EXECUTABLE"] = executable }
     let process = LineProcess("/bin/bash", arguments, directory: root, environment: environment)

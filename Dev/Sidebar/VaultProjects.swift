@@ -100,6 +100,16 @@ import VaultKit
     }
   }
 
+  /// The account a project folder belongs to, whose GitHub sign-in its releases use: this window's account when
+  /// its vault has the folder, else an account whose vault has it, else Personal (which lists the rest).
+  func account(of root: URL) -> String {
+    let path = root.standardizedFileURL.path
+    func has(_ vault: Vault?) -> Bool { vault?.localProjects.contains { $0.localPath == path } == true }
+    if has(vault) { return vault.accountID }
+    let vaults = Vaults.shared
+    return vaults.accounts.first { has(vaults.vault(for: $0)) }?.id ?? VaultAccount.personal.id
+  }
+
   /// Whether Dev leaves out the projects that aren't Xcode projects (on unless turned off in Settings).
   var showsOnlyXcodeProjects: Bool {
     UserDefaults.standard.object(forKey: SidebarPreferences.onlyXcodeProjects) as? Bool ?? true

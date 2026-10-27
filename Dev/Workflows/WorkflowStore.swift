@@ -6,6 +6,7 @@
 import CryptoKit
 import Foundation
 import Observation
+import VaultKit
 
 /// Every project's workflows, their run history, the run in flight and the
 /// triggers that start runs on their own. Owned once by ContentView.
@@ -48,6 +49,10 @@ final class WorkflowStore {
   @ObservationIgnored private var triggerTimer: Timer?
   /// The project folders the triggers watch; set from the sidebar's projects.
   @ObservationIgnored var watchedRoots: [URL] = []
+  /// The window's vault; set by ContentView.
+  @ObservationIgnored var vault: Vault?
+  /// The account each run in flight releases with (`VaultProjects.account(of:)`), by project folder.
+  @ObservationIgnored private var accounts: [URL: String] = [:]
 
   init() {
     loadHistory()
@@ -121,6 +126,8 @@ final class WorkflowStore {
     }
     active[root] = run
     logs[run.id] = [:]
+    // Taken at the start, so switching the window's account doesn't change a run in flight.
+    accounts[root] = VaultProjects.of(vault ?? .shared).account(of: root)
     tasks[root] = Task { [weak self] in
       await self?.execute(workflow, runID: run.id, root: root, confirmedPublishing: confirmedPublishing)
     }
@@ -190,6 +197,7 @@ final class WorkflowStore {
     active[root] = nil
     tasks[root] = nil
     processes[root] = nil
+    accounts[root] = nil
     saveHistory()
   }
 
@@ -232,7 +240,9 @@ final class WorkflowStore {
     var arguments = [script.path, "--project", root.path]
     if let version { arguments += ["--version", version] }
     arguments.append(name)
-    let process = LineProcess("/bin/bash", arguments, directory: root)
+    // The GitHub step publishes with the sign-in of the project's account.
+    let environment = ReleaseRunner.gitHubEnvironment(forAccount: accounts[root] ?? VaultAccount.personal.id)
+    let process = LineProcess("/bin/bash", arguments, directory: root, environment: environment)
     let status = await stream(process, stepID: stepID, runID: runID, root: root) { [weak self] line in
       // release.sh's markers: a skipped step passes, a failed one says why.
       guard line.hasPrefix("::") else { return }
