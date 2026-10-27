@@ -17,6 +17,7 @@
 		0E31D847659438A515BB01E6 /* GitHubKit in Frameworks */ = {isa = PBXBuildFile; productRef = 7C6D4739B153B8EFB362C33A /* GitHubKit */; };
 		C0DE90000000000000000003 /* CodeProgress in Frameworks */ = {isa = PBXBuildFile; productRef = C0DE90000000000000000002 /* CodeProgress */; };
 		C0DE90000000000000000005 /* CodeWorkspace in Frameworks */ = {isa = PBXBuildFile; productRef = C0DE90000000000000000004 /* CodeWorkspace */; };
+		C0DE90000000000000000007 /* CodeActions in Frameworks */ = {isa = PBXBuildFile; productRef = C0DE90000000000000000006 /* CodeActions */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -59,6 +60,7 @@
 				0E31D847659438A515BB01E6 /* GitHubKit in Frameworks */,
 				C0DE90000000000000000003 /* CodeProgress in Frameworks */,
 				C0DE90000000000000000005 /* CodeWorkspace in Frameworks */,
+				C0DE90000000000000000007 /* CodeActions in Frameworks */,
 				DE5C0000000000000000000A /* DevScreenshots in Frameworks */,
 				DE5C0000000000000000000B /* DevScreenshotsCapture in Frameworks */,
 			);
@@ -115,6 +117,7 @@
 				7C6D4739B153B8EFB362C33A /* GitHubKit */,
 				C0DE90000000000000000002 /* CodeProgress */,
 				C0DE90000000000000000004 /* CodeWorkspace */,
+				C0DE90000000000000000006 /* CodeActions */,
 				DE5C00000000000000000002 /* DevScreenshots */,
 				DE5C00000000000000000003 /* DevScreenshotsCapture */,
 			);
@@ -602,6 +605,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = C0DE90000000000000000001 /* XCRemoteSwiftPackageReference "Code" */;
 			productName = CodeWorkspace;
+		};
+		C0DE90000000000000000006 /* CodeActions */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C0DE90000000000000000001 /* XCRemoteSwiftPackageReference "Code" */;
+			productName = CodeActions;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

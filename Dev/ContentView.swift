@@ -72,9 +72,11 @@ struct ContentView: View {
       agents.workflows = workflows
       agents.screenshots = screenshots
       workflows.watchedRoots = model.projects.compactMap(\.rootURL)
+      AppInstalls.shared.track(model.projects.compactMap(\.rootURL))
     }
     .onChange(of: model.projects.compactMap(\.rootURL)) { _, roots in
       workflows.watchedRoots = roots
+      AppInstalls.shared.track(roots)
     }
     // Cancel (or Escape) doesn't allow it.
     .kitConfirmation(

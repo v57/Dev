@@ -5,6 +5,7 @@
 //  Created by Dmitry on 09.09.26.
 //
 
+import CodeActions
 import ComponentKit
 import SwiftUI
 import VaultKit
@@ -34,6 +35,8 @@ struct SidebarView: View {
   @State private var serverSheet: ServerSheet?
   /// The bottom bar's search: it narrows the Projects section by name.
   @State private var search = ""
+  /// The projects' app installs: the rows' Install buttons and their queue.
+  private let installs = AppInstalls.shared
   /// The bottom bar's + menu is open.
   @State private var showsAddMenu = false
   /// The project groups closed in the Projects section (vault group ids).
@@ -116,6 +119,15 @@ struct SidebarView: View {
         }
       }
     }
+    // An install reached a running copy of its app: quitting it is the user's call.
+    .kitConfirmation(
+      installs.question ?? "",
+      isPresented: Binding(get: { installs.question != nil }, set: { if !$0, installs.question != nil { installs.answer(false) } }),
+      message: "The app quits as if you chose Quit, then the new build replaces it and opens in the background.",
+      systemImage: "arrow.down.app", confirm: "Quit and Install", role: nil
+    ) {
+      installs.answer(true)
+    }
     .kitNotice(
       model.alert?.title ?? "", isPresented: Binding(get: { model.alert != nil }, set: { if !$0 { model.alert = nil } }),
       message: model.alert?.message)
@@ -170,6 +182,18 @@ struct SidebarView: View {
           Button("Show in Finder", systemImage: "folder") { NSWorkspace.shared.activateFileViewerSelecting([root]) }
           OtherPlacesMenu(root: root)
           Divider()
+          if installs.canInstall(root), let name = installs.appName(root) {
+            switch installs.phase(for: root) {
+            case .queued, .installing:
+              Button("Cancel Install", systemImage: "xmark.circle") { installs.cancel(root) }
+            default:
+              Button("Install \(name) on This Mac", systemImage: "arrow.down.app") { installs.install(root) }
+            }
+            if let log = installs.logURL(root) {
+              Button("Show Install Log", systemImage: "doc.text") { NSWorkspace.shared.open(log) }
+            }
+            Divider()
+          }
         }
         Button("Remove Project", systemImage: "trash", role: .destructive) {
           model.removeProject(id: row.id, localization: localization)
@@ -250,23 +274,90 @@ private struct ProjectGroupRow: View {
 
 // MARK: - Project row
 
-/// One project row: its app icon, its name, and how many strings wait for review.
+/// One project row: its app icon, its name, how many strings wait for review, and Install while the source is newer
+/// than the app on this Mac (then its place in the queue, or the install's step and progress, with Cancel).
 private struct ProjectRow: View {
   let row: SidebarProjectRow
   /// Keeps the chevron's slot, so the icon lines up with the groups' beside it.
   var reservesDisclosure = false
   @AppStorage(SidebarPreferences.showReviewBadge) private var showsReviewBadge = true
+  private let installs = AppInstalls.shared
 
   var body: some View {
-    SidebarRow(value: SidebarSelection.project(row.id), row.name) {
+    let install = installs.phase(for: row.rootURL)
+    SidebarRow(value: SidebarSelection.project(row.id), row.name, subtitle: Self.subtitle(install)) {
       thumbnail
     } trailing: {
       if showsReviewBadge, row.needsReview > 0 {
         Count(row.needsReview.formatted(.number.notation(.compactName)), .attention)
           .help("\(row.needsReview) strings need review")
       }
+      installButton(install)
     }
+    .progress(Self.progress(install), status: .working)
     .disclosureSlot(reservesDisclosure)
+  }
+
+  @ViewBuilder
+  private func installButton(_ install: AppInstalls.Phase) -> some View {
+    let name = installs.appName(row.rootURL) ?? row.name
+    switch install {
+    case .available(let installed):
+      Button("Install", systemImage: "arrow.down.circle") { installs.install(row.rootURL) }
+        .buttonStyle(.kitIcon)
+        .help(installed ? "The source is newer than \(name) on this Mac: install it" : "Install \(name) on this Mac")
+    case .queued, .installing:
+      Button("Cancel Install", systemImage: "xmark.circle") { installs.cancel(row.rootURL) }
+        .buttonStyle(.kitIcon)
+        .help("Cancel installing \(name)")
+    case .failed(let reason):
+      Button("Install Again", systemImage: "exclamationmark.arrow.circlepath") { installs.install(row.rootURL) }
+        .buttonStyle(.kitIcon)
+        .foregroundStyle(.red)
+        .help("Installing \(name) failed: \(reason). Click to try again; the context menu shows the log.")
+    case .none, .current:
+      EmptyView()
+    }
+  }
+
+  /// "Queued · 2nd", "Building · 3 min left", "Install failed".
+  static func subtitle(_ install: AppInstalls.Phase) -> String? {
+    switch install {
+    case .queued(let position):
+      return position == 1 ? "Queued · next" : "Queued · \(position.formatted(.number))\(ordinal(position))"
+    case .installing(let step, let progress):
+      let verb =
+        switch step {
+        case "Archive"?: "Building"
+        case "Quit"?: "Quitting"
+        case "Install"?: "Installing"
+        case "Open"?: "Opening"
+        default: "Preparing"
+        }
+      guard let remaining = progress?.remaining, remaining >= 1 else { return verb }
+      let left = Duration.seconds(remaining).formatted(.units(allowed: [.hours, .minutes, .seconds], width: .abbreviated, maximumUnitCount: 1))
+      return "\(verb) · \(left) left"
+    case .failed:
+      return "Install failed"
+    case .none, .current, .available:
+      return nil
+    }
+  }
+
+  private static func ordinal(_ number: Int) -> String {
+    switch (number % 10, number % 100) {
+    case (_, 11...13): "th"
+    case (1, _): "st"
+    case (2, _): "nd"
+    case (3, _): "rd"
+    default: "th"
+    }
+  }
+
+  /// The install's bar under the title, once its history gives a fraction (the subtitle says the step until then).
+  static func progress(_ install: AppInstalls.Phase) -> Double? {
+    guard case .installing(_, let progress) = install else { return nil }
+    return progress?.fraction
   }
 
   @ViewBuilder
