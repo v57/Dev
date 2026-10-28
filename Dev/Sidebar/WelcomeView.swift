@@ -36,7 +36,7 @@ struct WelcomeView: View {
       WelcomeAction("New Icon", detail: "An app icon from an SF Symbol, without a project", systemImage: "app.badge") {
         model.selection = .tool(.icon)
       }
-      WelcomeAction("Storage", detail: "What fills this Mac, and what can go", systemImage: "internaldrive") {
+      WelcomeAction("Storage", detail: "What fills this \(KitDevice.nameInSentence), and what can go", systemImage: "internaldrive") {
         model.selection = .storage
       }
     } recents: {

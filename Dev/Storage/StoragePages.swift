@@ -57,7 +57,7 @@ struct StorageView: View {
         }
       } else {
         EmptyState(
-          systemImage: "internaldrive", title: "See What Fills This Mac",
+          systemImage: "internaldrive", title: "See What Fills This \(KitDevice.name)",
           message: "Scan sorts the disk into Xcode, Android, virtual machines, AI models, Node, apps, language versions and more. Nothing is removed until you pick it and confirm."
         ) {
           Button("Scan") { store.scan() }
