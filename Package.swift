@@ -71,7 +71,7 @@ package.targets.append(
       .product(name: "PlatformLanguageModel", package: "Platform"),
       .product(name: "PlatformBroadcast", package: "Platform"), .product(name: "PlatformHTTP", package: "Platform"),
     ],
-    path: "Dev", exclude: ["AppIcon.icon", "Release/actool-icon-slim", "Release/ld-archive-prelink", "Release/release.sh"],
+    path: "Dev", exclude: ["AppIcon.icon", "Release/release.sh"],
     swiftSettings: [
       .swiftLanguageMode(.v5), .defaultIsolation(MainActor.self), .enableUpcomingFeature("ApproachableConcurrency"),
       .enableUpcomingFeature("MemberImportVisibility"),

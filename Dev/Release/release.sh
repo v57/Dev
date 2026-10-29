@@ -94,11 +94,13 @@ run() {
 }
 
 # xcodebuild is loud; keep errors, warnings and the result lines.
+# XCB_TOOL: another xcodebuild (the archive's xcodebuild-release).
 xcb() {
-  echo "\$ xcodebuild $*"
+  local tool="${XCB_TOOL:-xcodebuild}"
+  echo "\$ $(basename "$tool") $*"
   [ "$DRY_RUN" = 1 ] && return 0
   local log="$OUT/xcodebuild-$CURRENT.log"
-  if xcodebuild "$@" >"$log" 2>&1; then
+  if "$tool" "$@" >"$log" 2>&1; then
     grep -E "warning:|\*\* .* SUCCEEDED \*\*|Test Suite .* (passed|failed)|Executed [0-9]+ test" "$log" | sort -u | tail -40 || true
   else
     grep -E "error:|\*\* .* FAILED \*\*|failed \(" "$log" | sort -u | head -40 || true
@@ -202,21 +204,18 @@ do_screenshots() {
 do_archive() {
   step archive
   run rm -rf "$ARCHIVE"
-  # macOS: drop the Swift package code the app doesn't use. LTO strips it, and ld-archive-prelink (beside this
-  # script) keeps Xcode's per-package `ld -r` from holding on to all of it. actool-icon-slim stores the flattened
-  # pictures of an Icon Composer icon as HEVC instead of lossless (Assets.car 1.7 MB -> 140 KB).
-  local size=()
+  # macOS: archived through xcodebuild-release, the release link every v57 app ships with (LTO, ld-archive-prelink,
+  # actool-icon-slim: unused package code goes, apps 35-50% smaller, the icon's fallbacks as HEVC). Its one copy is
+  # Code's CodeActions/Release: Dev's Release tool passes the copy inside the app as RELEASE_TOOLS, and from a
+  # terminal it's the Code checkout beside this Dev repo.
+  local tool=xcodebuild
   if [ "$PLATFORM" = macos ]; then
-    run install -m 755 "$(dirname "$0")/ld-archive-prelink" "$OUT/ld-archive-prelink"
-    # Xcode reads a tool's version under its file name (com.apple.actool.version), so the copy is named actool.
-    run install -d "$OUT/icon-slim"
-    run install -m 755 "$(dirname "$0")/actool-icon-slim" "$OUT/icon-slim/actool"
-    size=(SWIFT_LTO=YES ALTERNATE_LINKER_PATH="$OUT/ld-archive-prelink" ASSETCATALOG_EXEC="$OUT/icon-slim/actool"
-      'OTHER_SWIFT_FLAGS=$(inherited) -Xfrontend -internalize-at-link -Xfrontend -conditional-runtime-records')
+    tool="${RELEASE_TOOLS:-$SCRIPT_REPO/../Code/Sources/CodeActions/Release}/xcodebuild-release"
+    [ -x "$tool" ] || fail "xcodebuild-release not found at $tool (set RELEASE_TOOLS to Code's Sources/CodeActions/Release)"
   fi
-  xcb ${CONTAINER[@]+"${CONTAINER[@]}"} -scheme "$SCHEME" -configuration "$CONFIGURATION" -destination "$DESTINATION" \
-    -archivePath "$ARCHIVE" MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
-    ${size[@]+"${size[@]}"} archive || fail "the archive failed"
+  XCB_TOOL="$tool" xcb ${CONTAINER[@]+"${CONTAINER[@]}"} -scheme "$SCHEME" -configuration "$CONFIGURATION" \
+    -destination "$DESTINATION" -archivePath "$ARCHIVE" MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+    archive || fail "the archive failed"
   artifact "$ARCHIVE"
   done_step
 }

@@ -3,6 +3,7 @@
 //  Dev
 //
 
+import CodeActions
 import Foundation
 import GitHubKit
 import Observation
@@ -107,6 +108,8 @@ final class ReleaseRunner {
     var environment = Self.gitHubEnvironment(forAccount: accountID)
     // The screenshots step runs this app as dev-screenshots (`Dev --screenshots`).
     if let executable = Bundle.main.executablePath { environment["DEV_APP_EXECUTABLE"] = executable }
+    // The archive's release link (xcodebuild-release and its tools): CodeActions' copy inside this app.
+    if let tools = ReleaseTools.folder { environment["RELEASE_TOOLS"] = tools.path }
     let process = LineProcess("/bin/bash", arguments, directory: root, environment: environment)
     self.process = process
     isRunning = true
