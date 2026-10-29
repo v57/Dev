@@ -2,7 +2,7 @@ import CodeProgress
 import Foundation
 import Testing
 
-@testable import Dev
+@testable import DevApp
 
 private typealias RunProgress = Translation.RunProgress
 private typealias Batch = Translation.Run.Batch

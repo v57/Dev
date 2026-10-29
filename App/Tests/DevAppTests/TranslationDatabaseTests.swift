@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-@testable import Dev
+@testable import DevApp
 
 /// The translation database: what is written comes back, a slot is one row however often it is
 /// written, and the SwiftData store the app kept before imports into it once.

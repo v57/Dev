@@ -1,7 +1,7 @@
 # xcstrings-merge
 
 > Superseded in the app: the Dev app now ships this engine in-process
-> (`Dev/Localization/Scan/` — ScanEngine/ScanExtractor/ScanPackageFinder/…),
+> (`App/Sources/DevApp/Localization/Scan/` — ScanEngine/ScanExtractor/ScanPackageFinder/…),
 > runs it from the Localization toolbar's "Scan Strings" button, previews the
 > merge and writes the catalog through the app's own writer. This standalone
 > executable stays as the command-line verifier (its numbers for a large app are the

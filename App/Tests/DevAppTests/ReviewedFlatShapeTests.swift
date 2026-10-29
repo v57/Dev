@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-@testable import Dev
+@testable import DevApp
 
 /// A plural taken away in Xcode stays away: the app's form records, reviewed or not, never
 /// write their forms back over a flat value a person confirmed in the file.

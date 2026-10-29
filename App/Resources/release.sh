@@ -27,7 +27,7 @@
 set -euo pipefail
 
 STEPS_ALL="check build test screenshots archive direct github appstore"
-# The Dev repo this script sits in (Tools/release/ or Dev/Release/), for dev-screenshots; in Dev.app it's no repo.
+# The Dev repo this script sits in (Tools/release/ or App/Resources/), for dev-screenshots; in Dev.app it's no repo.
 SCRIPT_REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 PROJECT_DIR="$PWD"
 VERSION=""

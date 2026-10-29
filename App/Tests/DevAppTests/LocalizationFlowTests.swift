@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-@testable import Dev
+@testable import DevApp
 
 /// The browser's flows end to end over the store: a catalog file and a database of the test's
 /// own (never the user's), driven through `LocalizationStore` the way the pane drives it.

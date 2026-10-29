@@ -2,7 +2,7 @@
   "build": { "scheme": "Dev", "project": "Dev.xcodeproj" },
   "mac": { "window": [1280, 800] },
   "variables": { "DEMO": "$ROOT/Tools/screenshots/DemoApp" },
-  "watch": ["Dev", "Tools/screenshots"],
+  "watch": ["App", "Tools/screenshots"],
   "scenes": [
     {
       "id": "01-localization",

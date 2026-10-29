@@ -7,51 +7,24 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		DE5C0000000000000000000A /* DevScreenshots in Frameworks */ = {isa = PBXBuildFile; productRef = DE5C00000000000000000002 /* DevScreenshots */; };
-		DE5C0000000000000000000B /* DevScreenshotsCapture in Frameworks */ = {isa = PBXBuildFile; productRef = DE5C00000000000000000003 /* DevScreenshotsCapture */; };
-		D5C0DE000000000000000003 /* UpdateKit in Frameworks */ = {isa = PBXBuildFile; productRef = D5C0DE000000000000000002 /* UpdateKit */; };
-		C0C0DE000000000000000003 /* ComponentKit in Frameworks */ = {isa = PBXBuildFile; productRef = C0C0DE000000000000000002 /* ComponentKit */; };
-		DA7AB45E0000000000000003 /* SQLiteKit in Frameworks */ = {isa = PBXBuildFile; productRef = DA7AB45E0000000000000002 /* SQLiteKit */; };
-		DA7AB45E0000000000000005 /* WireKit in Frameworks */ = {isa = PBXBuildFile; productRef = DA7AB45E0000000000000004 /* WireKit */; };
-		4906C9282497EB178F132060 /* VaultKit in Frameworks */ = {isa = PBXBuildFile; productRef = F325E5137AFD249B69F073D5 /* VaultKit */; };
-		4906C9282497EB178F1320A1 /* VaultUI in Frameworks */ = {isa = PBXBuildFile; productRef = F325E5137AFD249B69F073A2 /* VaultUI */; };
-		0E31D847659438A515BB01E6 /* GitHubKit in Frameworks */ = {isa = PBXBuildFile; productRef = 7C6D4739B153B8EFB362C33A /* GitHubKit */; };
-		C0DE90000000000000000003 /* CodeProgress in Frameworks */ = {isa = PBXBuildFile; productRef = C0DE90000000000000000002 /* CodeProgress */; };
-		C0DE90000000000000000005 /* CodeWorkspace in Frameworks */ = {isa = PBXBuildFile; productRef = C0DE90000000000000000004 /* CodeWorkspace */; };
-		C0DE90000000000000000007 /* CodeActions in Frameworks */ = {isa = PBXBuildFile; productRef = C0DE90000000000000000006 /* CodeActions */; };
-		DE5C0000000000000000000C /* DevDesktop in Frameworks */ = {isa = PBXBuildFile; productRef = DE5C00000000000000000004 /* DevDesktop */; };
-		DE5C0000000000000000000D /* DevGraphics in Frameworks */ = {isa = PBXBuildFile; productRef = DE5C00000000000000000005 /* DevGraphics */; };
-		9C47F0000000000000000100 /* PlatformDiskUsage in Frameworks */ = {isa = PBXBuildFile; productRef = 9C47F0000000000000000200 /* PlatformDiskUsage */; };
-		9C47F0000000000000000110 /* PlatformLanguageModel in Frameworks */ = {isa = PBXBuildFile; productRef = 9C47F0000000000000000210 /* PlatformLanguageModel */; };
-		9C47F0000000000000000120 /* PlatformImage in Frameworks */ = {isa = PBXBuildFile; productRef = 9C47F0000000000000000220 /* PlatformImage */; };
-		9C47F0000000000000000130 /* PlatformBroadcast in Frameworks */ = {isa = PBXBuildFile; productRef = 9C47F0000000000000000230 /* PlatformBroadcast */; };
-		9C47F0000000000000000140 /* PlatformHTTP in Frameworks */ = {isa = PBXBuildFile; productRef = 9C47F0000000000000000240 /* PlatformHTTP */; };
+		DE5C0000000000000000000E /* DevApp in Frameworks */ = {isa = PBXBuildFile; productRef = DE5C00000000000000000006 /* DevApp */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		000000000000000000000120 /* Dev.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Dev.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		000000000000000000000122 /* DevTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DevTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
-
-/* Begin PBXContainerItemProxy section */
-		000000000000000350000000 /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = 000000000000000000000000 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = 000000000000000100000000;
-			remoteInfo = Dev;
-		};
-/* End PBXContainerItemProxy section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		000000000000000000000010 /* Dev */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = Dev;
+			name = Dev;
+			path = App/Sources/Dev;
 			sourceTree = "<group>";
 		};
-		000000000000000000000012 /* DevTests */ = {
+		000000000000000000000012 /* Resources */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = DevTests;
+			name = Resources;
+			path = App/Resources;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -60,30 +33,7 @@
 		000000000000000130000000 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			files = (
-				DA7AB45E0000000000000003 /* SQLiteKit in Frameworks */,
-				DA7AB45E0000000000000005 /* WireKit in Frameworks */,
-				D5C0DE000000000000000003 /* UpdateKit in Frameworks */,
-				C0C0DE000000000000000003 /* ComponentKit in Frameworks */,
-				4906C9282497EB178F132060 /* VaultKit in Frameworks */,
-				4906C9282497EB178F1320A1 /* VaultUI in Frameworks */,
-				0E31D847659438A515BB01E6 /* GitHubKit in Frameworks */,
-				C0DE90000000000000000003 /* CodeProgress in Frameworks */,
-				C0DE90000000000000000005 /* CodeWorkspace in Frameworks */,
-				C0DE90000000000000000007 /* CodeActions in Frameworks */,
-				DE5C0000000000000000000A /* DevScreenshots in Frameworks */,
-				DE5C0000000000000000000B /* DevScreenshotsCapture in Frameworks */,
-				DE5C0000000000000000000C /* DevDesktop in Frameworks */,
-				DE5C0000000000000000000D /* DevGraphics in Frameworks */,
-				9C47F0000000000000000100 /* PlatformDiskUsage in Frameworks */,
-				9C47F0000000000000000110 /* PlatformLanguageModel in Frameworks */,
-				9C47F0000000000000000120 /* PlatformImage in Frameworks */,
-				9C47F0000000000000000130 /* PlatformBroadcast in Frameworks */,
-				9C47F0000000000000000140 /* PlatformHTTP in Frameworks */,
-			);
-		};
-		000000000000000330000000 /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			files = (
+				DE5C0000000000000000000E /* DevApp in Frameworks */,
 			);
 		};
 /* End PBXFrameworksBuildPhase section */
@@ -93,7 +43,7 @@
 			isa = PBXGroup;
 			children = (
 				000000000000000000000010 /* Dev */,
-				000000000000000000000012 /* DevTests */,
+				000000000000000000000012 /* Resources */,
 				000000000000000000000020 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -102,7 +52,6 @@
 			isa = PBXGroup;
 			children = (
 				000000000000000000000120 /* Dev.app */,
-				000000000000000000000122 /* DevTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -122,53 +71,15 @@
 			);
 			fileSystemSynchronizedGroups = (
 				000000000000000000000010 /* Dev */,
+				000000000000000000000012 /* Resources */,
 			);
 			name = Dev;
 			packageProductDependencies = (
-				D5C0DE000000000000000002 /* UpdateKit */,
-				C0C0DE000000000000000002 /* ComponentKit */,
-				DA7AB45E0000000000000002 /* SQLiteKit */,
-				DA7AB45E0000000000000004 /* WireKit */,
-				F325E5137AFD249B69F073D5 /* VaultKit */,
-				F325E5137AFD249B69F073A2 /* VaultUI */,
-				7C6D4739B153B8EFB362C33A /* GitHubKit */,
-				C0DE90000000000000000002 /* CodeProgress */,
-				C0DE90000000000000000004 /* CodeWorkspace */,
-				C0DE90000000000000000006 /* CodeActions */,
-				DE5C00000000000000000002 /* DevScreenshots */,
-				DE5C00000000000000000003 /* DevScreenshotsCapture */,
-				DE5C00000000000000000004 /* DevDesktop */,
-				DE5C00000000000000000005 /* DevGraphics */,
-				9C47F0000000000000000200 /* PlatformDiskUsage */,
-				9C47F0000000000000000210 /* PlatformLanguageModel */,
-				9C47F0000000000000000220 /* PlatformImage */,
-				9C47F0000000000000000230 /* PlatformBroadcast */,
-				9C47F0000000000000000240 /* PlatformHTTP */,
+				DE5C00000000000000000006 /* DevApp */,
 			);
 			productName = MyApp;
 			productReference = 000000000000000000000120 /* Dev.app */;
 			productType = "com.apple.product-type.application";
-		};
-		000000000000000300000000 /* DevTests */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = 000000000000000310000000 /* Build configuration list for PBXNativeTarget "DevTests" */;
-			buildPhases = (
-				000000000000000320000000 /* Sources */,
-				000000000000000330000000 /* Frameworks */,
-				000000000000000340000000 /* Resources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-				000000000000000360000000 /* PBXTargetDependency */,
-			);
-			fileSystemSynchronizedGroups = (
-				000000000000000000000012 /* DevTests */,
-			);
-			name = DevTests;
-			productName = DevTests;
-			productReference = 000000000000000000000122 /* DevTests.xctest */;
-			productType = "com.apple.product-type.bundle.unit-test";
 		};
 /* End PBXNativeTarget section */
 
@@ -183,10 +94,6 @@
 					000000000000000100000000 = {
 						CreatedOnToolsVersion = 26.3;
 					};
-					000000000000000300000000 = {
-						CreatedOnToolsVersion = 27.0;
-						TestTargetID = 000000000000000100000000;
-					};
 				};
 			};
 			buildConfigurationList = 000000000000000010000000 /* Build configuration list for PBXProject "Dev" */;
@@ -199,14 +106,8 @@
 			mainGroup = 000000000000000000000001;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				DE5C00000000000000000007 /* XCLocalSwiftPackageReference "App" */,
 				DE5C00000000000000000001 /* XCLocalSwiftPackageReference "." */,
-				D5C0DE000000000000000001 /* XCRemoteSwiftPackageReference "UpdateKit" */,
-				C0C0DE000000000000000001 /* XCRemoteSwiftPackageReference "Component" */,
-				DA7AB45E0000000000000001 /* XCRemoteSwiftPackageReference "Database" */,
-				9B3A7F6AB825F8F67EEFD8FF /* XCRemoteSwiftPackageReference "Vault" */,
-				8DF881F3EAA5B613209FE067 /* XCRemoteSwiftPackageReference "Git" */,
-				C0DE90000000000000000001 /* XCRemoteSwiftPackageReference "Code" */,
-				9C47F0000000000000000001 /* XCRemoteSwiftPackageReference "Platform" */,
 			);
 			preferredProjectObjectVersion = 90;
 			productRefGroup = 000000000000000000000020 /* Products */;
@@ -214,18 +115,12 @@
 			projectRoot = "";
 			targets = (
 				000000000000000100000000 /* Dev */,
-				000000000000000300000000 /* DevTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		000000000000000140000000 /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			files = (
-			);
-		};
-		000000000000000340000000 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			files = (
 			);
@@ -238,20 +133,7 @@
 			files = (
 			);
 		};
-		000000000000000320000000 /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			files = (
-			);
-		};
 /* End PBXSourcesBuildPhase section */
-
-/* Begin PBXTargetDependency section */
-		000000000000000360000000 /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = 000000000000000100000000 /* Dev */;
-			targetProxy = 000000000000000350000000 /* PBXContainerItemProxy */;
-		};
-/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		000000000000000011000000 /* Debug configuration for PBXProject "Dev" */ = {
@@ -391,17 +273,17 @@
 			buildSettings = {
 				"ARCHS[sdk=macosx*]" = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = App/Resources/Dev.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = AUCR797TMH;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
-				CODE_SIGN_ENTITLEMENTS = Dev.entitlements;
-				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Dev starts and stops your UTM virtual machines.";
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Dev starts and stops your UTM virtual machines.";
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
 				MARKETING_VERSION = 0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = dev.v57.dev;
@@ -423,17 +305,17 @@
 			buildSettings = {
 				"ARCHS[sdk=macosx*]" = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = App/Resources/Dev.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = AUCR797TMH;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
-				CODE_SIGN_ENTITLEMENTS = Dev.entitlements;
-				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Dev starts and stops your UTM virtual machines.";
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Dev starts and stops your UTM virtual machines.";
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
 				MARKETING_VERSION = 0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = dev.v57.dev;
@@ -447,50 +329,6 @@
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-			};
-			name = Release;
-		};
-		000000000000000311000000 /* Debug configuration for PBXNativeTarget "DevTests" */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				BUNDLE_LOADER = "$(TEST_HOST)";
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = AUCR797TMH;
-				GENERATE_INFOPLIST_FILE = YES;
-				MARKETING_VERSION = 0.1;
-				PRODUCT_BUNDLE_IDENTIFIER = dev.v57.dev.tests;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = macosx;
-				SUPPORTED_PLATFORMS = macosx;
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Dev.app/Contents/MacOS/Dev";
-			};
-			name = Debug;
-		};
-		000000000000000312000000 /* Release configuration for PBXNativeTarget "DevTests" */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				BUNDLE_LOADER = "$(TEST_HOST)";
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = AUCR797TMH;
-				GENERATE_INFOPLIST_FILE = YES;
-				MARKETING_VERSION = 0.1;
-				PRODUCT_BUNDLE_IDENTIFIER = dev.v57.dev.tests;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = macosx;
-				SUPPORTED_PLATFORMS = macosx;
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Dev.app/Contents/MacOS/Dev";
 			};
 			name = Release;
 		};
@@ -513,176 +351,24 @@
 			);
 			defaultConfigurationName = Release;
 		};
-		000000000000000310000000 /* Build configuration list for PBXNativeTarget "DevTests" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				000000000000000311000000 /* Debug configuration for PBXNativeTarget "DevTests" */,
-				000000000000000312000000 /* Release configuration for PBXNativeTarget "DevTests" */,
-			);
-			defaultConfigurationName = Release;
-		};
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
+		DE5C00000000000000000007 /* XCLocalSwiftPackageReference "App" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = App;
+		};
 		DE5C00000000000000000001 /* XCLocalSwiftPackageReference "." */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = .;
 		};
 /* End XCLocalSwiftPackageReference section */
 
-/* Begin XCRemoteSwiftPackageReference section */
-		D5C0DE000000000000000001 /* XCRemoteSwiftPackageReference "UpdateKit" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/v57/UpdateKit.git";
-			requirement = {
-				branch = main;
-				kind = branch;
-			};
-		};
-		DA7AB45E0000000000000001 /* XCRemoteSwiftPackageReference "Database" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/v57/Database.git";
-			requirement = {
-				branch = main;
-				kind = branch;
-			};
-		};
-		9B3A7F6AB825F8F67EEFD8FF /* XCRemoteSwiftPackageReference "Vault" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/v57/Vault.git";
-			requirement = {
-				branch = main;
-				kind = branch;
-			};
-		};
-		8DF881F3EAA5B613209FE067 /* XCRemoteSwiftPackageReference "Git" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/v57/Git.git";
-			requirement = {
-				branch = main;
-				kind = branch;
-			};
-		};
-		C0C0DE000000000000000001 /* XCRemoteSwiftPackageReference "Component" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/v57/Component.git";
-			requirement = {
-				branch = main;
-				kind = branch;
-			};
-		};
-		C0DE90000000000000000001 /* XCRemoteSwiftPackageReference "Code" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/v57/Code.git";
-			requirement = {
-				branch = main;
-				kind = branch;
-			};
-		};
-		9C47F0000000000000000001 /* XCRemoteSwiftPackageReference "Platform" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/v57/Platform.git";
-			requirement = {
-				branch = main;
-				kind = branch;
-			};
-		};
-/* End XCRemoteSwiftPackageReference section */
-
 /* Begin XCSwiftPackageProductDependency section */
-		D5C0DE000000000000000002 /* UpdateKit */ = {
+		DE5C00000000000000000006 /* DevApp */ = {
 			isa = XCSwiftPackageProductDependency;
-			productName = UpdateKit;
-		};
-		C0C0DE000000000000000002 /* ComponentKit */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = C0C0DE000000000000000001 /* XCRemoteSwiftPackageReference "Component" */;
-			productName = ComponentKit;
-		};
-		DA7AB45E0000000000000002 /* SQLiteKit */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = DA7AB45E0000000000000001 /* XCRemoteSwiftPackageReference "Database" */;
-			productName = SQLiteKit;
-		};
-		DA7AB45E0000000000000004 /* WireKit */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = DA7AB45E0000000000000001 /* XCRemoteSwiftPackageReference "Database" */;
-			productName = WireKit;
-		};
-		F325E5137AFD249B69F073D5 /* VaultKit */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 9B3A7F6AB825F8F67EEFD8FF /* XCRemoteSwiftPackageReference "Vault" */;
-			productName = VaultKit;
-		};
-		F325E5137AFD249B69F073A2 /* VaultUI */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 9B3A7F6AB825F8F67EEFD8FF /* XCRemoteSwiftPackageReference "Vault" */;
-			productName = VaultUI;
-		};
-		7C6D4739B153B8EFB362C33A /* GitHubKit */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 8DF881F3EAA5B613209FE067 /* XCRemoteSwiftPackageReference "Git" */;
-			productName = GitHubKit;
-		};
-		DE5C00000000000000000002 /* DevScreenshots */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = DE5C00000000000000000001 /* XCLocalSwiftPackageReference "." */;
-			productName = DevScreenshots;
-		};
-		DE5C00000000000000000003 /* DevScreenshotsCapture */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = DE5C00000000000000000001 /* XCLocalSwiftPackageReference "." */;
-			productName = DevScreenshotsCapture;
-		};
-		C0DE90000000000000000002 /* CodeProgress */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = C0DE90000000000000000001 /* XCRemoteSwiftPackageReference "Code" */;
-			productName = CodeProgress;
-		};
-		C0DE90000000000000000004 /* CodeWorkspace */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = C0DE90000000000000000001 /* XCRemoteSwiftPackageReference "Code" */;
-			productName = CodeWorkspace;
-		};
-		C0DE90000000000000000006 /* CodeActions */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = C0DE90000000000000000001 /* XCRemoteSwiftPackageReference "Code" */;
-			productName = CodeActions;
-		};
-		DE5C00000000000000000004 /* DevDesktop */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = DE5C00000000000000000001 /* XCLocalSwiftPackageReference "." */;
-			productName = DevDesktop;
-		};
-		DE5C00000000000000000005 /* DevGraphics */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = DE5C00000000000000000001 /* XCLocalSwiftPackageReference "." */;
-			productName = DevGraphics;
-		};
-		9C47F0000000000000000200 /* PlatformDiskUsage */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 9C47F0000000000000000001 /* XCRemoteSwiftPackageReference "Platform" */;
-			productName = PlatformDiskUsage;
-		};
-		9C47F0000000000000000210 /* PlatformLanguageModel */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 9C47F0000000000000000001 /* XCRemoteSwiftPackageReference "Platform" */;
-			productName = PlatformLanguageModel;
-		};
-		9C47F0000000000000000220 /* PlatformImage */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 9C47F0000000000000000001 /* XCRemoteSwiftPackageReference "Platform" */;
-			productName = PlatformImage;
-		};
-		9C47F0000000000000000230 /* PlatformBroadcast */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 9C47F0000000000000000001 /* XCRemoteSwiftPackageReference "Platform" */;
-			productName = PlatformBroadcast;
-		};
-		9C47F0000000000000000240 /* PlatformHTTP */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 9C47F0000000000000000001 /* XCRemoteSwiftPackageReference "Platform" */;
-			productName = PlatformHTTP;
+			package = DE5C00000000000000000007 /* XCLocalSwiftPackageReference "App" */;
+			productName = DevApp;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

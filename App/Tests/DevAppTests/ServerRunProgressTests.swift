@@ -2,7 +2,7 @@ import CodeProgress
 import Foundation
 import Testing
 
-@testable import Dev
+@testable import DevApp
 
 private typealias Progress = ServerRun.Progress
 

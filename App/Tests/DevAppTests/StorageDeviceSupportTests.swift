@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-@testable import Dev
+@testable import DevApp
 
 /// Smart Scan leaves the Device Support of the OS a recent device runs.
 @Suite struct StorageDeviceSupportTests {

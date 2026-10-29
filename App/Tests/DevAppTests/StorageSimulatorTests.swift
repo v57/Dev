@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-@testable import Dev
+@testable import DevApp
 
 /// A simulator runtime and the simulators on it are one uninstall.
 @MainActor @Suite struct StorageSimulatorTests {

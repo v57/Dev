@@ -55,6 +55,10 @@ nonisolated struct RunCursor: Hashable, Sendable {
   }
 }
 
+/// The app's project row, named outside `Translation`, whose `Project` shadows it (the module's name can't qualify
+/// it: the module and its `App` struct are both DevApp).
+typealias ProjectRecord = Project
+
 extension Translation {
   /// The translation store, seen from the redesign: `TranslationData` plus the one rule the
   /// redesign owns about writing it — a batch of writes is STAGED and lands together.
@@ -88,9 +92,10 @@ extension Translation {
   /// operations and written here.
   @MainActor class Store {
     /// The app's project row. `Translation.Project` (the redesign's view object)
-    /// shadows that name inside this extension, so the row type is qualified once,
-    /// here, and every method below names it `ProjectRow`.
-    typealias ProjectRow = Dev.Project
+    /// shadows that name inside this extension, so the row type is named once,
+    /// here (`ProjectRecord`, outside the extension), and every method below names
+    /// it `ProjectRow`.
+    typealias ProjectRow = ProjectRecord
 
     let data: TranslationData
 

@@ -1,1 +1,1 @@
-../../Dev/Release/release.sh
+../../App/Resources/release.sh

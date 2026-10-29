@@ -8,27 +8,8 @@ import UpdateKit
 import VaultKit
 import VaultUI
 
-/// `Dev --screenshots <command>` is `dev-screenshots` (release.sh's screenshots step runs it this way);
-/// `Dev --mcp` serves MCP over stdin/stdout for agents and never opens a window; a test run hosts DevTests in a bare
-/// app; any other launch is the app.
-@main enum DevMain {
-    static func main() {
-        if let index = CommandLine.arguments.firstIndex(of: "--screenshots") {
-            setvbuf(stdout, nil, _IOLBF, 0)
-            exit(ScreenshotTool.run(Array(CommandLine.arguments[(index + 1)...])))
-        }
-        if CommandLine.arguments.contains("--mcp") {
-            MCPServer.run()
-        }
-        // DevTests runs inside a bare app: no window, no vault sync, no update check.
-        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
-            DevDesktop.runBareHost()
-        }
-        MyApp.main()
-    }
-}
-
-struct MyApp: App {
+/// The app, all of it but its entry point (App/Sources/Dev/DevMain.swift, which calls `DevApp.run()`).
+public struct DevApp: App {
     @DevAppDelegateAdaptor(DevAppDelegate.self) private var appDelegate
 
     /// Updates from GitHub Releases (the universal Dev.zip, built by Tools/release/release.sh):
@@ -36,7 +17,7 @@ struct MyApp: App {
     /// with a relaunch.
     private let updater = AppUpdater(github: "v57/Dev", assetName: "Dev.zip")
 
-    init() {
+    public init() {
         AppLifecycle.install()
         if let hangLog = LaunchOptions.hangLog { MainThreadWatchdog.start(logTo: hangLog) }
         updater.start()
@@ -54,7 +35,7 @@ struct MyApp: App {
         }
     }
 
-    var body: some Scene {
+    public var body: some Scene {
         // Dev keeps the system accent: the kit's controls take it, like the system's did. A screenshot
         // launch builds every row and section at once, so a scene never captures a lazy placeholder.
         // A window's value is the account it shows (nil: Personal), so the account picker's "Open … in a New
@@ -80,6 +61,21 @@ struct MyApp: App {
         }
         // KitSettings(…, window: .hiddenTitleBar) runs its sidebar up under the traffic lights.
         .windowStyle(.hiddenTitleBar)
+    }
+}
+
+extension DevApp {
+    /// `Dev --screenshots <command>` is `dev-screenshots` (release.sh's screenshots step runs it this way);
+    /// `Dev --mcp` serves MCP over stdin/stdout for agents and never opens a window; any other launch is the app.
+    public static func run() {
+        if let index = CommandLine.arguments.firstIndex(of: "--screenshots") {
+            setvbuf(stdout, nil, _IOLBF, 0)
+            exit(ScreenshotTool.run(Array(CommandLine.arguments[(index + 1)...])))
+        }
+        if CommandLine.arguments.contains("--mcp") {
+            MCPServer.run()
+        }
+        main()
     }
 }
 

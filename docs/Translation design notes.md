@@ -1,6 +1,6 @@
 # Dev — Translation redesign: design notes
 
-Status: **design only**. Nothing in `Dev/Localization/Redesign/` is wired into the
+Status: **design only**. Nothing in `App/Sources/DevApp/Localization/Redesign/` is wired into the
 app — the files are stubs that compile and do nothing. The current pipeline
 (`plans/translation-flow.md`) still runs the app.
 

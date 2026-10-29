@@ -94,15 +94,6 @@ public enum DevDesktop {
     #endif
   }
 
-  /// Runs the app without windows, a Dock icon or a scene: a bare host for unit tests. Never returns.
-  public static func runBareHost() -> Never {
-    #if canImport(AppKit)
-      NSApplication.shared.setActivationPolicy(.accessory)
-      NSApplication.shared.run()
-    #endif
-    dispatchMain()
-  }
-
   /// Calls `handler` each time the app becomes the active one (the user comes back to it), until the returned
   /// observation is released. Never called where the system doesn't say (Linux).
   @MainActor public static func onActivation(_ handler: @escaping @MainActor () -> Void) -> AnyObject? {

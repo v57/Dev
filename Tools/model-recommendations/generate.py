@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Regenerates Dev/Translation/Providers/ModelRecommendations.swift from recommendations.json.
+"""Regenerates App/Sources/DevApp/Translation/Providers/ModelRecommendations.swift from recommendations.json.
 
     python3 Tools/model-recommendations/generate.py Tools/model-recommendations/recommendations.json \
-      > Dev/Translation/Providers/ModelRecommendations.swift
+      > App/Sources/DevApp/Translation/Providers/ModelRecommendations.swift
 
 recommendations.json holds, per provider, up to three models tagged best/value/free with their
 price per 1M tokens, a one-line reason and the page each was checked on.
