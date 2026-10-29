@@ -6,7 +6,10 @@
 # this script, so a release from the app and one from a terminal are the same release.
 #
 #   Tools/release/release.sh [--project DIR] [--platform P] [--host USER@HOST] [--output DIR]
-#                            [--version X.Y.Z] [--dry-run] STEP...
+#                            [--version X.Y.Z] [--build N] [--commit REV] [--no-zip] [--dry-run] STEP...
+#
+# --build and --commit pin the build number (else the commit count) and the commit the manifest names (else HEAD),
+# so every step of one run agrees when the branch moves on while it runs.
 #
 # Platforms (--platform, else PLATFORM in release.env): macos and ios build on this Mac; windows and linux build
 # on another machine over SSH (--host, else WINDOWS_HOST / LINUX_HOST: Dev passes its UTM VMs), which gets the
@@ -25,7 +28,8 @@
 #   direct       macOS: notarize + staple, <App>.zip and <App>.dmg again; with DIRECT_ARCHS="universal arm64"
 #                also <App>-AppleSilicon.zip/.dmg
 #   bundle       one <App>-<version>-<build>.zip with every platform's packages and archives in the output
-#                folder, and manifest.json (app, version, build, commit, files with sizes and SHA-256)
+#                folder, and manifest.json (app, version, build, commit, files with sizes and SHA-256); with
+#                --no-zip the folder <App>-<version>-<build>/ instead (files linked, archives cloned)
 #   github       GitHub Release v<version> with every platform's download files
 #   appstore     App Store Connect upload of the archive (macOS, iOS)
 #   googleplay   Google Play upload (Android; not built yet)
@@ -35,6 +39,7 @@
 # Output for a reader and for Dev alike: plain lines, plus marker lines
 #   ::step NAME   ::done NAME   ::skip NAME REASON   ::fail NAME REASON
 #   ::artifact KIND PLATFORM PATH   (KIND: archive, package, bundle, manifest, tests, screenshots)
+#   ::progress DONE TOTAL WHAT      (bundle: each file it adds, then the zip)
 # Files land in <output>/<platform>/ (default output: build/release/<version>/ inside the project); each platform
 # folder lists its artifacts in artifacts.tsv, which bundle and github read.
 
@@ -50,8 +55,11 @@ STEPS=""
 ARG_PLATFORM=""
 ARG_HOST=""
 ARG_OUTPUT=""
+ARG_BUILD=""
+ARG_COMMIT=""
+NO_ZIP=0
 
-usage() { sed -n '2,38p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,44p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -60,6 +68,9 @@ while [ $# -gt 0 ]; do
     --host) ARG_HOST="$2"; shift 2 ;;
     --output) ARG_OUTPUT="$2"; shift 2 ;;
     --version) VERSION="$2"; shift 2 ;;
+    --build) ARG_BUILD="$2"; shift 2 ;;
+    --commit) ARG_COMMIT="$2"; shift 2 ;;
+    --no-zip) NO_ZIP=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h|--help) usage 0 ;;
     all) STEPS="$STEPS_ALL"; shift ;;
@@ -113,7 +124,7 @@ if [ -z "$VERSION" ] && [ ${#CONTAINER[@]} -gt 0 ]; then
     -showBuildSettings 2>/dev/null | awk -F' = ' '/ MARKETING_VERSION = / {print $2; exit}')
 fi
 VERSION="${VERSION:-1.0}"
-BUILD_NUMBER=$(git rev-list --count HEAD 2>/dev/null || date +%Y%m%d%H%M)
+BUILD_NUMBER="${ARG_BUILD:-$(git rev-list --count HEAD 2>/dev/null || date +%Y%m%d%H%M)}"
 BASE="${ARG_OUTPUT:-$PROJECT_DIR/build/release/$VERSION}"
 mkdir -p "$BASE"
 BASE="$(cd "$BASE" && pwd)"
@@ -729,33 +740,47 @@ do_bundle() {
   local entries
   entries=$(artifacts_of 'archive|package')
   [ -n "$entries" ] || [ "$DRY_RUN" = 1 ] || fail "no archives or packages in $BASE (run the archive step first)"
-  local name="$APP_NAME-$VERSION-$BUILD_NUMBER" stage="$BASE/.bundle"
+  # The result is the folder <name>/ (--no-zip: Dev's Export, which only copies it on this Mac), else <name>.zip.
+  local name="$APP_NAME-$VERSION-$BUILD_NUMBER" stage result
+  if [ "$NO_ZIP" = 1 ]; then stage="$BASE/$name" result="$BASE/$name"; else stage="$BASE/.bundle" result="$BASE/$name.zip"; fi
   local commit branch dirty=false
-  commit=$(git rev-parse HEAD 2>/dev/null || echo "")
+  commit=$(git rev-parse "${ARG_COMMIT:-HEAD}" 2>/dev/null || echo "$ARG_COMMIT")
   branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
   [ -n "$(git status --porcelain 2>/dev/null)" ] && dirty=true
-  run rm -rf "$stage" "$BASE/$name.zip"
-  [ "$DRY_RUN" = 1 ] && { echo "\$ manifest.json + $name.zip"; done_step; return; }
+  run rm -rf "$stage" "$result"
+  [ "$DRY_RUN" = 1 ] && { echo "\$ manifest.json + $(basename "$result")"; done_step; return; }
   mkdir -p "$stage"
-  local files="" kind path platform file size sum first=1
+  local files="" kind path platform file size sum first=1 done=0 total
+  total=$(printf '%s\n' "$entries" | grep -c .)
+  [ "$NO_ZIP" = 1 ] || total=$((total + 1))
   while IFS=$'\t' read -r platform kind path; do
+    echo "::progress $done $total $platform/$(basename "$path")"
+    done=$((done + 1))
     [ -e "$path" ] || { echo "missing, left out: $path"; continue; }
     mkdir -p "$stage/$platform"
-    # Folders (an .xcarchive) travel zipped; files are linked in, not copied.
-    if [ -d "$path" ]; then
-      file="$platform/$(basename "$path").zip"
-      ditto -c -k --norsrc --noextattr --noqtn --keepParent "$path" "$stage/$file"
+    file="$platform/$(basename "$path")"
+    sum=null
+    if [ -d "$path" ] && [ "$NO_ZIP" = 1 ]; then
+      # A folder (an .xcarchive) is cloned (APFS: no space, no time); it has a size but no checksum.
+      cp -cR "$path" "$stage/$file" 2>/dev/null || cp -R "$path" "$stage/$file"
+      size=$(find "$stage/$file" -type f -exec stat -f %z {} + | awk '{s += $1} END {print s + 0}')
     else
-      file="$platform/$(basename "$path")"
-      ln "$path" "$stage/$file" 2>/dev/null || cp "$path" "$stage/$file"
+      if [ -d "$path" ]; then
+        # In the zip a folder travels zipped, so it has one checksum.
+        file="$file.zip"
+        ditto -c -k --norsrc --noextattr --noqtn --keepParent "$path" "$stage/$file"
+      else
+        # Files are linked in, not copied.
+        ln "$path" "$stage/$file" 2>/dev/null || cp "$path" "$stage/$file"
+      fi
+      size=$(stat -f %z "$stage/$file")
+      sum="\"$(shasum -a 256 "$stage/$file" | awk '{print $1}')\""
     fi
-    size=$(stat -f %z "$stage/$file")
-    sum=$(shasum -a 256 "$stage/$file" | awk '{print $1}')
-    echo "  $file  $size bytes  sha256 $sum"
+    echo "  $file  $size bytes  sha256 ${sum//\"/}"
     [ $first = 1 ] || files="$files,"
     first=0
     files="$files
-    {\"platform\": $(json "$platform"), \"kind\": $(json "$kind"), \"path\": $(json "$file"), \"size\": $size, \"sha256\": \"$sum\"}"
+    {\"platform\": $(json "$platform"), \"kind\": $(json "$kind"), \"path\": $(json "$file"), \"size\": $size, \"sha256\": $sum}"
   done <<<"$entries"
   cat >"$stage/manifest.json" <<JSON
 {
@@ -767,20 +792,23 @@ do_bundle() {
   "branch": $(json "$branch"),
   "dirty": $dirty,
   "created": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-  "bundle": $(json "$name.zip"),
+  "bundle": $(json "$(basename "$result")"),
   "artifacts": [$files
   ]
 }
 JSON
   cp "$stage/manifest.json" "$BASE/manifest.json"
-  # Its parts are compressed already: stored, not compressed again. No `._` files for extended attributes, which
-  # Windows and Linux would unpack as clutter.
-  ditto -c -k --norsrc --noextattr --noqtn --zlibCompressionLevel 0 "$stage" "$BASE/$name.zip" || fail "zipping the bundle failed"
-  rm -rf "$stage"
+  if [ "$NO_ZIP" != 1 ]; then
+    echo "::progress $done $total $name.zip"
+    # Its parts are compressed already: stored, not compressed again. No `._` files for extended attributes, which
+    # Windows and Linux would unpack as clutter.
+    ditto -c -k --norsrc --noextattr --noqtn --zlibCompressionLevel 0 "$stage" "$result" || fail "zipping the bundle failed"
+    rm -rf "$stage"
+  fi
   PLATFORM=all
   echo "::artifact manifest all $BASE/manifest.json"
-  echo "::artifact bundle all $BASE/$name.zip"
-  echo "$name.zip: $(du -h "$BASE/$name.zip" | awk '{print $1}')"
+  echo "::artifact bundle all $result"
+  echo "$(basename "$result"): $(du -sh "$result" | awk '{print $1}')"
   done_step
 }
 

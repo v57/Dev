@@ -35,6 +35,15 @@ final class WorkflowStore {
   private(set) var confirmation: Confirmation?
   /// Why the last start was refused, shown once.
   var notice: String?
+  /// How far each run's result archive has come while Export makes it: run id → progress.
+  private(set) var exportProgress: [UUID: ExportProgress] = [:]
+
+  struct ExportProgress: Equatable {
+    var done: Int
+    var total: Int
+    /// The file being added.
+    var file: String
+  }
 
   struct Confirmation: Identifiable {
     let id = UUID()
@@ -251,6 +260,11 @@ final class WorkflowStore {
       arguments += ["--host", target.target]
     }
     if let version { arguments += ["--version", version] }
+    // The run's build number and commit, not the branch's as it is now: every step of the run agrees.
+    if let run = active[root] {
+      if let build = run.buildNumber { arguments += ["--build", String(build)] }
+      if let commit = run.commit { arguments += ["--commit", commit] }
+    }
     arguments.append(name)
     // The GitHub step publishes with the sign-in of the project's account.
     let environment = ReleaseRunner.environment(forAccount: accounts[root] ?? VaultAccount.personal.id)
@@ -267,7 +281,11 @@ final class WorkflowStore {
         return
       }
       let parts = line.dropFirst(2).split(separator: " ", maxSplits: 2).map(String.init)
-      if parts.first == "skip" {
+      // The version release.sh read off the project: Export's result archive is named with it without asking
+      // xcodebuild again.
+      if parts.first == "finished", parts.count > 1 {
+        self?.update(root) { if $0.version == nil { $0.version = parts[1] } }
+      } else if parts.first == "skip" {
         self?.setStep(root, stepID) { $0.state = .skipped; $0.note = parts.count > 2 ? parts[2] : nil }
       } else if parts.first == "fail" {
         self?.setStep(root, stepID) { $0.note = parts.count > 2 ? parts[2] : nil }
@@ -490,21 +508,31 @@ final class WorkflowStore {
     saveHistory()
   }
 
-  /// The run's result archive, made now (release.sh's bundle step over its folder) when its workflow had no
-  /// Result Archive step; nil, with the reason in `notice`, when it can't be made.
+  /// The run's result archive: its zip when the workflow had a Result Archive step, else made now as a folder
+  /// (release.sh bundle --no-zip: the files linked and the archives cloned, so Export only copies it on this Mac);
+  /// nil, with the reason in `notice`, when it can't be made.
   func makeBundle(for id: UUID, in root: URL) async -> WorkflowRun.Artifact? {
     guard let run = run(id, in: root) else { return nil }
     if let bundle = run.bundle, FileManager.default.fileExists(atPath: bundle.path) { return bundle }
     guard let script = ReleaseRunner.scriptURL, let output = run.output else { return nil }
     var arguments = [script.path, "--project", root.path, "--output", output]
     if let version = run.version { arguments += ["--version", version] }
-    arguments.append("bundle")
+    if let build = run.buildNumber { arguments += ["--build", String(build)] }
+    if let commit = run.commit { arguments += ["--commit", commit] }
+    arguments += ["--no-zip", "bundle"]
+    defer { exportProgress[id] = nil }
     let process = LineProcess("/bin/bash", arguments, directory: root)
     var made: [WorkflowRun.Artifact] = []
     var failure: String?
     do {
       for try await line in process.lines() {
         if let artifact = WorkflowRun.Artifact(marker: line, stepID: "bundle") { made.append(artifact) }
+        if line.hasPrefix("::progress ") {
+          let parts = line.split(separator: " ", maxSplits: 3).map(String.init)
+          if parts.count == 4, let done = Int(parts[1]), let total = Int(parts[2]) {
+            exportProgress[id] = ExportProgress(done: done, total: total, file: parts[3])
+          }
+        }
         if line.hasPrefix("::fail ") { failure = line.split(separator: " ", maxSplits: 2).dropFirst(2).first.map(String.init) }
       }
     } catch {
