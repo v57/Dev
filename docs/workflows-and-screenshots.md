@@ -68,7 +68,8 @@ the Trash (Delete Run… trashes the whole folder).
 
 The names are the ones UpdateKit looks for. `bundle` (Result Archive) zips every platform's archives and packages into
 `<App>-<version>-<build>.zip` with `manifest.json` (app, version, build, commit, branch, and each file's platform,
-kind, size and SHA-256); a run without the step makes it when the reader exports it. `googleplay` and `msstore` are
+kind, size and SHA-256). Export… copies the run's zip, or, for a run without the step, makes the result as a folder
+instead (`bundle --no-zip`: files hard-linked, archives cloned, so it takes a second and no space) and copies that. `googleplay` and `msstore` are
 slots: they check their `release.env` keys and say what is still missing.
 
 ## Screenshots — `.dev/screenshots.json`

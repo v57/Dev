@@ -205,7 +205,8 @@ nonisolated struct WorkflowRun: Codable, Hashable, Identifiable, Sendable {
   /// One file a step made, from release.sh's `::artifact KIND PLATFORM PATH` line.
   struct Artifact: Codable, Hashable, Identifiable, Sendable {
     var path: String
-    /// `archive` (.xcarchive), `package` (.zip, .dmg, .tar.gz, .apk), `bundle` (the result archive),
+    /// `archive` (.xcarchive), `package` (.zip, .dmg, .tar.gz, .apk), `bundle` (the result archive: a zip, or the
+    /// folder Export makes),
     /// `manifest`, `tests`, `screenshots`.
     var kind: String
     /// `macos`, `ios`, `windows`, `linux`, `android`, or `all` for the result archive and its manifest.
@@ -218,7 +219,9 @@ nonisolated struct WorkflowRun: Codable, Hashable, Identifiable, Sendable {
     var url: URL { URL(fileURLWithPath: path) }
     var name: String { url.lastPathComponent }
     var platformTitle: String { ReleasePlatform(rawValue: platform)?.title ?? "All platforms" }
-    var isFolder: Bool { kind == "archive" || kind == "tests" || kind == "screenshots" }
+    var isFolder: Bool {
+      kind == "archive" || kind == "tests" || kind == "screenshots" || (kind == "bundle" && url.pathExtension != "zip")
+    }
 
     init(path: String, kind: String, platform: String, stepID: String, size: Int64? = nil) {
       self.path = path

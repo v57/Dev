@@ -8,8 +8,8 @@ import Foundation
 import SwiftUI
 
 /// The files a workflow run made, by platform, under the run's steps in the Workflows tab: each opens, shows in
-/// Finder, or goes to the Trash; the run's result archive exports to wherever the reader picks (made first when
-/// the workflow had no Result Archive step), and the whole run goes to the Trash with its folder.
+/// Finder, or goes to the Trash; the run's result archive exports to wherever the reader picks (its zip, or a folder
+/// made first when the workflow had no Result Archive step), and the whole run goes to the Trash with its folder.
 struct RunArtifacts: View {
   let run: WorkflowRun
   let root: URL
@@ -20,6 +20,7 @@ struct RunArtifacts: View {
   @State private var deleting: WorkflowRun.Artifact?
   @State private var deletingRun = false
   @State private var isExporting = false
+  @State private var isCopying = false
 
   private var isFinished: Bool { run.state != .running }
 
@@ -39,9 +40,9 @@ struct RunArtifacts: View {
           Button("Show Folder") { KitDesktop.reveal([URL(fileURLWithPath: output)]) }
             .disabled(!FileManager.default.fileExists(atPath: output))
         }
-        Button(isExporting ? "Exporting…" : "Export…") { Task { await export() } }
+        Button(exportTitle) { Task { await export() } }
           .disabled(!isFinished || isExporting || run.files.isEmpty)
-          .help("Saves the result archive: every platform's files and a manifest in one zip")
+          .help(exportHelp)
         if isFinished {
           Button("Delete Run…", role: .destructive) { deletingRun = true }
             .help("Moves the run's folder to the Trash and removes the run")
@@ -80,6 +81,19 @@ struct RunArtifacts: View {
         store.notice = error.localizedDescription
       }
     }
+  }
+
+  private var exportTitle: String {
+    guard isExporting else { return "Export…" }
+    if let progress = store.exportProgress[run.id] {
+      return "Preparing \(min(progress.done + 1, progress.total)) of \(progress.total)…"
+    }
+    return isCopying ? "Copying…" : "Exporting…"
+  }
+
+  private var exportHelp: String {
+    if let progress = store.exportProgress[run.id] { return "Adding \(progress.file)" }
+    return "Saves the result archive: every platform's files and a manifest, as one folder (or the run's zip)"
   }
 
   /// The files by platform in release order, the result archive and its manifest last.
@@ -165,6 +179,9 @@ struct RunArtifacts: View {
             title: "Export Result Archive", prompt: "Export", name: bundle.name)
     else { return }
     let source = bundle.url
+    isCopying = true
+    defer { isCopying = false }
+    // On APFS the copy is a clone: instant, and no space until either side changes.
     let error: String? = await Task.detached(priority: .userInitiated) {
       do {
         if FileManager.default.fileExists(atPath: target.path) { try FileManager.default.removeItem(at: target) }
