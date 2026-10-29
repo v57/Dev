@@ -17,7 +17,14 @@ all edit the same thing.
     { "id": "linux", "name": "Test on Ubuntu", "kind": "command", "command": "swift build && swift test",
       "runner": "vm:Ubuntu", "parallel": true },
     { "id": "screenshots", "name": "Screenshots", "kind": "screenshots" },
-    { "id": "direct", "name": "Sign & Notarize", "kind": "release", "releaseStep": "direct" }
+    { "id": "archive", "name": "Archive · macOS", "kind": "release", "releaseStep": "archive", "platform": "macos" },
+    { "id": "archive-ios", "name": "Archive · iOS", "kind": "release", "releaseStep": "archive", "platform": "ios" },
+    { "id": "archive-windows", "name": "Archive · Windows", "kind": "release", "releaseStep": "archive",
+      "platform": "windows", "runner": "vm:Windows" },
+    { "id": "archive-linux", "name": "Archive · Linux", "kind": "release", "releaseStep": "archive",
+      "platform": "linux", "runner": "vm:Ubuntu", "parallel": true },
+    { "id": "direct", "name": "Sign & Notarize", "kind": "release", "releaseStep": "direct" },
+    { "id": "bundle", "name": "Result Archive", "kind": "release", "releaseStep": "bundle" }
   ]
 }
 ```
@@ -25,8 +32,13 @@ all edit the same thing.
 - `kind`: `release` runs one `release.sh` step (configured by the project's `release.env`), `screenshots` runs
   `release.sh screenshots` (the scenes in `.dev/screenshots.json`) and then frames them, `command` runs a shell
   command in the project folder.
-- `runner`: `mac`, or `vm:<UTM machine name>` for commands. Dev starts the machine when it is stopped, copies the
-  project into it (`VMRunner`) and runs the command there.
+- `platform` (release steps): `macos`, `ios`, `windows`, `linux` or `android`, passed as `release.sh --platform`;
+  without it the step builds `release.env`'s `PLATFORM`.
+- `runner`: `mac`, or `vm:<UTM machine name>` for commands and for `windows`/`linux` release steps. Dev starts the
+  machine when it is stopped. A command gets the project copied into it (`VMRunner`) and runs there; a release step
+  runs `release.sh --host <user>@<address>` on this Mac, which copies the project and every package it builds from
+  (`V57_LOCAL=1`, the same checkouts as the Mac's `-Local` workspace) into `~/dev-release/<App>` (Linux) or
+  `C:\rel\<App>` (Windows), builds there with v57/SwiftUI's `build-app` scripts and copies the package back.
 - `parallel`: the step runs at the same time as the step before it.
 - `trigger`: Dev checks these while it is open (every five minutes): a new commit on `branch`, a new tag matching
   `tag`, or `daily` at `HH:MM`. There is no server, so nothing runs while Dev is quit.
@@ -36,7 +48,28 @@ all edit the same thing.
 - Without the folder, a project gets two defaults from its `release.env` (Pull Request and Release); they are written
   to disk the first time any workflow is saved.
 
-Run history is kept in `~/Library/Application Support/dev.v57.dev/Workflows/history.json` (50 runs per project).
+Run history is kept in `~/Library/Application Support/dev.v57.dev/Workflows/history.json` (50 runs per project, and
+every older one that still has files).
+
+### What a run makes
+
+Every release step of a run writes to the run's own folder, `build/release/runs/<date>-<build>/` in the project
+(`release.sh --output`), one subfolder per platform; each step's `::artifact KIND PLATFORM PATH` lines are the run's
+files, listed under its steps and in the Workflows sidebar's Releases, where each opens, shows in Finder or goes to
+the Trash (Delete Run… trashes the whole folder).
+
+| Platform | `archive` makes | Where it builds |
+|---|---|---|
+| macOS | `<App>.xcarchive` (xcodebuild-release), `<App>.zip` + `<App>.dmg` (Developer ID signed; `direct` notarizes them) | this Mac |
+| iOS | `<App>.xcarchive` | this Mac |
+| Windows | `<App>-Windows-<arch>.zip` (`<App>\`: the WinUI host as `<App>.exe`, the app DLL, the Swift and .NET runtimes) | a Windows VM |
+| Linux | `<App>-Linux-<arch>.tar.gz` (`<App>/`: the executable with the Swift runtime linked in, resources, `.desktop`) | a Linux VM |
+| Android | `<App>-Android.apk`, release-signed (not built yet) | this Mac |
+
+The names are the ones UpdateKit looks for. `bundle` (Result Archive) zips every platform's archives and packages into
+`<App>-<version>-<build>.zip` with `manifest.json` (app, version, build, commit, branch, and each file's platform,
+kind, size and SHA-256); a run without the step makes it when the reader exports it. `googleplay` and `msstore` are
+slots: they check their `release.env` keys and say what is still missing.
 
 ## Screenshots — `.dev/screenshots.json`
 

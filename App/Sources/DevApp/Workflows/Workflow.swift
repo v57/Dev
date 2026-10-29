@@ -40,17 +40,21 @@ nonisolated struct Workflow: Codable, Hashable, Identifiable, Sendable {
     }
   }
 
-  /// One step: a release.sh step on this Mac, a screenshot capture, or a shell
-  /// command on this Mac or a UTM virtual machine.
+  /// One step: a release.sh step for a platform (on this Mac, or on a UTM virtual machine for Windows and
+  /// Linux), a screenshot capture, or a shell command on this Mac or a VM.
   struct Step: Codable, Hashable, Identifiable, Sendable {
     var id: String
     var name: String
     var kind: Kind
     /// For `.release`: the release.sh step (`build`, `test`, `archive`…).
     var releaseStep: String?
+    /// For `.release`: the platform it builds or ships (`macos`, `ios`, `windows`, `linux`, `android`); nil is
+    /// release.env's PLATFORM.
+    var platform: String?
     /// For `.command`: what runs in the project folder.
     var command: String?
-    /// `mac`, or `vm:<name>` for a UTM machine (commands only).
+    /// `mac`, or `vm:<name>` for a UTM machine (commands, and release steps for Windows and Linux, which build
+    /// there and bring their packages back).
     var runner: String = "mac"
     /// Runs at the same time as the step before it.
     var parallel = false
@@ -62,6 +66,8 @@ nonisolated struct Workflow: Codable, Hashable, Identifiable, Sendable {
     var runsOnVM: Bool { runner.hasPrefix("vm:") }
     var vmName: String? { runsOnVM ? String(runner.dropFirst(3)) : nil }
 
+    var releasePlatform: ReleasePlatform? { platform.flatMap(ReleasePlatform.init) }
+
     var runnerTitle: String {
       if let vmName { return "\(vmName) (VM)" }
       return DevDesktop.thisComputer
@@ -70,7 +76,10 @@ nonisolated struct Workflow: Codable, Hashable, Identifiable, Sendable {
     /// What the step will run, for the inspector.
     var commandLine: String {
       switch kind {
-      case .release: return "release.sh \(releaseStep ?? "")"
+      case .release:
+        let platform = platform.map { "--platform \($0) " } ?? ""
+        let host = vmName.map { "--host <\($0)> " } ?? ""
+        return "release.sh \(platform)\(host)\(releaseStep ?? "")"
       case .screenshots: return "release.sh screenshots, then the framing"
       case .command: return command ?? ""
       }
@@ -123,14 +132,19 @@ nonisolated struct Workflow: Codable, Hashable, Identifiable, Sendable {
   }
 
   /// The starting workflows, from what the project has: a Release workflow over
-  /// the release.sh steps its release.env enables, and a Pull Request check.
+  /// the release.sh steps its release.env enables (an archive per Apple platform the
+  /// app supports, then the result archive), and a Pull Request check. Windows and
+  /// Linux steps are added from the step menu, which knows the VMs.
   static func defaults(for root: URL) -> [Workflow] {
     let config = ReleaseConfig.load(from: root)
     let hasTests = !(config?["TEST_SCHEME"] ?? "").isEmpty
     let hasScreenshots = !(config?["SCREENSHOT_TEST"] ?? "").isEmpty
     var release = Workflow(id: "release", name: "Release", trigger: Trigger(tag: "v*"))
-    func add(_ step: ReleaseStep, to workflow: inout Workflow) {
-      workflow.steps.append(Step(id: step.rawValue, name: step.title, kind: .release, releaseStep: step.rawValue))
+    func add(_ step: ReleaseStep, _ platform: ReleasePlatform? = nil, to workflow: inout Workflow) {
+      workflow.steps.append(Step(
+        id: step.rawValue + (platform.map { "-" + $0.rawValue } ?? ""),
+        name: step.title + (platform.map { " · " + $0.title } ?? ""), kind: .release, releaseStep: step.rawValue,
+        platform: platform?.rawValue))
     }
     add(.build, to: &release)
     if hasTests { add(.test, to: &release) }
@@ -138,7 +152,11 @@ nonisolated struct Workflow: Codable, Hashable, Identifiable, Sendable {
       release.steps.append(Step(id: "screenshots", name: "Screenshots", kind: .screenshots))
     }
     add(.archive, to: &release)
+    if config?["PLATFORM"] ?? "macos" == "macos", supportsIOS(root, project: config?["PROJECT"]) {
+      add(.archive, .ios, to: &release)
+    }
     if !(config?["DIRECT_DOWNLOAD"] ?? "").isEmpty { add(.direct, to: &release) }
+    add(.bundle, to: &release)
     if !(config?["GITHUB_REPO"] ?? "").isEmpty { add(.github, to: &release) }
     if config?["APP_STORE"] == "yes" { add(.appstore, to: &release) }
 
@@ -146,6 +164,17 @@ nonisolated struct Workflow: Codable, Hashable, Identifiable, Sendable {
     add(.build, to: &check)
     if hasTests { add(.test, to: &check) }
     return [check, release]
+  }
+
+  /// A Mac app whose Xcode project builds for iOS too (SUPPORTED_PLATFORMS has iphoneos).
+  private static func supportsIOS(_ root: URL, project: String?) -> Bool {
+    let name = project?.nilIfEmpty
+      ?? (try? FileManager.default.contentsOfDirectory(atPath: root.path))?.first { $0.hasSuffix(".xcodeproj") }
+    guard let name,
+          let text = try? String(contentsOf: root.appendingPathComponent(name).appendingPathComponent("project.pbxproj"),
+                                 encoding: .utf8)
+    else { return false }
+    return text.contains("iphoneos")
   }
 }
 
@@ -166,6 +195,74 @@ nonisolated struct WorkflowRun: Codable, Hashable, Identifiable, Sendable {
   var startedBy: String
   var steps: [StepRun] = []
   var state: State = .running
+  /// The folder the run's release.sh steps write to (`--output`): `build/release/runs/<date>-<build>` in the project.
+  var output: String?
+  /// The files its steps made, in the order they came (nil in runs from before Dev kept them).
+  var artifacts: [Artifact]?
+
+  var files: [Artifact] { artifacts ?? [] }
+
+  /// One file a step made, from release.sh's `::artifact KIND PLATFORM PATH` line.
+  struct Artifact: Codable, Hashable, Identifiable, Sendable {
+    var path: String
+    /// `archive` (.xcarchive), `package` (.zip, .dmg, .tar.gz, .apk), `bundle` (the result archive),
+    /// `manifest`, `tests`, `screenshots`.
+    var kind: String
+    /// `macos`, `ios`, `windows`, `linux`, `android`, or `all` for the result archive and its manifest.
+    var platform: String
+    var stepID: String
+    /// Bytes on disk (a folder's total), once the step has finished.
+    var size: Int64?
+
+    var id: String { path }
+    var url: URL { URL(fileURLWithPath: path) }
+    var name: String { url.lastPathComponent }
+    var platformTitle: String { ReleasePlatform(rawValue: platform)?.title ?? "All platforms" }
+    var isFolder: Bool { kind == "archive" || kind == "tests" || kind == "screenshots" }
+
+    init(path: String, kind: String, platform: String, stepID: String, size: Int64? = nil) {
+      self.path = path
+      self.kind = kind
+      self.platform = platform
+      self.stepID = stepID
+      self.size = size
+    }
+
+    /// An artifact marker line, or nil for any other line.
+    init?(marker line: String, stepID: String) {
+      guard line.hasPrefix("::artifact ") else { return nil }
+      let parts = line.dropFirst("::artifact ".count).split(separator: " ", maxSplits: 2).map(String.init)
+      guard parts.count == 3, parts[2].hasPrefix("/") else { return nil }
+      self.init(path: parts[2], kind: parts[0], platform: parts[1], stepID: stepID)
+    }
+
+    /// The size on disk of a file or a folder's files.
+    static func size(of url: URL) -> Int64? {
+      let fm = FileManager.default
+      var isFolder: ObjCBool = false
+      guard fm.fileExists(atPath: url.path, isDirectory: &isFolder) else { return nil }
+      guard isFolder.boolValue else {
+        return (try? fm.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value
+      }
+      var total: Int64 = 0
+      let files = fm.enumerator(at: url, includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey])
+      while let file = files?.nextObject() as? URL {
+        let values = try? file.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
+        if values?.isRegularFile == true { total += Int64(values?.fileSize ?? 0) }
+      }
+      return total
+    }
+  }
+
+  /// The result archive, if the run made one.
+  var bundle: Artifact? { files.last { $0.kind == "bundle" } }
+
+  /// The platforms the run made files for, in release order.
+  var platforms: [ReleasePlatform] {
+    ReleasePlatform.allCases.filter { platform in files.contains { $0.platform == platform.rawValue } }
+  }
+
+  var totalSize: Int64 { files.filter { $0.kind != "bundle" && $0.kind != "manifest" }.compactMap(\.size).reduce(0, +) }
 
   enum State: String, Codable, Sendable {
     case running, passed, failed, cancelled

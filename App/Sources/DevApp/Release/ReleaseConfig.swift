@@ -23,9 +23,16 @@ nonisolated struct ReleaseConfig: Equatable, Sendable {
     ("SCHEME", nil), ("PROJECT", nil), ("WORKSPACE", nil), ("PLATFORM", nil), ("TEAM_ID", nil),
     ("TEST_SCHEME", ""), ("TEST_DESTINATION", nil), ("SCREENSHOT_TEST", nil),
     ("SCREENSHOT_LOCALES", nil), ("SCREENSHOT_DESTINATION", nil),
-    ("DIRECT_DOWNLOAD", ""), ("DIRECT_ARCHS", nil), ("NOTARY_PROFILE", nil),
+    ("DIRECT_DOWNLOAD", ""), ("DIRECT_ARCHS", nil), ("DIRECT_SETTINGS", nil), ("NOTARY_PROFILE", nil),
     ("GITHUB_REPO", ""), ("GITHUB_DRAFT", nil),
     ("APP_STORE", ""), ("ASC_KEY_ID", nil), ("ASC_ISSUER_ID", nil), ("ASC_KEY_PATH", nil),
+  ]
+
+  /// The other platforms' and stores' keys, written only when set (most apps ship on Apple platforms only).
+  static let platformFields: [String] = [
+    "PACKAGE_PATH", "SWIFTUI_PATH", "WINDOWS_PRODUCT", "WINDOWS_HOST", "LINUX_PRODUCT", "LINUX_HOST", "LINUX_STATIC",
+    "LINUX_JOBS", "ANDROID_PRODUCT", "ANDROID_KEYSTORE", "ANDROID_KEY_ALIAS", "ANDROID_KEYCHAIN_ITEM",
+    "GOOGLE_PLAY", "GOOGLE_PLAY_TRACK", "GOOGLE_PLAY_KEY_PATH", "MS_STORE", "MS_STORE_APP_ID",
   ]
 
   /// An empty value and a missing key mean the same to the script, so only
@@ -46,12 +53,13 @@ nonisolated struct ReleaseConfig: Equatable, Sendable {
 
   static func parse(_ text: String) -> ReleaseConfig {
     var config = ReleaseConfig()
-    let known = Set(fields.map(\.key))
+    let known = Set(fields.map(\.key) + platformFields)
     for raw in text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init) {
       let line = raw.trimmingCharacters(in: .whitespaces)
       guard !line.isEmpty, !line.hasPrefix("#"), let equals = line.firstIndex(of: "=") else {
         // Dev writes its own comments; only foreign ones are kept.
-        if line.hasPrefix("#"), !fields.contains(where: { $0.comment.map { "# " + $0 } == line }) {
+        if line.hasPrefix("#"), line != "# " + platformComment,
+           !fields.contains(where: { $0.comment.map { "# " + $0 } == line }) {
           config.extraLines.append(raw)
         }
         continue
@@ -85,9 +93,20 @@ nonisolated struct ReleaseConfig: Equatable, Sendable {
       let needsQuotes = value.contains { $0 == " " || $0 == "#" || $0 == "\"" || $0 == "$" }
       lines.append("\(key)=" + (needsQuotes ? "'\(value)'" : value))
     }
+    let platforms = Self.platformFields.filter { !self[$0].isEmpty }
+    if !platforms.isEmpty {
+      lines += ["", "# " + Self.platformComment]
+      for key in platforms {
+        let value = self[key]
+        let needsQuotes = value.contains { $0 == " " || $0 == "#" || $0 == "\"" || $0 == "$" }
+        lines.append("\(key)=" + (needsQuotes ? "'\(value)'" : value))
+      }
+    }
     if !extraLines.isEmpty { lines.append(""); lines += extraLines }
     return lines.joined(separator: "\n") + "\n"
   }
+
+  static let platformComment = "Windows and Linux (built on a VM), Android, and their stores."
 
   func save(to root: URL) throws {
     try rendered().write(to: Self.url(in: root), atomically: true, encoding: .utf8)

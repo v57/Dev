@@ -13,11 +13,14 @@ import VaultKit
 ///
 /// A run executes its steps in order; a step marked `parallel` runs together
 /// with the one before it (Test on this Mac and on two VMs at once). release.sh
-/// steps run through the bundled script, commands in a login shell in the
-/// project folder, and VM commands through `VMRunner.process`, which copies the
-/// project into the VM first. Steps that publish (notarize, GitHub, App Store
-/// Connect) ask before they start unless the reader started the run and
-/// confirmed it up front.
+/// steps run through the bundled script, a Windows or Linux one with the VM as
+/// its `--host` (release.sh copies the sources there and brings the packages
+/// back); commands run in a login shell in the project folder, and VM commands
+/// through `VMRunner.process`, which copies the project into the VM first. Every
+/// release.sh step of a run writes to the run's own folder, and the files they
+/// report are the run's artifacts, kept in the history until deleted. Steps that
+/// publish (notarize, GitHub, App Store Connect, the stores) ask before they
+/// start unless the reader started the run and confirmed it up front.
 @Observable
 final class WorkflowStore {
   /// The workflows read from each project's `.dev/workflows`.
@@ -144,6 +147,7 @@ final class WorkflowStore {
     update(root) {
       $0.buildNumber = Int(count.output.trimmingCharacters(in: .whitespacesAndNewlines))
       $0.commit = commit.status == 0 ? commit.output.trimmingCharacters(in: .whitespacesAndNewlines) : nil
+      $0.output = Self.outputFolder(for: $0, in: root).path
     }
 
     // Stages: a step marked parallel joins the stage before it.
@@ -192,7 +196,7 @@ final class WorkflowStore {
     }
     if let finished = active[root] {
       history[root, default: []].insert(finished, at: 0)
-      if history[root]!.count > 50 { history[root]!.removeLast(history[root]!.count - 50) }
+      trimHistory(root)
     }
     active[root] = nil
     tasks[root] = nil
@@ -208,9 +212,9 @@ final class WorkflowStore {
     var passed: Bool
     switch step.kind {
     case .release:
-      passed = await runRelease(step.releaseStep ?? "", stepID: step.id, runID: runID, root: root, version: version)
+      passed = await runRelease(step, step.releaseStep ?? "", runID: runID, root: root, version: version)
     case .screenshots:
-      passed = await runRelease("screenshots", stepID: step.id, runID: runID, root: root, version: version)
+      passed = await runRelease(step, "screenshots", runID: runID, root: root, version: version)
       if passed {
         append(runID, step.id, root, "Framing with .dev/screenshots.json")
         let report = await ScreenshotProcessor.processLatest(in: root)
@@ -232,20 +236,36 @@ final class WorkflowStore {
     return passed
   }
 
-  private func runRelease(_ name: String, stepID: String, runID: UUID, root: URL, version: String?) async -> Bool {
+  private func runRelease(_ step: Workflow.Step, _ name: String, runID: UUID, root: URL, version: String?) async -> Bool {
+    let stepID = step.id
     guard let script = ReleaseRunner.scriptURL else {
       setStep(root, stepID) { $0.note = "release.sh is missing from the app" }
       return false
     }
     var arguments = [script.path, "--project", root.path]
+    if let output = active[root]?.output { arguments += ["--output", output] }
+    if let platform = step.platform { arguments += ["--platform", platform] }
+    // Windows and Linux build on their VM: release.sh copies the sources there and brings the packages back.
+    if let vmName = step.vmName {
+      guard let target = await vmTarget(vmName, stepID: stepID, runID: runID, root: root) else { return false }
+      arguments += ["--host", target.target]
+    }
     if let version { arguments += ["--version", version] }
     arguments.append(name)
     // The GitHub step publishes with the sign-in of the project's account.
-    let environment = ReleaseRunner.gitHubEnvironment(forAccount: accounts[root] ?? VaultAccount.personal.id)
+    let environment = ReleaseRunner.environment(forAccount: accounts[root] ?? VaultAccount.personal.id)
     let process = LineProcess("/bin/bash", arguments, directory: root, environment: environment)
     let status = await stream(process, stepID: stepID, runID: runID, root: root) { [weak self] line in
-      // release.sh's markers: a skipped step passes, a failed one says why.
+      // release.sh's markers: a skipped step passes, a failed one says why, an artifact joins the run.
       guard line.hasPrefix("::") else { return }
+      if let artifact = WorkflowRun.Artifact(marker: line, stepID: stepID) {
+        self?.update(root) { run in
+          var files = run.files.filter { $0.path != artifact.path }
+          files.append(artifact)
+          run.artifacts = files
+        }
+        return
+      }
       let parts = line.dropFirst(2).split(separator: " ", maxSplits: 2).map(String.init)
       if parts.first == "skip" {
         self?.setStep(root, stepID) { $0.state = .skipped; $0.note = parts.count > 2 ? parts[2] : nil }
@@ -253,18 +273,47 @@ final class WorkflowStore {
         self?.setStep(root, stepID) { $0.note = parts.count > 2 ? parts[2] : nil }
       }
     }
+    await measureArtifacts(of: stepID, in: root)
     return status == 0
   }
 
+  /// The sizes of a step's files, read off the main thread once it has finished.
+  private func measureArtifacts(of stepID: String, in root: URL) async {
+    let files = active[root]?.files.filter { $0.stepID == stepID } ?? []
+    guard !files.isEmpty else { return }
+    let sizes = await Task.detached(priority: .utility) {
+      Dictionary(files.map { ($0.path, WorkflowRun.Artifact.size(of: $0.url)) }, uniquingKeysWith: { a, _ in a })
+    }.value
+    update(root) { run in
+      run.artifacts = run.files.map { file in
+        var file = file
+        if let size = sizes[file.path] { file.size = size }
+        return file
+      }
+    }
+  }
+
   private func runOnVM(_ step: Workflow.Step, vmName: String, runID: UUID, root: URL) async -> Bool {
-    guard let store = vms else { return false }
+    guard let target = await vmTarget(vmName, stepID: step.id, runID: runID, root: root) else { return false }
+    let process = VMRunner.process(
+      project: root, on: target.target, system: target.system,
+      command: step.command ?? VMRunner.defaultCommand(for: root, system: target.system))
+    return await stream(process, stepID: step.id, runID: runID, root: root) == 0
+  }
+
+  /// Where a step reaches a UTM machine over SSH (`user@address`) and its system, starting it first when it is
+  /// off; nil, with the step's note saying why, when it can't be reached.
+  private func vmTarget(
+    _ vmName: String, stepID: String, runID: UUID, root: URL
+  ) async -> (target: String, system: VirtualMachine.System)? {
+    guard let store = vms else { return nil }
     if store.machines.isEmpty { await store.refresh() }
     guard let vm = store.machines.first(where: { $0.name == vmName }) else {
-      setStep(root, step.id) { $0.note = "no UTM machine named \(vmName)" }
-      return false
+      setStep(root, stepID) { $0.note = "no UTM machine named \(vmName)" }
+      return nil
     }
     if !vm.status.isRunning {
-      append(runID, step.id, root, "Starting \(vm.name)…")
+      append(runID, stepID, root, "Starting \(vm.name)…")
       await store.start(vm)
     }
     var address: String?
@@ -272,19 +321,15 @@ final class WorkflowStore {
       address = await store.address(of: vm)
       if address != nil { break }
       try? await Task.sleep(for: .seconds(4))
-      if Task.isCancelled { return false }
+      if Task.isCancelled { return nil }
     }
     guard let address else {
-      setStep(root, step.id) { $0.note = "no address for \(vm.name)" }
-      return false
+      setStep(root, stepID) { $0.note = "no address for \(vm.name)" }
+      return nil
     }
     let settings = VMSettings.load(vm.id)
     let user = settings.user.isEmpty ? VMStore.sshUser(for: vm) : settings.user
-    let system = settings.system ?? vm.guessedSystem
-    let process = VMRunner.process(
-      project: root, on: "\(user)@\(address)", system: system,
-      command: step.command ?? VMRunner.defaultCommand(for: root, system: system))
-    return await stream(process, stepID: step.id, runID: runID, root: root) == 0
+    return ("\(user)@\(address)", settings.system ?? vm.guessedSystem)
   }
 
   /// Streams a process into the step's log; answers its exit code.
@@ -400,6 +445,98 @@ final class WorkflowStore {
     let parts = text.split(separator: ":").compactMap { Int($0) }
     guard parts.count == 2, (0..<24).contains(parts[0]), (0..<60).contains(parts[1]) else { return nil }
     return (parts[0], parts[1])
+  }
+
+  // MARK: - Release history
+
+  /// A run's own folder for release.sh's `--output`: `build/release/runs/<date>-<build>` in the project.
+  static func outputFolder(for run: WorkflowRun, in root: URL) -> URL {
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.dateFormat = "yyyy-MM-dd-HHmmss"
+    let name = formatter.string(from: run.startedAt) + (run.buildNumber.map { "-\($0)" } ?? "")
+    return root.appendingPathComponent("build/release/runs/\(name)", isDirectory: true)
+  }
+
+  /// A finished run, by id.
+  func run(_ id: UUID, in root: URL) -> WorkflowRun? {
+    history[root]?.first { $0.id == id }
+  }
+
+  /// Whether Dev may delete an artifact: a file in the run's own folder (screenshots, say, live in the project).
+  static func canDelete(_ artifact: WorkflowRun.Artifact, of run: WorkflowRun) -> Bool {
+    guard let output = run.output else { return false }
+    return artifact.path.hasPrefix(output + "/")
+  }
+
+  /// Moves a finished run's folder (every file it made there) to the Trash and drops the run from the history.
+  func deleteRun(_ id: UUID, in root: URL) throws {
+    guard let run = run(id, in: root) else { return }
+    if let output = run.output, FileManager.default.fileExists(atPath: output) {
+      try FileManager.default.trashItem(at: URL(fileURLWithPath: output), resultingItemURL: nil)
+    }
+    history[root]?.removeAll { $0.id == id }
+    logs[id] = nil
+    saveHistory()
+  }
+
+  /// Moves one artifact of a finished run to the Trash.
+  func deleteArtifact(_ artifact: WorkflowRun.Artifact, of id: UUID, in root: URL) throws {
+    guard let index = history[root]?.firstIndex(where: { $0.id == id }) else { return }
+    if FileManager.default.fileExists(atPath: artifact.path) {
+      try FileManager.default.trashItem(at: artifact.url, resultingItemURL: nil)
+    }
+    history[root]![index].artifacts = history[root]![index].files.filter { $0.path != artifact.path }
+    saveHistory()
+  }
+
+  /// The run's result archive, made now (release.sh's bundle step over its folder) when its workflow had no
+  /// Result Archive step; nil, with the reason in `notice`, when it can't be made.
+  func makeBundle(for id: UUID, in root: URL) async -> WorkflowRun.Artifact? {
+    guard let run = run(id, in: root) else { return nil }
+    if let bundle = run.bundle, FileManager.default.fileExists(atPath: bundle.path) { return bundle }
+    guard let script = ReleaseRunner.scriptURL, let output = run.output else { return nil }
+    var arguments = [script.path, "--project", root.path, "--output", output]
+    if let version = run.version { arguments += ["--version", version] }
+    arguments.append("bundle")
+    let process = LineProcess("/bin/bash", arguments, directory: root)
+    var made: [WorkflowRun.Artifact] = []
+    var failure: String?
+    do {
+      for try await line in process.lines() {
+        if let artifact = WorkflowRun.Artifact(marker: line, stepID: "bundle") { made.append(artifact) }
+        if line.hasPrefix("::fail ") { failure = line.split(separator: " ", maxSplits: 2).dropFirst(2).first.map(String.init) }
+      }
+    } catch {
+      failure = error.localizedDescription
+    }
+    guard process.status == 0, !made.isEmpty else {
+      notice = "No result archive: \(failure ?? "release.sh bundle failed")."
+      return nil
+    }
+    let sized = await Task.detached(priority: .utility) {
+      made.map { file in
+        var file = file
+        file.size = WorkflowRun.Artifact.size(of: file.url)
+        return file
+      }
+    }.value
+    guard let index = history[root]?.firstIndex(where: { $0.id == id }) else { return nil }
+    let paths = Set(sized.map(\.path))
+    history[root]![index].artifacts = history[root]![index].files.filter { !paths.contains($0.path) } + sized
+    saveHistory()
+    return sized.first { $0.kind == "bundle" }
+  }
+
+  /// Keeps the newest 50 runs, and every older one that still has files (they go when the reader deletes them).
+  private func trimHistory(_ root: URL) {
+    guard var runs = history[root], runs.count > 50 else { return }
+    var kept = 0
+    runs = runs.filter { run in
+      kept += 1
+      return kept <= 50 || !run.files.isEmpty
+    }
+    history[root] = runs
   }
 
   // MARK: - History

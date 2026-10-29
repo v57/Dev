@@ -12,7 +12,7 @@ import Observation
 
 /// One step of `release.sh`, in the order the script runs them.
 nonisolated enum ReleaseStep: String, CaseIterable, Identifiable, Sendable {
-  case check, build, test, screenshots, archive, direct, github, appstore
+  case check, build, test, screenshots, archive, direct, bundle, github, appstore, googleplay, msstore
 
   var id: String { rawValue }
 
@@ -24,21 +24,27 @@ nonisolated enum ReleaseStep: String, CaseIterable, Identifiable, Sendable {
     case .screenshots: return "Screenshots"
     case .archive: return "Archive"
     case .direct: return "Sign & Notarize"
+    case .bundle: return "Result Archive"
     case .github: return "GitHub Release"
     case .appstore: return "App Store Connect"
+    case .googleplay: return "Google Play"
+    case .msstore: return "Microsoft Store"
     }
   }
 
   var detail: String {
     switch self {
-    case .check: return "Tools, certificate, notary profile, GitHub sign-in"
+    case .check: return "Tools, certificate, notary profile, GitHub sign-in, the build machine"
     case .build: return "A release build"
     case .test: return "The test scheme"
     case .screenshots: return "The scenes in .dev/screenshots.json, or a UI test per locale"
-    case .archive: return "An archive with the version and build number"
+    case .archive: return "The release build, packaged: .xcarchive, .dmg, .zip, .tar.gz or .apk"
     case .direct: return "Developer ID, notarized and stapled .zip and .dmg"
-    case .github: return "A release with the download files"
+    case .bundle: return "One zip of every platform's files, with a manifest"
+    case .github: return "A release with every platform's download files"
     case .appstore: return "Uploads the archive"
+    case .googleplay: return "Uploads the Android build"
+    case .msstore: return "Submits the Windows build"
     }
   }
 
@@ -49,6 +55,51 @@ nonisolated enum ReleaseStep: String, CaseIterable, Identifiable, Sendable {
     case .direct: return "uploads the app to Apple's notary service"
     case .github: return "creates a GitHub release with the download files"
     case .appstore: return "uploads a build to App Store Connect"
+    case .googleplay: return "uploads a build to Google Play"
+    case .msstore: return "submits a build to the Microsoft Store"
+    default: return nil
+    }
+  }
+
+  /// Steps that build or ship one platform; the others (the result archive, the GitHub release) take every
+  /// platform's files in the run.
+  var takesPlatform: Bool { self != .bundle && self != .github }
+}
+
+// MARK: - ReleasePlatform
+
+/// What a release step builds for: Apple platforms on this Mac, Windows and Linux on a machine of that system
+/// (a UTM VM), Android cross-compiled on this Mac. release.sh's `--platform`.
+nonisolated enum ReleasePlatform: String, CaseIterable, Identifiable, Sendable {
+  case macos, ios, windows, linux, android
+
+  var id: String { rawValue }
+
+  var title: String {
+    switch self {
+    case .macos: return "macOS"
+    case .ios: return "iOS"
+    case .windows: return "Windows"
+    case .linux: return "Linux"
+    case .android: return "Android"
+    }
+  }
+
+  var systemImage: String {
+    switch self {
+    case .macos: return "laptopcomputer"
+    case .ios: return "iphone"
+    case .windows: return "pc"
+    case .linux: return "terminal"
+    case .android: return "candybarphone"
+    }
+  }
+
+  /// The system of the machine that builds it, for the platforms that don't build on this Mac.
+  var buildSystem: VirtualMachine.System? {
+    switch self {
+    case .windows: return .windows
+    case .linux: return .linux
     default: return nil
     }
   }
@@ -89,6 +140,16 @@ final class ReleaseRunner {
     return ["GH_TOKEN": token]
   }
 
+  /// What release.sh gets from Dev besides its arguments: the account's GitHub sign-in, this app as dev-screenshots
+  /// (`Dev --screenshots`) and the archive's release link (xcodebuild-release and its tools: CodeActions' copy
+  /// inside this app).
+  static func environment(forAccount accountID: String) -> [String: String] {
+    var environment = gitHubEnvironment(forAccount: accountID)
+    if let executable = Bundle.main.executablePath { environment["DEV_APP_EXECUTABLE"] = executable }
+    if let tools = ReleaseTools.folder { environment["RELEASE_TOOLS"] = tools.path }
+    return environment
+  }
+
   func run(
     _ steps: [ReleaseStep], in root: URL, version: String, dryRun: Bool = false,
     accountID: String = KeychainTokenStore.personalAccountID
@@ -104,12 +165,7 @@ final class ReleaseRunner {
     if !version.isEmpty { arguments += ["--version", version] }
     if dryRun { arguments.append("--dry-run") }
     arguments += steps.map(\.rawValue)
-    // The GitHub sign-in of the project's account.
-    var environment = Self.gitHubEnvironment(forAccount: accountID)
-    // The screenshots step runs this app as dev-screenshots (`Dev --screenshots`).
-    if let executable = Bundle.main.executablePath { environment["DEV_APP_EXECUTABLE"] = executable }
-    // The archive's release link (xcodebuild-release and its tools): CodeActions' copy inside this app.
-    if let tools = ReleaseTools.folder { environment["RELEASE_TOOLS"] = tools.path }
+    let environment = Self.environment(forAccount: accountID)
     let process = LineProcess("/bin/bash", arguments, directory: root, environment: environment)
     self.process = process
     isRunning = true
@@ -150,8 +206,7 @@ final class ReleaseRunner {
     case "skip": if let step { states[step] = .skipped(reason) }
     case "fail": if let step { states[step] = .failed(reason) }
     case "artifact":
-      let path = String(line.dropFirst("::artifact ".count))
-      artifacts.append(URL(fileURLWithPath: path))
+      if let artifact = WorkflowRun.Artifact(marker: line, stepID: "") { artifacts.append(artifact.url) }
     case "finished": finishedVersion = parts.count > 1 ? parts[1] : ""
     default: break
     }

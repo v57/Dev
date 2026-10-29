@@ -122,7 +122,7 @@ nonisolated enum MCPServer {
            ["project": projectArg], required: ["project"]),
       tool("list_workflows", "A project's CI workflows: names, triggers and steps.",
            ["project": projectArg], required: ["project"]),
-      tool("set_workflow", "Creates or replaces a workflow (.dev/workflows/<id>.json). Fields: id, name, trigger {branch, tag, daily HH:MM}, steps [{id, name, kind release|screenshots|command, releaseStep build|test|screenshots|archive|direct|github|appstore, command, runner mac|vm:<UTM name>, parallel}], continueOnFailure.",
+      tool("set_workflow", "Creates or replaces a workflow (.dev/workflows/<id>.json). Fields: id, name, trigger {branch, tag, daily HH:MM}, steps [{id, name, kind release|screenshots|command, releaseStep check|build|test|screenshots|archive|direct|bundle|github|appstore|googleplay|msstore, platform macos|ios|windows|linux|android (release steps; empty is release.env's PLATFORM), command, runner mac|vm:<UTM name> (commands, and release steps for windows and linux), parallel}], continueOnFailure. archive packages each platform (.xcarchive + .dmg/.zip on macOS, .xcarchive on iOS, .zip on Windows, .tar.gz on Linux); bundle makes the run's result archive (every platform's files + manifest.json).",
            ["project": projectArg, "workflow": ["type": "object"]], required: ["project", "workflow"]),
       tool("delete_workflow", "Deletes a workflow file.",
            ["project": projectArg, "workflow": ["type": "string", "description": "The workflow id"]], required: ["project", "workflow"]),
@@ -130,7 +130,7 @@ nonisolated enum MCPServer {
            ["project": projectArg, "workflow": ["type": "string", "description": "The workflow id"],
             "version": ["type": "string", "description": "Marketing version; empty reads the project's"]],
            required: ["project", "workflow"]),
-      tool("get_runs", "A project's recent workflow runs, newest first, with each step's state and the end of its log.",
+      tool("get_runs", "A project's recent workflow runs, newest first, with each step's state, the end of its log, and the files the run made (artifacts: path, kind, platform, size).",
            ["project": projectArg], required: ["project"]),
     ]
   }

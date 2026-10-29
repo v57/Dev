@@ -8,10 +8,11 @@ import ComponentKit
 import DevDesktop
 import SwiftUI
 
-/// The Workflows tab: a project's CI. Left, its workflows and their runs;
-/// middle, the steps of the selected run (or of the workflow, before it ran);
-/// right, the selected step — where it runs, what it runs, and its log.
-/// Every edit is written to `.dev/workflows`, which agents edit over MCP too.
+/// The Workflows tab: a project's CI. Left, its workflows and their runs, and
+/// the release history (every run that made files); middle, the steps of the
+/// selected run (or of the workflow, before it ran) and the files it made, by
+/// platform; right, the selected step — where it runs, what it runs, and its
+/// log. Every edit is written to `.dev/workflows`, which agents edit over MCP too.
 struct WorkflowsView: View {
   let root: URL
   let projectName: String
@@ -29,6 +30,7 @@ struct WorkflowsView: View {
   @State private var showsReleaseSettings = false
   @State private var isDetecting = false
   @State private var showsAddStep = false
+  @State private var deletingRun: WorkflowRun?
 
   var body: some View {
     let list = store.workflows(for: root)
@@ -137,7 +139,12 @@ struct WorkflowsView: View {
   private nonisolated enum Pick: Hashable, Sendable {
     case workflow(String)
     case run(UUID)
+    /// A run picked in the release history (it may be another workflow's).
+    case release(UUID)
   }
+
+  /// The release history's row is the one selected, not the workflow's run row.
+  @State private var pickedRelease = false
 
   /// The list holds two marks: the run the middle shows is selected, its workflow is current (selected itself
   /// before it ever ran).
@@ -145,10 +152,11 @@ struct WorkflowsView: View {
     Binding(
       get: {
         guard let selected else { return nil }
-        if let run = currentRun(selected) { return .run(run.id) }
+        if let run = currentRun(selected) { return pickedRelease ? .release(run.id) : .run(run.id) }
         return .workflow(selected.id)
       },
       set: { pick in
+        pickedRelease = false
         switch pick {
         case .workflow(let id):
           workflowID = id
@@ -156,6 +164,13 @@ struct WorkflowsView: View {
           stepID = nil
         case .run(let id):
           runID = id
+        case .release(let id):
+          if let run = store.runs(for: root).first(where: { $0.id == id }), run.workflowID != workflowID {
+            workflowID = run.workflowID
+            stepID = nil
+          }
+          runID = id
+          pickedRelease = true
         case nil:
           break
         }
@@ -213,10 +228,67 @@ struct WorkflowsView: View {
             .subtitle {
               Text(runNote(run)).foregroundStyle(run.state == .failed ? AnyShapeStyle(Hue.red.text) : AnyShapeStyle(.kitSecondary))
             }
+            .kitContextMenu { runMenu(run) }
+          }
+        }
+      }
+      let releases = store.runs(for: root).filter { !$0.files.isEmpty }
+      if !releases.isEmpty {
+        KitSection(
+          "Releases", meta: releases.count == 1 ? "1 run with files" : "\(releases.count) runs with files",
+          systemImage: "shippingbox", hue: .green
+        ) {
+          ForEach(releases) { run in
+            SidebarRow(
+              value: Pick.release(run.id), releaseTitle(run), systemImage: "shippingbox", hue: .green,
+              status: Self.status(for: run.state)
+            )
+            .subtitle { Text(releaseNote(run)).foregroundStyle(.kitSecondary) }
+            .kitContextMenu { runMenu(run) }
           }
         }
       }
     }
+    .kitConfirmation(
+      "Delete this run?",
+      isPresented: Binding(get: { deletingRun != nil }, set: { if !$0 { deletingRun = nil } }),
+      message: "Its folder and every file in it (\(deletingRun?.totalSize.byteString ?? "")) go to the Trash, and the run leaves the history.",
+      systemImage: "trash", confirm: "Delete Run"
+    ) {
+      guard let run = deletingRun else { return }
+      do {
+        try store.deleteRun(run.id, in: root)
+        if runID == run.id { runID = nil }
+      } catch {
+        saveError = error.localizedDescription
+      }
+    }
+  }
+
+  @ViewBuilder
+  private func runMenu(_ run: WorkflowRun) -> some View {
+    if let output = run.output, FileManager.default.fileExists(atPath: output) {
+      Button("Show in Finder", systemImage: "folder") { KitDesktop.reveal([URL(fileURLWithPath: output)]) }
+    }
+    if run.state != .running {
+      Button("Delete Run…", systemImage: "trash", role: .destructive) { deletingRun = run }
+    }
+  }
+
+  /// "Release 0.1 (136)".
+  private func releaseTitle(_ run: WorkflowRun) -> String {
+    var title = run.workflowName
+    if let version = run.version { title += " \(version)" }
+    if let build = run.buildNumber { title += " (\(build))" }
+    return title
+  }
+
+  /// "macOS · iOS · Windows · 412 MB · 29 Oct".
+  private func releaseNote(_ run: WorkflowRun) -> String {
+    var parts = run.platforms.map(\.title)
+    if run.totalSize > 0 { parts.append(run.totalSize.byteString) }
+    parts.append(run.startedAt.formatted(date: .abbreviated, time: .omitted))
+    return parts.joined(separator: " · ")
   }
 
   private func runNote(_ run: WorkflowRun) -> String {
@@ -354,6 +426,19 @@ struct WorkflowsView: View {
             Button(step.title) { add(Workflow.Step(id: uniqueID(step.rawValue, in: workflow), name: step.title, kind: .release, releaseStep: step.rawValue), to: workflow) }
           }
           Divider()
+          // An archive for another platform: on this Mac (iOS, Android), or on the VM of its system.
+          ForEach([ReleasePlatform.macos, .ios, .android]) { platform in
+            Button("Archive for \(platform.title)", systemImage: platform.systemImage) {
+              add(archiveStep(platform, runner: "mac", in: workflow), to: workflow)
+            }
+          }
+          ForEach(vms.machines) { vm in
+            let platform: ReleasePlatform = (VMSettings.load(vm.id).system ?? vm.guessedSystem) == .windows ? .windows : .linux
+            Button("Archive for \(platform.title) on \(vm.name)", systemImage: platform.systemImage) {
+              add(archiveStep(platform, runner: "vm:" + vm.name, in: workflow), to: workflow)
+            }
+          }
+          Divider()
           Button("Screenshots", systemImage: "camera") { add(Workflow.Step(id: uniqueID("screenshots", in: workflow), name: "Screenshots", kind: .screenshots), to: workflow) }
           Button("Command on This Mac", systemImage: "laptopcomputer") { add(Workflow.Step(id: uniqueID("command", in: workflow), name: "Command", kind: .command, command: "swift test"), to: workflow) }
           ForEach(vms.machines) { vm in
@@ -370,6 +455,13 @@ struct WorkflowsView: View {
         .padding(.vertical, 6)
         .listRowBackground(Color.clear)
         .listRowSeparator(.hidden)
+        if let run, !run.files.isEmpty {
+          RunArtifacts(run: run, root: root) { runID = nil }
+            .padding(.top, 10)
+            .padding(.horizontal, 8)
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+        }
       }
       .listStyle(.plain)
       .scrollContentBackground(.hidden)
@@ -452,6 +544,19 @@ struct WorkflowsView: View {
         FormCard {
           FormRow("Name", systemImage: "character.cursor.ibeam", hue: .gray,
                   field: TextField("Name", text: binding(workflow, index, \.name)))
+          if step.kind == .release, step.releaseStep.flatMap(ReleaseStep.init)?.takesPlatform == true {
+            FormRow(
+              "Platform", help: step.platform == nil ? "release.env's PLATFORM" : nil,
+              systemImage: step.releasePlatform?.systemImage ?? "square.stack", hue: .blue
+            ) {
+              KitPicker(
+                "Platform",
+                selection: Binding(
+                  get: { step.platform ?? "" },
+                  set: { value in update(workflow) { $0.steps[index].platform = value.isEmpty ? nil : value } }),
+                options: [("Default", "")] + ReleasePlatform.allCases.map { ($0.title, $0.rawValue) })
+            }
+          }
           FormRow("Runs On", help: step.runnerTitle, systemImage: "laptopcomputer", hue: .gray) {
             KitPicker("Runs On", selection: binding(workflow, index, \.runner), segments: runners(for: step))
           }
@@ -540,12 +645,21 @@ struct WorkflowsView: View {
   /// Where a step can run: this Mac, and a command also on each VM (a VM that has gone keeps its row).
   private func runners(for step: Workflow.Step) -> [KitSegment<String>] {
     var runners = [KitSegment(DevDesktop.thisComputer, value: "mac", systemImage: "laptopcomputer")]
-    guard step.kind == .command else { return runners }
+    guard step.kind == .command || step.releasePlatform?.buildSystem != nil else { return runners }
     runners += vms.machines.map { KitSegment("\($0.name) (VM)", value: "vm:" + $0.name, systemImage: "desktopcomputer") }
     if let name = step.vmName, !vms.machines.contains(where: { $0.name == name }) {
       runners.append(KitSegment("\(name) (VM)", value: step.runner, systemImage: "desktopcomputer"))
     }
     return runners
+  }
+
+  /// An archive step for a platform; one that follows another archive runs with it (the VMs build at once).
+  private func archiveStep(_ platform: ReleasePlatform, runner: String, in workflow: Workflow) -> Workflow.Step {
+    let follows = workflow.steps.last.map { $0.releaseStep == ReleaseStep.archive.rawValue && $0.runsOnVM } ?? false
+    return Workflow.Step(
+      id: uniqueID("archive-\(platform.rawValue)", in: workflow), name: "Archive · \(platform.title)", kind: .release,
+      releaseStep: ReleaseStep.archive.rawValue, platform: platform.rawValue, runner: runner,
+      parallel: follows && runner != "mac")
   }
 
   private func uniqueID(_ base: String, in workflow: Workflow) -> String {

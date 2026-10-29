@@ -31,7 +31,7 @@ struct ReleaseSettingsSheet: View {
             "Platform",
             selection: Binding(
               get: { config["PLATFORM"].isEmpty ? "macos" : config["PLATFORM"] }, set: { config["PLATFORM"] = $0 }),
-            options: [("macOS", "macos"), ("iOS", "ios")])
+            options: ReleasePlatform.allCases.map { ($0.title, $0.rawValue) })
         }
         field("Team ID", "TEAM_ID", "ABCDE12345")
       }
@@ -64,6 +64,22 @@ struct ReleaseSettingsSheet: View {
           }
         }
       }
+      FormCard(
+        "Windows, Linux and Android",
+        footer: "Windows and Linux build on the VM their workflow step runs on, from this Mac's checkouts of every package the app uses (V57_LOCAL=1). Android isn't built yet."
+      ) {
+        field("Package", "PACKAGE_PATH", "App (its Package.swift)")
+        field("Windows product", "WINDOWS_PRODUCT", "\(appName)WinUI")
+        field("Linux product", "LINUX_PRODUCT", appName)
+        GroupRow("Linux runtime built in", help: "A folder that runs without Swift installed") {
+          Toggle("Linux runtime built in", isOn: Binding(
+            get: { config["LINUX_STATIC"] != "no" },
+            set: { config["LINUX_STATIC"] = $0 ? "" : "no" }))
+          .labelsHidden().toggleStyle(.kitSwitch)
+        }
+        field("Android product", "ANDROID_PRODUCT", "\(appName)Android")
+        field("Android keystore", "ANDROID_KEYSTORE", "the release key, kept on this Mac")
+      }
       FormCard("GitHub") {
         field("Repository", "GITHUB_REPO", "owner/repo")
         GroupRow("Create as draft") {
@@ -85,6 +101,25 @@ struct ReleaseSettingsSheet: View {
         }
         AppStoreConnectKeyFields(config: $config)
       }
+      FormCard(
+        "Google Play and Microsoft Store",
+        footer: "Not built yet: their steps check the settings and say what they still need."
+      ) {
+        GroupRow("Upload to Google Play") {
+          Toggle("Upload to Google Play", isOn: Binding(
+            get: { config["GOOGLE_PLAY"] == "yes" },
+            set: { config["GOOGLE_PLAY"] = $0 ? "yes" : "" }))
+          .labelsHidden().toggleStyle(.kitSwitch)
+        }
+        field("Play service account key", "GOOGLE_PLAY_KEY_PATH", "~/.google-play/key.json")
+        GroupRow("Submit to the Microsoft Store") {
+          Toggle("Submit to the Microsoft Store", isOn: Binding(
+            get: { config["MS_STORE"] == "yes" },
+            set: { config["MS_STORE"] = $0 ? "yes" : "" }))
+          .labelsHidden().toggleStyle(.kitSwitch)
+        }
+        field("Store ID", "MS_STORE_APP_ID", "9NBLGGH4R315")
+      }
     } footer: {
       Button("Cancel") { dismiss() }
         .keyboardShortcut(.cancelAction)
@@ -95,6 +130,10 @@ struct ReleaseSettingsSheet: View {
       .buttonStyle(.kitPrimary)
       .keyboardShortcut(.defaultAction)
     }
+  }
+
+  private var appName: String {
+    (config["APP_NAME"].isEmpty ? config["SCHEME"] : config["APP_NAME"]).replacingOccurrences(of: " ", with: "")
   }
 
   /// The notary profile's check, as the row's line.
