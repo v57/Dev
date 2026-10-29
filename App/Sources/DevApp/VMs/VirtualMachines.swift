@@ -205,7 +205,29 @@ final class VMStore {
       else { continue }
       return String(ip.dropFirst().dropLast())
     }
-    return nil
+    // An Apple Virtualization guest on its own bridge (192.168.65.x) ignores the broadcast, and its ARP entry
+    // expires while it's idle; the address vmnet's DHCP server last leased to the card still finds it.
+    let leases = (try? String(contentsOfFile: "/var/db/dhcpd_leases", encoding: .utf8)) ?? ""
+    return Self.leasedAddress(of: mac, in: leases)
+  }
+
+  /// The address of the newest lease for a MAC in `/var/db/dhcpd_leases` (`hw_address=1,<mac>`; `lease` is the
+  /// expiry in hex seconds).
+  nonisolated static func leasedAddress(of mac: String, in leases: String) -> String? {
+    var best: (ip: String, expiry: Int)?
+    for entry in leases.components(separatedBy: "}") {
+      var fields: [String: String] = [:]
+      for line in entry.split(separator: "\n") {
+        let parts = line.trimmingCharacters(in: .whitespaces).split(separator: "=", maxSplits: 1)
+        if parts.count == 2 { fields[String(parts[0])] = String(parts[1]) }
+      }
+      guard let hardware = fields["hw_address"]?.split(separator: ",").last,
+            normalizedMAC(String(hardware)) == mac, let ip = fields["ip_address"]
+      else { continue }
+      let expiry = Int(fields["lease"]?.replacingOccurrences(of: "0x", with: "") ?? "", radix: 16) ?? 0
+      if best == nil || expiry > best!.expiry { best = (ip, expiry) }
+    }
+    return best?.ip
   }
 
   /// `2:57:80:a8:46:a5` and `02:57:80:A8:46:A5` are the same card.
