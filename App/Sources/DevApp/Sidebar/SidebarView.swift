@@ -385,12 +385,7 @@ private struct ProjectRow: View {
     if let icon = row.vaultIcon.flatMap(Image.init(data:)) {
       Avatar(name: row.name, image: icon, kind: .thing, size: 18)
     } else if let icon = row.iconImage {
-      icon
-        .resizable()
-        .interpolation(.high)
-        .aspectRatio(contentMode: .fit)
-        .frame(width: 18, height: 18)
-        .clipShape(.rect(cornerRadius: 18 * 0.225, style: .continuous))
+      KitAppIcon(image: icon, size: 18)
     } else {
       RowTile(systemImage: "folder", hue: .blue)
     }

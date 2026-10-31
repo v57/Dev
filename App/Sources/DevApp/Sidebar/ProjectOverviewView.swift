@@ -155,15 +155,15 @@ struct ProjectOverviewView: View {
           if let count = facts.commitCount {
             Text("·")
             Text("Next build \(count + 1)")
-              .help("The build number is the commit count (git rev-list --count HEAD)")
+              .kitHelp("Next build", meta: "The build number is the commit count (git rev-list --count HEAD)")
           }
           if let last = facts.lastCommit {
             Text("·")
             Text("Last commit \(last, format: .relative(presentation: .named))")
           }
         }
-        .font(.callout)
-        .foregroundStyle(.secondary)
+        .kitFont(.callout)
+        .foregroundStyle(.kitSecondary)
       }
       Spacer()
       if let root = row.rootURL {
@@ -172,6 +172,7 @@ struct ProjectOverviewView: View {
         } label: {
           Label("Open in \(ProjectOpener.appName)", systemImage: "arrow.up.forward.app")
         }
+        .buttonStyle(.kit)
         .controlSize(.large)
       }
     }
@@ -183,38 +184,35 @@ struct ProjectOverviewView: View {
     OverviewCard(title: "Localization", systemImage: "globe", trailing: row.catalogExists ? row.catalogURL.lastPathComponent : nil) {
       if row.languages.isEmpty {
         Text(row.catalogExists ? "Open Localization to read the catalog." : "This project has no String Catalog yet.")
-          .foregroundStyle(.secondary)
+          .foregroundStyle(.kitSecondary)
           .frame(maxWidth: .infinity, alignment: .leading)
       } else {
         Text("\(row.keyCount) strings · \(row.languages.count) languages")
-          .font(.callout)
-          .foregroundStyle(.secondary)
+          .kitFont(.callout)
+          .foregroundStyle(.kitSecondary)
         VStack(spacing: 7) {
           ForEach(row.languages.prefix(5)) { language in
             HStack(spacing: 10) {
               Text(language.name)
                 .lineLimit(1)
                 .frame(width: 84, alignment: .leading)
-              ProgressView(value: language.fraction)
-                .progressViewStyle(.linear)
+              KitProgressBar(value: language.fraction)
               Text(language.fraction, format: .percent.precision(.fractionLength(0)))
                 .monospacedDigit()
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.kitSecondary)
                 .frame(width: 40, alignment: .trailing)
             }
-            .font(.callout)
+            .kitFont(.callout)
           }
         }
       }
     } footer: {
       if row.needsReview > 0 {
-        Label("\(row.needsReview) need review", systemImage: "circle.fill")
-          .labelStyle(DotLabelStyle(color: .orange))
-          .foregroundStyle(.orange)
+        StatusLabel("\(row.needsReview) need review", hue: .orange)
       }
       let missing = row.languages.reduce(0) { $0 + $1.missing }
       if missing > 0 {
-        Text("\(missing) missing").foregroundStyle(.secondary)
+        Text("\(missing) missing").foregroundStyle(.kitSecondary)
       }
       Spacer()
       Button(row.needsReview > 0 ? "Review" : "Open") { model.projectTool = .localization }
@@ -231,46 +229,43 @@ struct ProjectOverviewView: View {
         if facts.icon.hasSet || facts.icon.hasIconComposer {
           iconImage(size: 96)
         } else {
-          RoundedRectangle(cornerRadius: 22)
-            .strokeBorder(.tertiary, style: StrokeStyle(lineWidth: 1.5, dash: [5]))
-            .frame(width: 96, height: 96)
-            .overlay(Image(systemName: "app.dashed").font(.title).foregroundStyle(.secondary))
+          KitAppIcon(image: nil, size: 96 * 0.82).frame(width: 96, height: 96)
         }
         if facts.icon.hasSet {
           Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 5) {
             GridRow {
-              Text("Source").foregroundStyle(.secondary)
+              Text("Source").foregroundStyle(.kitSecondary)
               Text("\(facts.icon.largest) × \(facts.icon.largest) px").fontWeight(.semibold)
             }
             GridRow {
-              Text("Sizes").foregroundStyle(.secondary)
+              Text("Sizes").foregroundStyle(.kitSecondary)
               Text("\(facts.icon.sizes), from \(facts.icon.smallest) to \(facts.icon.largest) px")
             }
             GridRow {
-              Text("Files").foregroundStyle(.secondary)
+              Text("Files").foregroundStyle(.kitSecondary)
               Text("PNG · \(facts.icon.bytes.byteString) in all")
             }
             GridRow {
-              Text("Glass").foregroundStyle(.secondary)
+              Text("Glass").foregroundStyle(.kitSecondary)
               Text(facts.icon.hasIconComposer ? "AppIcon.icon" : "No Icon Composer file")
             }
           }
-          .font(.callout)
+          .kitFont(.callout)
         } else if facts.icon.hasIconComposer {
           Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 5) {
             GridRow {
-              Text("Glass").foregroundStyle(.secondary)
+              Text("Glass").foregroundStyle(.kitSecondary)
               Text("AppIcon.icon").fontWeight(.semibold)
             }
             GridRow {
-              Text("Sizes").foregroundStyle(.secondary)
+              Text("Sizes").foregroundStyle(.kitSecondary)
               Text("Rendered by Xcode")
             }
           }
-          .font(.callout)
+          .kitFont(.callout)
         } else {
           Text("No app icon yet.")
-            .foregroundStyle(.secondary)
+            .foregroundStyle(.kitSecondary)
         }
       }
     } footer: {
@@ -295,7 +290,7 @@ struct ProjectOverviewView: View {
           Text("\(active.workflowName) \(active.title)").fontWeight(.semibold)
           Spacer()
           Text(active.steps.first { $0.state == .running }?.name ?? "Starting")
-            .foregroundStyle(Color.accentColor)
+            .foregroundStyle(Hue.accent.text)
         }
         .padding(10)
         .kitSurface(.raised, cornerRadius: KitMetrics.radiusLarge)
@@ -310,10 +305,10 @@ struct ProjectOverviewView: View {
             Text(workflow.name)
             Spacer()
             Text(last.map { "\($0.state.rawValue) · \($0.title)" } ?? workflow.trigger.summary)
-              .foregroundStyle(.secondary)
+              .foregroundStyle(.kitSecondary)
               .lineLimit(1)
           }
-          .font(.callout)
+          .kitFont(.callout)
         }
       }
     } footer: {
@@ -330,10 +325,10 @@ struct ProjectOverviewView: View {
     VStack(alignment: .leading, spacing: 14) {
       HStack(spacing: 10) {
         Text("App Store Screenshots")
-          .font(.title3.weight(.semibold))
+          .kitFont(.title3).fontWeight(.semibold)
         if let library, let first = library.shots.first {
           Text("\(first.pixelWidth) × \(first.pixelHeight)" + (library.build.map { " · build \($0)" } ?? ""))
-            .foregroundStyle(.secondary)
+            .foregroundStyle(.kitSecondary)
           let outdated = library.outdated.count
           if outdated > 0 {
             // dev-screenshots' status: commits under `watch`, or edited scenes, since the pictures.
@@ -370,7 +365,7 @@ struct ProjectOverviewView: View {
           Text(library?.config == nil
                ? "No screenshot scenes. Describe them in .dev/screenshots.json, and the Screenshots tab captures them and frames them for the App Store."
                : "No screenshots captured yet. The Screenshots tab takes the scenes in .dev/screenshots.json and frames them for the App Store.")
-            .foregroundStyle(.secondary)
+            .foregroundStyle(.kitSecondary)
           Spacer()
         }
       }
@@ -397,30 +392,11 @@ struct ProjectOverviewView: View {
     return shots.filter { $0.target == target && $0.appearance == appearance }
   }
 
-  @ViewBuilder
+  /// The exported icon (trimmed to its shape and drawn square, an Icon Composer icon's whole canvas), else the
+  /// project's thumbnail, clipped to the app icon's squircle inside Apple's grid margin.
   private func iconImage(size: CGFloat) -> some View {
-    if let preview = facts.icon.preview.flatMap(Image.init(data:)) {
-      // Trimmed to its shape and drawn square (an Icon Composer icon's whole canvas): clipped to the app icon's.
-      preview
-        .resizable()
-        .interpolation(.high)
-        .frame(width: size * 0.82, height: size * 0.82)
-        .clipShape(RoundedRectangle(cornerRadius: size * 0.82 * 0.225, style: .continuous))
-        .frame(width: size, height: size)
-        .shadow(color: .black.opacity(0.15), radius: 6, y: 3)
-    } else if let image = row.iconImage {
-      image
-        .resizable()
-        .interpolation(.high)
-        .aspectRatio(contentMode: .fit)
-        .frame(width: size, height: size)
-        .shadow(color: .black.opacity(0.15), radius: 6, y: 3)
-    } else {
-      RoundedRectangle(cornerRadius: size * 0.225)
-        .fill(.quaternary)
-        .frame(width: size, height: size)
-        .overlay(Image(systemName: "folder").font(.system(size: size * 0.4)).foregroundStyle(.secondary))
-    }
+    KitAppIcon(image: facts.icon.preview.flatMap(Image.init(data:)) ?? row.iconImage, size: size * 0.82)
+      .frame(width: size, height: size)
   }
 }
 
@@ -450,18 +426,7 @@ struct OverviewCard<Content: View, Footer: View>: View {
   }
 }
 
-/// A small coloured dot in front of a label.
-struct DotLabelStyle: LabelStyle {
-  let color: Color
 
-  func makeBody(configuration: Configuration) -> some View {
-    HStack(spacing: 5) {
-      Circle().fill(color).frame(width: 7, height: 7)
-      configuration.title
-        .foregroundStyle(.kitLabel)
-    }
-  }
-}
 
 /// One screenshot at thumbnail size, with its name and an "outdated" dot.
 struct ScreenshotThumbnail: View {
@@ -476,11 +441,11 @@ struct ScreenshotThumbnail: View {
       ZStack(alignment: .topTrailing) {
         AsyncImageFile(url: picture.url)
           .aspectRatio(CGFloat(max(picture.width, 1)) / CGFloat(max(picture.height, 1)), contentMode: .fit)
-          .clipShape(RoundedRectangle(cornerRadius: 8))
+          .clipShape(RoundedRectangle(cornerRadius: KitMetrics.radius))
           .shadow(color: .black.opacity(0.15), radius: 3, y: 1)
         if let flag {
           Text(flag)
-            .font(.caption2.weight(.semibold))
+            .kitFont(.caption).fontWeight(.semibold)
             .padding(.horizontal, 7)
             .padding(.vertical, 2)
             .background(.red, in: Capsule())
@@ -489,16 +454,16 @@ struct ScreenshotThumbnail: View {
         }
       }
       // The picture tilts and lights under the pointer; the caption stays outside the effect.
-      .kitHoverEffect(in: .rect(cornerRadius: 8))
+      .kitHoverEffect(in: .rect(cornerRadius: KitMetrics.radius))
       HStack(spacing: 6) {
         Text(shot.title)
           .lineLimit(1)
         Spacer(minLength: 0)
         if let reason = shot.state.reason {
-          Circle().fill(.orange).frame(width: 7, height: 7).help("Needs a new capture: \(reason)")
+          StatusDot(hue: .orange).help("Needs a new capture: \(reason)")  // .help: inside a clipping scroll view
         }
       }
-      .font(.caption)
+      .kitFont(.caption)
     }
     .kitContextMenu {
       Button("Show in \(KitDesktop.fileManagerName)", systemImage: "folder") {
@@ -521,7 +486,7 @@ struct AsyncImageFile: View {
           .resizable()
           .interpolation(.high)
       } else {
-        Rectangle().fill(.quaternary)
+        Rectangle().fill(.kitFillSoft)
       }
     }
     .task(id: url) {
