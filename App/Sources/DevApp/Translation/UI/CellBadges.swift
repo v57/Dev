@@ -47,8 +47,8 @@ struct TranslationMemoryBadge: View {
 
   var body: some View {
     Image(systemName: "clock.arrow.circlepath")
-      .font(.system(size: 9))
-      .foregroundStyle(.secondary)
+      .kitFont(.caption)
+      .foregroundStyle(.kitSecondary)
       .help(record.state == .reviewed
         ? "Resolved from translation memory — human-confirmed copy (gold)"
         : "Resolved from translation memory — machine hint")

@@ -135,17 +135,15 @@ struct AgentsSettingsView: View {
       ) {
         ForEach(AgentPermissions.Action.allCases) { action in
           FormRow(action.title, systemImage: "checkmark.shield", hue: .gray) {
-            Picker(action.title, selection: Binding(
-              get: { levels[action] ?? AgentPermissions.level(action) },
-              set: { level in
-                levels[action] = level
-                UserDefaults.standard.set(level.rawValue, forKey: action.key)
-              })
-            ) {
-              ForEach(AgentPermissions.Level.allCases) { Text($0.title).tag($0) }
-            }
-            .labelsHidden()
-            .fixedSize()
+            KitPicker(
+              action.title,
+              selection: Binding(
+                get: { levels[action] ?? AgentPermissions.level(action) },
+                set: { level in
+                  levels[action] = level
+                  UserDefaults.standard.set(level.rawValue, forKey: action.key)
+                }),
+              options: AgentPermissions.Level.allCases.map { ($0.title, $0) })
           }
         }
       }

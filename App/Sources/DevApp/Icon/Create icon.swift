@@ -177,15 +177,15 @@ struct CreateIconView: View {
   private func dockScene(_ item: IconAppearance) -> some View {
     HStack(spacing: 8) {
       ForEach([Color.blue, Color.white], id: \.self) { color in
-        RoundedRectangle(cornerRadius: 8).fill(color).frame(width: 36, height: 36)
+        RoundedRectangle(cornerRadius: KitMetrics.radius).fill(color).frame(width: 36, height: 36)
       }
       icon(item).frame(width: 44, height: 44)
       ForEach([Color.mint, Color.orange], id: \.self) { color in
-        RoundedRectangle(cornerRadius: 8).fill(color).frame(width: 36, height: 36)
+        RoundedRectangle(cornerRadius: KitMetrics.radius).fill(color).frame(width: 36, height: 36)
       }
     }
     .padding(6)
-    .background(item.dock, in: RoundedRectangle(cornerRadius: 14))
+    .background(item.dock, in: RoundedRectangle(cornerRadius: KitMetrics.radiusXL))
     .padding(.bottom, 10)
     .frame(maxWidth: .infinity, minHeight: 128, alignment: .bottom)
     .background(item.stage, in: RoundedRectangle(cornerRadius: KitMetrics.radius, style: .continuous))
