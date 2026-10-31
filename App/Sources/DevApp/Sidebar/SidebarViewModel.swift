@@ -10,6 +10,7 @@ import DevDesktop
 import SwiftUI
 import Foundation
 import UniformTypeIdentifiers
+import VaultKit
 
 // MARK: - Sidebar destinations
 
@@ -375,6 +376,19 @@ final class SidebarViewModel {
     // Removed here only: Git and the other apps keep it, and Dev doesn't bring it back.
     vaultProjects.dismiss(rootURL: rootURL)
     refresh()
+  }
+
+  /// Removes the projects in a vault group, and in the groups inside it, as `removeProject` does each one (a
+  /// search doesn't narrow it); the group leaves the sidebar with them, and stays in Git and the other apps.
+  func removeAllProjects(localization: LocalizationStore) {
+    for project in projects { removeProject(id: project.id, localization: localization) }
+  }
+
+  func removeGroup(id groupID: String, localization: LocalizationStore) {
+    let device = VaultDevice.id
+    let paths = Set(vaultProjects.vault.projectTree.projects(in: groupID).compactMap { $0.paths[device] })
+    let members = projects.filter { $0.rootURL.map { paths.contains($0.standardizedFileURL.path) } ?? false }
+    for member in members { removeProject(id: member.id, localization: localization) }
   }
 
   // MARK: - drag-and-drop import

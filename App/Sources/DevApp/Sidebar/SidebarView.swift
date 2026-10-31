@@ -40,6 +40,7 @@ struct SidebarView: View {
   private let installs = AppInstalls.shared
   /// The bottom bar's + menu is open.
   @State private var showsAddMenu = false
+  @State private var confirmsRemoveAll = false
   /// The project groups closed in the Projects section (vault group ids).
   @AppStorage("CollapsedProjectGroups") private var collapsedGroups = CollapsedGroups()
   /// Settings ▸ General: the projects that aren't Xcode projects leave the list.
@@ -162,6 +163,11 @@ struct SidebarView: View {
               ProjectGroupRow(
                 group: group, projects: projects, isExpanded: groupIsExpanded(group.id), isSearching: !search.isEmpty,
                 holdsSelection: projects.contains { model.selection == .project($0.id) })
+              .kitContextMenu {
+                Button("Remove Group from List", systemImage: "minus.circle") {
+                  withAnimation(.kit) { model.removeGroup(id: group.id, localization: localization) }
+                }
+              }
             case .project(let project):
               projectRow(project, reservesDisclosure: layout.hasGroups)
             }
@@ -174,7 +180,18 @@ struct SidebarView: View {
         .buttonStyle(.kitIcon)
         .help("Add a project folder")
     }
+    .headerMenu {
+      Button("Remove All Projects from List", systemImage: "minus.circle") { confirmsRemoveAll = true }
+        .disabled(model.projects.isEmpty)
+    }
     .animation(.kit, value: layout.rows.map(\.id))
+    .kitConfirmation(
+      model.projects.count == 1 ? "Remove 1 project from the list?" : "Remove all \(model.projects.count) projects from the list?", isPresented: $confirmsRemoveAll,
+      message: "Their folders and catalogs stay on disk, and Git and the other apps keep them.",
+      systemImage: "minus.circle", confirm: "Remove All"
+    ) {
+      withAnimation(.kit) { model.removeAllProjects(localization: localization) }
+    }
   }
 
   private func projectRow(_ row: SidebarProjectRow, reservesDisclosure: Bool) -> some View {
