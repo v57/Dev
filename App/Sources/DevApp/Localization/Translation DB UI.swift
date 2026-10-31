@@ -29,9 +29,14 @@ struct TranslationDBControl: View {
         .foregroundStyle(db.isImported ? AnyShapeStyle(Hue.green.text) : AnyShapeStyle(.kitLabel))
         .symbolVariant(db.isImported ? .fill : .none)
     }
-    .help(db.isImported
-      ? "Imported translation DB: \(db.fileURL?.lastPathComponent ?? "—"). Click for info, import or remove."
-      : "No translation DB imported — translations come from the AI pipeline. Click to import one.")
+    .kitHelp(
+      "Translation DB",
+      meta: db.isImported
+        ? "Imported translation DB: \(db.fileURL?.lastPathComponent ?? "—"). Click for info, import or remove."
+        : "No translation DB imported — translations come from the AI pipeline. Click to import one.",
+      systemImage: "cylinder.split.1x2", hue: db.isImported ? .green : .accent)
+    // The system popover, not .kitPopover: this button is a tool in a kitToolbar slot, where the kit's popover
+    // currently opens a card per measuring copy of the bar (a kit fix is coming).
     .popover(isPresented: $showingInfo, arrowEdge: .bottom) {
       ImportedDBInfoView(store: store)
     }
@@ -61,8 +66,8 @@ private struct ImportedDBInfoView: View {
       }
       if let error = db.errorMessage {
         Text(error)
-          .font(.caption)
-          .foregroundStyle(.red)
+          .kitFont(.caption)
+          .foregroundStyle(Hue.red.text)
           .fixedSize(horizontal: false, vertical: true)
       }
     }
@@ -80,23 +85,11 @@ private struct ImportedDBInfoView: View {
 
   @ViewBuilder
   private func header(db: ImportedTranslationDB) -> some View {
-    HStack(spacing: 8) {
-      Image(systemName: db.isImported ? "cylinder.split.1x2.fill" : "cylinder.split.1x2")
-        .foregroundStyle(db.isImported ? Color.green : Color.secondary)
-        .font(.title2)
-      VStack(alignment: .leading, spacing: 1) {
-        Text(db.isImported ? (db.fileURL?.lastPathComponent ?? "Translation DB") : "Translation DB")
-          .font(.headline)
-          .lineLimit(1)
-        if db.isImported {
-          Text(metaLine(db: db))
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
-            .truncationMode(.middle)
-        }
-      }
-    }
+    RichHeader(
+      db.isImported ? (db.fileURL?.lastPathComponent ?? "Translation DB") : "Translation DB",
+      meta: db.isImported ? [metaLine(db: db)] : [],
+      systemImage: "cylinder.split.1x2", hue: db.isImported ? .green : .gray,
+      status: db.isScanning ? .working : .idle)
   }
 
   private func metaLine(db: ImportedTranslationDB) -> String {
@@ -118,17 +111,15 @@ private struct ImportedDBInfoView: View {
   private var emptyPrompt: some View {
     VStack(alignment: .leading, spacing: 8) {
       Text("No translation database imported.")
-        .font(.callout)
+        .kitFont(.callout)
       Text("Import a sqlite file with a translations (language, source, target, app) table — e.g. the Localization scanner output. The pipeline then checks it BEFORE the AI backends; matching translations are applied as automatically-reviewed and stay one click away from human confirmation.")
-        .font(.caption)
-        .foregroundStyle(.secondary)
+        .kitFont(.caption)
+        .foregroundStyle(.kitSecondary)
         .fixedSize(horizontal: false, vertical: true)
-      Button {
+      Button("Import Database…", systemImage: "cylinder.split.1x2") {
         Task { await ImportedTranslationDB.shared.importViaPanel() }
-      } label: {
-        Label("Import Database…", systemImage: "cylinder.split.1x2")
       }
-      .buttonStyle(.borderedProminent)
+      .buttonStyle(.kitPrimary)
       .controlSize(.small)
     }
   }
@@ -140,8 +131,8 @@ private struct ImportedDBInfoView: View {
     if let stats = db.stats {
       VStack(alignment: .leading, spacing: 6) {
         Text("\(stats.totalRows.formatted()) translations · \(stats.languages.count.formatted()) language codes · \(stats.apps.count.formatted()) apps")
-          .font(.caption)
-          .foregroundStyle(.secondary)
+          .kitFont(.caption)
+          .foregroundStyle(.kitSecondary)
         if store.isLoaded {
           coverageGrid(db: db, stats: stats)
         }
@@ -149,21 +140,20 @@ private struct ImportedDBInfoView: View {
       }
     } else if db.isScanning {
       HStack(spacing: 6) {
-        ProgressView()
-          .controlSize(.small)
+        LiveIcon(systemImage: "magnifyingglass", hue: .gray, status: .working, size: 16)
         Text("Scanning translations…")
-          .font(.caption)
-          .foregroundStyle(.secondary)
+          .kitFont(.caption)
+          .foregroundStyle(.kitSecondary)
       }
     } else if let scanError = db.scanError {
       Text("Stats unavailable: \(scanError)")
-        .font(.caption)
-        .foregroundStyle(.secondary)
+        .kitFont(.caption)
+        .foregroundStyle(.kitSecondary)
         .fixedSize(horizontal: false, vertical: true)
     } else {
       Text("Stats not computed yet.")
-        .font(.caption)
-        .foregroundStyle(.secondary)
+        .kitFont(.caption)
+        .foregroundStyle(.kitSecondary)
     }
   }
 
@@ -180,8 +170,8 @@ private struct ImportedDBInfoView: View {
       LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), alignment: .leading)], spacing: 2) {
         ForEach(covered, id: \.0) { language, rows in
           Text("\(language): \(rows.formatted(.number.notation(.compactName)))")
-            .font(.caption2)
-            .foregroundStyle(.secondary)
+            .kitFont(.caption)
+            .foregroundStyle(.kitSecondary)
             .lineLimit(1)
             .help("\(language): \(rows.formatted()) translations in the imported DB")
         }
@@ -192,18 +182,18 @@ private struct ImportedDBInfoView: View {
   private func topApps(stats: ImportedDBStats) -> some View {
     VStack(alignment: .leading, spacing: 1) {
       Text("Top sources")
-        .font(.caption)
-        .foregroundStyle(.secondary)
+        .kitFont(.caption)
+        .foregroundStyle(.kitSecondary)
       ForEach(stats.topApps.prefix(5), id: \.app) { app, rows in
         HStack(spacing: 6) {
           Text(app)
-            .font(.caption2)
+            .kitFont(.caption)
             .lineLimit(1)
             .truncationMode(.middle)
           Spacer()
           Text(rows.formatted(.number.notation(.compactName)))
-            .font(.caption2)
-            .foregroundStyle(.tertiary)
+            .kitFont(.caption)
+            .foregroundStyle(.kitTertiary)
         }
       }
     }
@@ -224,6 +214,7 @@ private struct ImportedDBInfoView: View {
       .disabled(shell.isRunning)
       Spacer()
     }
+    .buttonStyle(.kit)
     .controlSize(.small)
   }
 }

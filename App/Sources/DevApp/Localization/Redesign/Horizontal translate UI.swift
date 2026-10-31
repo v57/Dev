@@ -5,6 +5,7 @@
 //  Created by Dmitry on 14.09.26.
 //
 
+import ComponentKit
 import SwiftUI
 
 extension Translation.HorizontalTranslate {
@@ -254,15 +255,15 @@ extension Translation.HorizontalTranslate {
         ScrollView {
           LazyVStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
-              Image(systemName: icon).font(.title.bold()).frame(width: 32, height: 32)
+              Image(systemName: icon).kitFont(.title1).bold().frame(width: 32, height: 32)
                 .opacity(operation.isCompleted || operation.isFailed ? 1 : 0.1)
               Text("Translating \(operation.items.count) rows")
-                .font(.largeTitle.bold())
+                .kitFont(.largeTitle).bold()
                 .frame(maxWidth: .infinity)
             }.foregroundStyle(color)
             Text("A row travels whole: its settled columns are context for the request, and are never written.")
-              .font(.callout)
-              .foregroundStyle(.tertiary)
+              .kitFont(.callout)
+              .foregroundStyle(.kitTertiary)
               .padding(.bottom, 8)
             ForEach(Array(operation.items.enumerated()), id: \.offset) { (rowIndex, item) in
               VStack(alignment: .leading, spacing: 4) {
@@ -272,21 +273,21 @@ extension Translation.HorizontalTranslate {
                   Image(systemName: mark(item).icon)
                     .opacity(mark(item).isWaiting ? 0.4 : 1)
                     .foregroundStyle(mark(item).color)
-                  Text(item.key).font(.headline.monospaced())
+                  Text(item.key).kitFont(.mono)
                 }
                 Translation.VerticalTranslate.StringView(value: item.source)
-                  .font(.callout)
-                  .foregroundStyle(.secondary)
+                  .kitFont(.callout)
+                  .foregroundStyle(.kitSecondary)
                 ForEach(Array(item.targets.enumerated()), id: \.offset) { (index, slot) in
                   let outcome = outcome(slot, of: item)
                   HStack(alignment: .firstTextBaseline, spacing: 12) {
                     Text(slot.language)
-                      .font(.caption.monospaced())
-                      .foregroundStyle(.secondary)
+                      .kitFont(.monoSmall)
+                      .foregroundStyle(.kitSecondary)
                       .frame(width: 28, alignment: .leading)
                     Image(systemName: marker(slot)).foregroundStyle(markerColor(slot))
                     if slot.target.isEmpty {
-                      Text("…").foregroundStyle(.tertiary)
+                      Text("…").foregroundStyle(.kitTertiary)
                     } else {
                       Translation.VerticalTranslate.StringView(value: slot.target)
                     }
@@ -294,12 +295,12 @@ extension Translation.HorizontalTranslate {
                     // the adjusted column is the change the row pass exists to make, so
                     // the page shows the change.
                     if case .adjusted(let previous) = outcome, let previous {
-                      Text("was").font(.caption2).foregroundStyle(.tertiary)
+                      Text("was").kitFont(.caption).foregroundStyle(.kitTertiary)
                       Translation.VerticalTranslate.StringView(value: previous)
-                        .font(.caption2).foregroundStyle(.tertiary).strikethrough()
+                        .kitFont(.caption).foregroundStyle(.kitTertiary).strikethrough()
                     }
                     if let tag = tag(outcome) {
-                      Text(tag).font(.caption2).foregroundStyle(.tertiary)
+                      Text(tag).kitFont(.caption).foregroundStyle(.kitTertiary)
                     }
                   }
                 }

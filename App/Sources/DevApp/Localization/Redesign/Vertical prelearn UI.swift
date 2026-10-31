@@ -5,6 +5,7 @@
 //  Created by Dmitry on 14.09.26.
 //
 
+import ComponentKit
 import SwiftUI
 
 extension Translation.VerticalPrelearn {
@@ -57,23 +58,23 @@ extension Translation.VerticalPrelearn {
         ScrollView {
           LazyVStack(alignment: .leading, spacing: 8) {
             Text("Prelearning \(operation.language)")
-              .font(.largeTitle.bold())
+              .kitFont(.largeTitle).bold()
               .frame(maxWidth: .infinity)
             Text("Machine versions of slots you already settled. They never replace your value — learn reads the difference.")
-              .font(.callout)
-              .foregroundStyle(.secondary)
+              .kitFont(.callout)
+              .foregroundStyle(.kitSecondary)
               .padding(.bottom, 8)
             ForEach(Array(operation.items.enumerated()), id: \.offset) { (index, item) in
               HStack(alignment: .firstTextBaseline) {
-                Image(systemName: mark(item).icon).font(.title.bold()).frame(width: 32, height: 32)
+                Image(systemName: mark(item).icon).kitFont(.title1).bold().frame(width: 32, height: 32)
                   .opacity(mark(item).isWaiting ? 0.1 : 1)
                 VStack(alignment: .leading, spacing: 2) {
-                  Text(item.key).font(.caption.monospaced()).foregroundStyle(.tertiary)
+                  Text(item.key).kitFont(.monoSmall).foregroundStyle(.kitTertiary)
                   Translation.VerticalTranslate.StringView(value: item.source)
-                    .foregroundStyle(.secondary)
-                    .font(.callout)
+                    .foregroundStyle(.kitSecondary)
+                    .kitFont(.callout)
                   if item.machine.isEmpty {
-                    Text("…").foregroundStyle(.tertiary)
+                    Text("…").foregroundStyle(.kitTertiary)
                   } else {
                     Translation.VerticalTranslate.StringView(value: item.machine)
                       .fontWeight(.semibold)

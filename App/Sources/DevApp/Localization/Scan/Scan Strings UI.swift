@@ -16,43 +16,27 @@ struct ScanStringsView: View {
   let store: LocalizationStore
 
   var body: some View {
-    VStack(spacing: 0) {
-      header
-      Divider()
+    KitSheet(
+      title: "Scan Strings",
+      meta: "Every Swift package and Xcode target under the scan root, merged into this catalog."
+        + (store.scan.root.map { "\n" + $0.path } ?? ""),
+      systemImage: "text.magnifyingglass", status: scanStatus, width: 800
+    ) {
       content
-      Divider()
+        .frame(height: 460)
+    } footer: {
       footer
     }
-    .frame(minWidth: 800, minHeight: 560)
   }
 
-  // MARK: - header
-
-  private var header: some View {
-    HStack(alignment: .top, spacing: 10) {
-      Image(systemName: "text.magnifyingglass")
-        .font(.title3)
-      VStack(alignment: .leading, spacing: 2) {
-        Text("Scan Strings")
-          .font(.headline)
-        Text("Every Swift package and Xcode target under the scan root, merged into this catalog.")
-          .font(.caption)
-          .foregroundStyle(.secondary)
-        if let root = store.scan.root {
-          Text(root.path)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .textSelection(.enabled)
-            .lineLimit(2)
-            .truncationMode(.middle)
-        }
-      }
-      Spacer()
-      Button("Choose Folder…") { store.scan.chooseRoot() }
-        .disabled(store.scan.isRunning)
-        .help("Scan a different folder — a catalog can live deep inside the repo")
+  /// The scan's state on the sheet's tile: the share of modules done while it runs.
+  private var scanStatus: WorkStatus {
+    if store.scan.isRunning {
+      return .working(progress: store.scan.progressTotal > 0
+        ? Double(store.scan.progressDone) / Double(store.scan.progressTotal) : nil)
     }
-    .padding(12)
+    if store.scan.isCommenting { return .working }
+    return store.scan.report == nil ? .idle : .done
   }
 
   // MARK: - content
@@ -73,50 +57,22 @@ struct ScanStringsView: View {
   private var progressView: some View {
     VStack(alignment: .leading, spacing: 8) {
       HStack(spacing: 8) {
-        ProgressView()
-          .controlSize(.small)
         Text(store.scan.phase)
-          .font(.callout)
+          .kitFont(.callout)
           .lineLimit(1)
         Spacer()
         if store.scan.progressTotal > 0 {
           Text("\(store.scan.progressDone)/\(store.scan.progressTotal)")
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            .kitFont(.caption)
+            .monospacedDigit()
         }
       }
       if store.scan.progressTotal > 0 {
-        ProgressView(
-          value: Double(store.scan.progressDone),
-          total: Double(max(store.scan.progressTotal, 1)))
+        KitProgressBar(value: Double(store.scan.progressDone) / Double(max(store.scan.progressTotal, 1)))
       }
-      logView
+      KitCodeBlock(lines: store.scan.log, maxHeight: .infinity, followsEnd: true, font: .monoSmall)
     }
-    .padding(12)
-  }
-
-  private var logView: some View {
-    ScrollViewReader { proxy in
-      ScrollView {
-        VStack(alignment: .leading, spacing: 2) {
-          ForEach(Array(store.scan.log.enumerated()), id: \.offset) { index, line in
-            Text(line)
-              .font(.system(.caption, design: .monospaced))
-              .foregroundStyle(.secondary)
-              .textSelection(.enabled)
-              .frame(maxWidth: .infinity, alignment: .leading)
-              .id(index)
-          }
-        }
-        .padding(8)
-      }
-      .background(.kitWindow)
-      .onChange(of: store.scan.log.count) { _, _ in
-        if let last = store.scan.log.indices.last {
-          proxy.scrollTo(last, anchor: .bottom)
-        }
-      }
-    }
+    .padding(.horizontal, KitMetrics.gutter)
   }
 
   private func reportView(_ report: ScanReport) -> some View {
@@ -135,7 +91,7 @@ struct ScanStringsView: View {
           warningsSection(report)
         }
       }
-      .padding(12)
+      .padding(.horizontal, KitMetrics.gutter)
     }
   }
 
@@ -175,37 +131,35 @@ struct ScanStringsView: View {
       if store.scan.isCommenting {
         VStack(alignment: .leading, spacing: 6) {
           HStack(spacing: 8) {
-            ProgressView()
-              .controlSize(.small)
             Text("\(store.scan.commentDone)/\(store.scan.commentTotal) — \(store.scan.commentKey)")
-              .font(.callout)
+              .kitFont(.callout)
               .lineLimit(1)
             Spacer()
             Button("Stop") { store.scan.cancelCommentPass() }
+              .buttonStyle(.kit)
               .help("Stops after the comment in flight; everything already generated stays")
           }
-          ProgressView(
-            value: Double(store.scan.commentDone),
-            total: Double(max(store.scan.commentTotal, 1)))
+          KitProgressBar(status: .working(progress: Double(store.scan.commentDone) / Double(max(store.scan.commentTotal, 1))))
         }
       } else if let comments = store.scan.comments {
         commentOutcome(comments)
       } else {
         Text("Not run yet.")
-          .font(.callout)
-          .foregroundStyle(.secondary)
+          .kitFont(.callout)
+          .foregroundStyle(.kitSecondary)
       }
       HStack(alignment: .firstTextBaseline, spacing: 8) {
         Button("Generate Comments") { store.scan.startCommentPass() }
+          .buttonStyle(.kit)
           .disabled(!canGenerateComments)
         Text("Only keys without a comment are touched; a generated comment lands in the catalog's own comment field (the toolbar's comment toggle shows it under the row) and reaches the file only on Save.")
-          .font(.caption)
-          .foregroundStyle(.secondary)
+          .kitFont(.caption)
+          .foregroundStyle(.kitSecondary)
       }
     }
     .padding(8)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+    .kitSurface(.card)
   }
 
   private var canGenerateComments: Bool {
@@ -219,26 +173,26 @@ struct ScanStringsView: View {
     if let reason = comments.unavailableReason {
       VStack(alignment: .leading, spacing: 2) {
         Text("Skipped — \(reason).")
-          .font(.callout)
+          .kitFont(.callout)
         Text("The scan is unaffected: no comment was generated and nothing was changed.")
-          .font(.caption)
-          .foregroundStyle(.secondary)
+          .kitFont(.caption)
+          .foregroundStyle(.kitSecondary)
       }
     } else {
       VStack(alignment: .leading, spacing: 3) {
         Text("\(comments.targetCount) key(s) had no comment · \(comments.generatedCount) generated · \(comments.skippedCount) skipped"
           + (comments.cancelled ? " · cancelled" : "")
           + String(format: " · %.2fs per comment", comments.secondsPerComment))
-          .font(.callout)
+          .kitFont(.callout)
         ForEach(Array(comments.skipLines.enumerated()), id: \.offset) { _, line in
           Text("skipped — \(line.reason.label): \(line.count)")
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            .kitFont(.caption)
+            .foregroundStyle(.kitSecondary)
         }
         if comments.unlocatedCount > 0 {
           Text("no call site at all — the scan never located \(comments.unlocatedCount) comment-less key(s)")
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            .kitFont(.caption)
+            .foregroundStyle(.kitSecondary)
         }
         if !comments.generated.isEmpty {
           generatedComments(comments)
@@ -250,17 +204,17 @@ struct ScanStringsView: View {
   private func generatedComments(_ comments: CommentPassOutcome) -> some View {
     VStack(alignment: .leading, spacing: 3) {
       Text("Generated (\(comments.generatedCount))")
-        .font(.caption)
-        .foregroundStyle(.secondary)
+        .kitFont(.caption)
+        .foregroundStyle(.kitSecondary)
       ForEach(comments.generated.sorted(by: { $0.key < $1.key }), id: \.key) { entry in
         VStack(alignment: .leading, spacing: 1) {
           Text(entry.key)
-            .font(.system(.caption, design: .monospaced))
+            .kitFont(.monoSmall)
             .textSelection(.enabled)
             .lineLimit(2)
           Text(entry.value)
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            .kitFont(.caption)
+            .foregroundStyle(.kitSecondary)
             .textSelection(.enabled)
         }
       }
@@ -271,34 +225,26 @@ struct ScanStringsView: View {
   private func row(_ label: String, _ value: String) -> some View {
     HStack(alignment: .firstTextBaseline, spacing: 8) {
       Text(label)
-        .font(.callout)
-        .foregroundStyle(.secondary)
+        .kitFont(.callout)
+        .foregroundStyle(.kitSecondary)
         .frame(width: 150, alignment: .leading)
       Text(value)
-        .font(.callout)
+        .kitFont(.callout)
         .textSelection(.enabled)
     }
   }
 
   private func banner(_ message: String) -> some View {
-    HStack(alignment: .top, spacing: 8) {
-      Image(systemName: "exclamationmark.triangle")
-        .foregroundStyle(.orange)
-      Text(message)
-        .font(.callout)
-      Spacer()
-    }
-    .padding(10)
-    .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
+    Banner(message, systemImage: "exclamationmark.triangle", hue: .orange)
   }
 
   private func sectionTitle(_ title: String, _ detail: String) -> some View {
     HStack(alignment: .firstTextBaseline, spacing: 8) {
       Text(title)
-        .font(.headline)
+        .kitFont(.headline)
       Text(detail)
-        .font(.caption)
-        .foregroundStyle(.secondary)
+        .kitFont(.caption)
+        .foregroundStyle(.kitSecondary)
     }
   }
 
@@ -309,17 +255,17 @@ struct ScanStringsView: View {
         ForEach(plan.added) { entry in
           VStack(alignment: .leading, spacing: 1) {
             Text(entry.key)
-              .font(.system(.callout, design: .monospaced))
+              .kitFont(.mono)
               .textSelection(.enabled)
               .lineLimit(3)
             HStack(spacing: 6) {
               Text(entry.modules.isEmpty ? "—" : entry.modules.joined(separator: ", "))
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
+                .kitFont(.caption)
+                .foregroundStyle(.kitTertiary)
               if let comment = entry.comment {
                 Text(comment)
-                  .font(.caption2)
-                  .foregroundStyle(.secondary)
+                  .kitFont(.caption)
+                  .foregroundStyle(.kitSecondary)
                   .lineLimit(2)
               }
             }
@@ -328,7 +274,7 @@ struct ScanStringsView: View {
       }
       .padding(8)
       .frame(maxWidth: .infinity, alignment: .leading)
-      .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+      .kitSurface(.card)
     }
   }
 
@@ -339,33 +285,33 @@ struct ScanStringsView: View {
         ForEach(report.modules) { module in
           HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(module.origin == .packageTarget ? "package" : "project")
-              .font(.caption2)
-              .foregroundStyle(.secondary)
+              .kitFont(.caption)
+              .foregroundStyle(.kitSecondary)
               .frame(width: 52, alignment: .leading)
             Text(module.module)
-              .font(.system(.caption, design: .monospaced))
+              .kitFont(.monoSmall)
               .frame(width: 180, alignment: .leading)
               .lineLimit(1)
             if module.failed {
               Text("failed — \(module.detail)")
-                .font(.caption)
-                .foregroundStyle(.orange)
+                .kitFont(.caption)
+                .foregroundStyle(Hue.orange.text)
                 .lineLimit(2)
             } else {
               Text("\(module.keyCount) keys")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .kitFont(.caption)
+                .foregroundStyle(.kitSecondary)
             }
             if !module.skippedFiles.isEmpty {
               Label("\(module.skippedFiles.count) skipped", systemImage: "exclamationmark.triangle")
-                .font(.caption2)
-                .foregroundStyle(.orange)
+                .kitFont(.caption)
+                .foregroundStyle(Hue.orange.text)
                 .help("Dropped from the compile because they do not typecheck:\n" + module.skippedFiles.joined(separator: "\n"))
             }
             Spacer()
             Text("\(module.fileCount) files")
-              .font(.caption2)
-              .foregroundStyle(.tertiary)
+              .kitFont(.caption)
+              .foregroundStyle(.kitTertiary)
           }
           .help(module.directory)
         }
@@ -379,8 +325,8 @@ struct ScanStringsView: View {
       LazyVStack(alignment: .leading, spacing: 4) {
         ForEach(Array(report.warnings.enumerated()), id: \.offset) { _, warning in
           Text(warning)
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            .kitFont(.caption)
+            .foregroundStyle(.kitSecondary)
             .textSelection(.enabled)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -389,65 +335,51 @@ struct ScanStringsView: View {
   }
 
   private func idleView(message: String) -> some View {
-    VStack(spacing: 10) {
-      Image(systemName: "text.magnifyingglass")
-        .font(.system(size: 40))
-        .foregroundStyle(.tertiary)
-      Text(message)
-        .font(.callout)
-        .foregroundStyle(.secondary)
-        .multilineTextAlignment(.center)
+    EmptyState(systemImage: "text.magnifyingglass", title: "Scan Strings", message: message) {
       Button("Choose Folder…") { store.scan.chooseRoot() }
+        .buttonStyle(.kit)
     }
-    .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .padding(24)
   }
 
   // MARK: - footer
 
+  @ViewBuilder
   private var footer: some View {
-    HStack(spacing: 10) {
-      Button {
-        store.scan.copyReport()
-      } label: {
-        Label("Copy Report", systemImage: "doc.on.doc")
-      }
-      .disabled(store.scan.report == nil)
-
-      if let applied = store.scan.appliedCount {
-        Label(
-          applied == 0
-            ? "Nothing new to merge"
-            : "Merged \(applied) new key\(applied == 1 ? "" : "s") into the catalog",
-          systemImage: applied == 0 ? "info.circle" : "checkmark.circle")
-          .font(.callout)
-          .foregroundStyle(.secondary)
-      } else if let plan = store.scan.plan {
-        Text("\(plan.addedCount) new · \(plan.existingKeyCount) already present")
-          .font(.callout)
-          .foregroundStyle(.secondary)
-      }
-
-      Spacer()
-
-      if store.scan.isRunning || store.scan.isCommenting {
-        Button("Cancel") { store.scan.cancel() }
-      } else {
-        Button("Scan Again") { store.scan.rescan() }
-          .disabled(store.scan.root == nil)
-        Button {
-          store.applyScan()
-        } label: {
-          Label(mergeLabel, systemImage: "square.and.arrow.down")
-        }
-        .buttonStyle(.borderedProminent)
-        .keyboardShortcut(.defaultAction)
-        .disabled(mergeDisabled)
-        Button("Close") { store.scan.dismiss() }
-          .keyboardShortcut(.cancelAction)
-      }
+    if let applied = store.scan.appliedCount {
+      SheetStatus(
+        applied == 0
+          ? "Nothing new to merge"
+          : "Merged \(applied) new key\(applied == 1 ? "" : "s") into the catalog",
+        systemImage: applied == 0 ? "info.circle" : "checkmark", hue: applied == 0 ? .gray : .green,
+        status: applied == 0 ? .idle : .done)
+    } else if let plan = store.scan.plan {
+      SheetStatus(
+        "\(plan.addedCount) new · \(plan.existingKeyCount) already present", systemImage: "text.magnifyingglass")
+    } else {
+      SheetStatus(store.scan.isRunning ? store.scan.phase : "", systemImage: "text.magnifyingglass", status: scanStatus)
     }
-    .padding(12)
+    Button("Copy Report", systemImage: "doc.on.doc") {
+      store.scan.copyReport()
+    }
+    .disabled(store.scan.report == nil)
+    Button("Choose Folder…") { store.scan.chooseRoot() }
+      .disabled(store.scan.isRunning)
+      .kitHelp("Choose Folder…", meta: "Scan a different folder — a catalog can live deep inside the repo")
+    if store.scan.isRunning || store.scan.isCommenting {
+      Button("Cancel") { store.scan.cancel() }
+        .keyboardShortcut(.cancelAction)
+    } else {
+      Button("Scan Again") { store.scan.rescan() }
+        .disabled(store.scan.root == nil)
+      Button("Close") { store.scan.dismiss() }
+        .keyboardShortcut(.cancelAction)
+      Button(mergeLabel, systemImage: "square.and.arrow.down") {
+        store.applyScan()
+      }
+      .buttonStyle(.kitPrimary)
+      .keyboardShortcut(.defaultAction)
+      .disabled(mergeDisabled)
+    }
   }
 
   private var mergeLabel: String {

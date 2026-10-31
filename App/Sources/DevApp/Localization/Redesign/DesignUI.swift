@@ -5,6 +5,7 @@
 //  Created by Dmitry on 13.09.26.
 //
 
+import ComponentKit
 import SwiftUI
 
 extension Translation {
@@ -141,9 +142,9 @@ extension Translation {
           .disabled(shown <= 0)
           .help("Previous batch (←)")
         Text(count > 0 ? "Batch \(shown + 1) of \(count)" : "No batch")
-          .font(.callout)
+          .kitFont(.callout)
           .monospacedDigit()
-          .foregroundStyle(.secondary)
+          .foregroundStyle(.kitSecondary)
         Button { go(shown + 1) } label: { Image(systemName: "chevron.right") }
           .disabled(shown >= count - 1)
           .help("Next batch (→)")
@@ -153,7 +154,7 @@ extension Translation {
             .help("Follow the batch the run is on")
         }
       }
-      .buttonStyle(.borderless)
+      .buttonStyle(.kitIcon)
       .padding(.horizontal, 12)
       .padding(.vertical, 6)
     }
@@ -213,11 +214,11 @@ extension Translation.VerticalTranslate {
         ScrollView {
           LazyVStack(alignment: .leading, spacing: 8) {
             Text("Translating to \(operation.language)")
-              .font(.largeTitle.bold())
+              .kitFont(.largeTitle).bold()
               .frame(maxWidth: .infinity)
             ForEach(Array(operation.items.enumerated()), id: \.offset) { (index, item) in
               HStack {
-                Image(systemName: mark(item).icon).font(.title.bold()).frame(width: 32, height: 32)
+                Image(systemName: mark(item).icon).kitFont(.title1).bold().frame(width: 32, height: 32)
                   .opacity(mark(item).isWaiting ? 0.1 : 1)
                 StringView(value: operation.isCompleted ? item.target : item.source)
                   .fontWeight(operation.isCompleted ? .semibold : .regular)
@@ -254,7 +255,7 @@ extension Translation.VerticalTranslate {
       case .plural(let value):
         VStack(alignment: .leading) {
           ForEach(value.values, id: \.rule) { plural in
-            Text(plural.rule.rawValue).foregroundStyle(.secondary).font(.caption)
+            Text(plural.rule.rawValue).foregroundStyle(.kitSecondary).kitFont(.caption)
             Text(plural.value)
           }
         }
@@ -768,12 +769,12 @@ extension Translation {
 
     private var header: some View {
       HStack(spacing: 8) {
-        Image(systemName: "arrow.left.arrow.right").foregroundStyle(.secondary)
+        Image(systemName: "arrow.left.arrow.right").foregroundStyle(.kitSecondary)
         VStack(alignment: .leading, spacing: 2) {
-          Text("Model exchange").font(.headline)
+          Text("Model exchange").kitFont(.headline)
           Text("Both sides of one batch: what was sent, and what came back.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            .kitFont(.caption)
+            .foregroundStyle(.kitSecondary)
         }
         Spacer(minLength: 0)
       }
@@ -887,12 +888,12 @@ extension Translation {
     /// share checkable: a prefix that moved is visible here before the share reads zero (5.7).
     private func boundary(_ cacheable: Cacheable, at edge: Edge) -> some View {
       HStack(spacing: 8) {
-        Rectangle().fill(.tertiary).frame(height: 1)
+        Rectangle().fill(.kitSeparator).frame(height: 1)
         Text(caption(cacheable, at: edge))
-          .font(.caption2)
-          .foregroundStyle(.secondary)
+          .kitFont(.caption)
+          .foregroundStyle(.kitSecondary)
           .fixedSize(horizontal: false, vertical: true)
-        Rectangle().fill(.tertiary).frame(height: 1)
+        Rectangle().fill(.kitSeparator).frame(height: 1)
       }
       .padding(.horizontal, 12)
       .padding(.vertical, 6)
@@ -911,10 +912,10 @@ extension Translation {
 
     private func halfHeader(icon: String, title: String, detail: String) -> some View {
       HStack(alignment: .firstTextBaseline, spacing: 8) {
-        Image(systemName: icon).foregroundStyle(.secondary)
+        Image(systemName: icon).foregroundStyle(.kitSecondary)
         VStack(alignment: .leading, spacing: 2) {
-          Text(title).font(.subheadline.weight(.semibold))
-          Text(detail).font(.caption).foregroundStyle(.secondary)
+          Text(title).kitFont(.callout).fontWeight(.semibold)
+          Text(detail).kitFont(.caption).foregroundStyle(.kitSecondary)
             .fixedSize(horizontal: false, vertical: true)
         }
         Spacer(minLength: 0)
@@ -927,8 +928,8 @@ extension Translation {
     /// What a body on the wire IS — a label, not a title: raw text needs no decoration.
     private func blockLabel(_ label: String) -> some View {
       Text(label.uppercased())
-        .font(.caption2.weight(.semibold))
-        .foregroundStyle(.tertiary)
+        .kitFont(.caption).fontWeight(.semibold)
+        .foregroundStyle(.kitTertiary)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 12)
         .padding(.top, 8)
@@ -940,7 +941,7 @@ extension Translation {
     private func text(_ body: String) -> some View {
       ForEach(Array(body.split(separator: "\n", omittingEmptySubsequences: false).enumerated()), id: \.offset) { _, line in
         Text(line.isEmpty ? " " : String(line))
-          .font(.system(.callout, design: .monospaced))
+          .kitFont(.mono)
           .textSelection(.enabled)
           .frame(maxWidth: .infinity, alignment: .leading)
           .padding(.horizontal, 12)
@@ -949,10 +950,10 @@ extension Translation {
 
     private func note(icon: String, title: String, detail: String) -> some View {
       VStack(alignment: .leading, spacing: 6) {
-        Label(title, systemImage: icon).font(.callout.weight(.semibold))
+        Label(title, systemImage: icon).kitFont(.callout).fontWeight(.semibold)
         Text(detail)
-          .font(.callout)
-          .foregroundStyle(.secondary)
+          .kitFont(.callout)
+          .foregroundStyle(.kitSecondary)
           .fixedSize(horizontal: false, vertical: true)
         Spacer(minLength: 0)
       }

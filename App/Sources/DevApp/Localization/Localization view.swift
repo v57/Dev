@@ -257,7 +257,7 @@ struct LocalizationView: View {
     }
     .buttonStyle(.kitPrimary)
     .disabled(isGenerating)
-    .help("Create an empty String Catalog here and scan this project for localizable strings")
+    .kitHelp("Generate Catalog", meta: "Create an empty String Catalog here and scan this project for localizable strings", systemImage: "text.magnifyingglass")
   }
 
   private func loadedContent(allowsOpenCatalog: Bool, boundCatalogURL: URL? = nil) -> some View {
@@ -270,8 +270,6 @@ struct LocalizationView: View {
       LanguageButtonsRow(store: store)
       CatalogTable(store: store, selection: $inspectedKey)
         .padding(.horizontal, KitMetrics.gutter)
-        .searchable(text: $store.searchText,
-                    prompt: "Search keys, comments, translations")
         // The redesign's pages, over the browser they leave exactly where it is:
         // the overlay is a PRESENTATION of a run, so it is up while the run's
         // pages are open and a run exists to page through — a pane with no run
@@ -329,7 +327,7 @@ struct LocalizationView: View {
             Button("Inspector", systemImage: "sidebar.trailing") {
               showsInspector.toggle()
             }
-            .help("Show or hide the string inspector")
+            .kitHelp("Inspector", meta: "Show or hide the string inspector", systemImage: "sidebar.trailing")
           }
         }
       }
@@ -396,8 +394,12 @@ private struct LanguageButtonsRow: View {
           .fixedSize()
         KitPicker("Show", selection: filter, options: RowFilter.allCases.map { ($0.title, $0) })
       }
-      .help("Show only the rows in this state, in the visible language columns")
+      .kitHelp("Show", meta: "Show only the rows in this state, in the visible language columns")
       .layoutPriority(1)
+      KitSearchField(
+        text: Binding(get: { store.searchText }, set: { store.searchText = $0 }),
+        prompt: "Search keys, comments, translations")
+        .frame(minWidth: 140, idealWidth: 200, maxWidth: 240)
       languages
     }
     .padding(.horizontal, KitMetrics.gutter)
@@ -471,21 +473,11 @@ private struct AddLanguagesView: View {
   }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      HStack(spacing: 8) {
-        Image(systemName: "globe")
-        Text("Add Languages")
-          .font(.headline)
-        Spacer(minLength: 0)
-        Text("\(store.browserLanguages.count) in this catalog · \(addable.count) to add")
-          .font(.caption)
-          .foregroundStyle(.secondary)
-      }
-      Text("Every language Apple ships as a keyboard or UI language. Picked ones get a column now and are ready for a run; the catalog file only gains a language where a translation exists to save.")
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
-
+    KitSheet(
+      title: "Add Languages",
+      meta: "\(store.browserLanguages.count) in this catalog · \(addable.count) to add. Every language Apple ships as a keyboard or UI language. Picked ones get a column now and are ready for a run; the catalog file only gains a language where a translation exists to save.",
+      systemImage: "globe", width: 680
+    ) {
       ScrollView {
         LazyVGrid(
           columns: [GridItem(.adaptive(minimum: 140), spacing: 12, alignment: .leading)],
@@ -499,28 +491,24 @@ private struct AddLanguagesView: View {
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
       }
-      .frame(maxHeight: .infinity)
-      .background(.kitField, in: RoundedRectangle(cornerRadius: KitMetrics.radiusCard, style: .continuous))
-
-      HStack(spacing: 8) {
-        Button("Select All") { selection = Set(addable) }
-          .disabled(addable.isEmpty)
-        Button("Clear") { selection.removeAll() }
-          .disabled(selection.isEmpty)
-        Spacer()
-        Button("Cancel") {
-          store.closeLanguagePicker()
-          dismiss()
-        }
-        Button(addTitle) { add() }
-          .buttonStyle(.kitPrimary)
-          .keyboardShortcut(.defaultAction)
-          .disabled(selection.isEmpty)
+      .frame(height: 340)
+      .kitSurface(.field, cornerRadius: KitMetrics.radiusCard)
+      .padding(.horizontal, KitMetrics.gutter)
+    } footer: {
+      Button("Select All") { selection = Set(addable) }
+        .disabled(addable.isEmpty)
+      Button("Clear") { selection.removeAll() }
+        .disabled(selection.isEmpty)
+      Button("Cancel") {
+        store.closeLanguagePicker()
+        dismiss()
       }
-      .buttonStyle(.kit)
+      .keyboardShortcut(.cancelAction)
+      Button(addTitle) { add() }
+        .buttonStyle(.kitPrimary)
+        .keyboardShortcut(.defaultAction)
+        .disabled(selection.isEmpty)
     }
-    .padding(18)
-    .frame(width: 680, height: 540)
     .onAppear { selection = [] }
   }
 
@@ -530,7 +518,7 @@ private struct AddLanguagesView: View {
     Toggle(code, isOn: binding(for: code, present: present))
       .toggleStyle(.kitCheckbox)
       .disabled(present)
-      .foregroundStyle(present ? .secondary : .primary)
+      .foregroundStyle(present ? .kitSecondary : .kitLabel)
       .help(present
         ? "Already in this catalog"
         : (Self.name(for: code).map { "\(code) — \($0)" } ?? code))
@@ -575,6 +563,11 @@ private struct CatalogTable: View {
   var body: some View {
     // Rows grow with their cells: a source wraps, plural forms and comments add lines under it.
     KitGrid(store.visibleRows, columns: columns, selection: rowSelection, sort: sort, rowHeight: .automatic)
+      .rowContextMenu { ids in
+        if let id = ids.first, let row = store.visibleRows.first(where: { $0.id == id }) {
+          RowContextMenu(row: row, store: store)
+        }
+      }
   }
 
   private var columns: [KitGridColumn<CatalogRow>] {
@@ -706,7 +699,7 @@ private struct RowInspector: View {
         }
       }
       .frame(minHeight: 24)
-      .contextMenu {
+      .kitContextMenu {
         if state == .reviewed {
           Button("Needs Review") { store.setCellState(row.key, language: language, .needs_review) }
         }
@@ -764,8 +757,8 @@ private struct RowInspector: View {
 // MARK: - Row cells
 
 /// Source column cell: the source text with its plural-form summary and,
-/// when opted in, the comment line under it. The row context menu applies
-/// to the whole column area.
+/// when opted in, the comment line under it. The grid's row context menu
+/// covers every cell.
 private struct SourceCell: View {
   let store: LocalizationStore
   let row: CatalogRow
@@ -777,21 +770,20 @@ private struct SourceCell: View {
         .help(row.sourceText)
       if row.hasPlurals, !row.sourcePluralSummary.isEmpty {
         Text(row.sourcePluralSummary)
-          .font(.caption)
-          .foregroundStyle(.secondary)
+          .kitFont(.caption)
+          .foregroundStyle(.kitSecondary)
           .lineLimit(3)
           .help("Plural forms — \(row.sourcePluralSummary)")
       }
       if store.showComments, !row.commentText.isEmpty {
         Text(row.commentText)
-          .font(.caption)
-          .foregroundStyle(.secondary)
+          .kitFont(.caption)
+          .foregroundStyle(.kitSecondary)
           .lineLimit(3)
           .help(row.commentText)
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
-    .contextMenu { RowContextMenu(row: row, store: store) }
   }
 }
 
@@ -805,8 +797,8 @@ private struct LongestCell: View {
     HStack(spacing: 5) {
       if !row.isTranslatable {
         Image(systemName: "nosign")
-          .font(.system(size: 9))
-          .foregroundStyle(.tertiary)
+          .kitFont(.caption)
+          .foregroundStyle(.kitTertiary)
           .help("Not translatable")
       }
       Text(row.longestText)
@@ -814,7 +806,6 @@ private struct LongestCell: View {
         .help(tooltip)
     }
     .frame(maxWidth: .infinity, alignment: .leading)
-    .contextMenu { RowContextMenu(row: row, store: store) }
   }
 
   private var tooltip: String {
@@ -843,8 +834,8 @@ private struct LanguageCell: View {
         PluralCellStatusAccessory(cell: cell)
         if cell.pluralRecords.values.contains(where: { $0.lastEditor == ProvenanceMarkers.translationMemory }) {
           Image(systemName: "clock.arrow.circlepath")
-            .font(.system(size: 9))
-            .foregroundStyle(.secondary)
+            .kitFont(.caption)
+            .foregroundStyle(.kitSecondary)
             .help("A form was resolved from translation memory")
         }
         PluralEditCell(store: store, rowKey: row.key, language: language, cell: cell)
@@ -852,7 +843,7 @@ private struct LanguageCell: View {
         Text(cell.text)
           .lineLimit(3)
         Image(systemName: "ellipsis.curlybraces")
-          .foregroundStyle(.tertiary)
+          .foregroundStyle(.kitTertiary)
           .help("Device variations present — read-only in this phase")
       } else {
         CellStatusAccessory(record: cell.record)
@@ -876,7 +867,6 @@ private struct LanguageCell: View {
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
-    .contextMenu { RowContextMenu(row: row, store: store) }
   }
 }
 
@@ -897,7 +887,7 @@ private struct RowContextMenu: View {
     }
     .help("Attach a reviewer note to this row — a project rule guides the translator, a plain note stays in the app")
 
-    Menu {
+    KitSubmenu("Max Width", systemImage: "arrow.left.and.right") {
       ForEach([nil, 6, 8, 12, 16, 32] as [Int?], id: \.self) { option in
         Button {
           store.setMaxWidth(key: row.key, width: option)
@@ -909,8 +899,6 @@ private struct RowContextMenu: View {
           }
         }
       }
-    } label: {
-      Label("Max Width", systemImage: "arrow.left.and.right")
     }
     .help("Guideline for the rendered width of this row's text. It is never sent to the translator — over-width values are flagged here for you, and the reviewer may shorten one")
 
@@ -1001,8 +989,8 @@ private struct WidthBadge: View {
 
   var body: some View {
     Image(systemName: "arrow.left.and.right")
-      .font(.system(size: 9))
-      .foregroundStyle(.orange)
+      .kitFont(.caption)
+      .foregroundStyle(Hue.orange.text)
       .help(sourceChars > 0
         ? "\(chars) chars — over the \(limit)-char limit (source \(sourceChars))"
         : "\(chars) chars — over the \(limit)-char limit")
@@ -1025,63 +1013,44 @@ private struct NoteEditorView: View {
   private var key: String { store.noteKey ?? "" }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      HStack(spacing: 8) {
-        Image(systemName: "text.bubble")
-        Text(key)
-          .font(.headline)
-          .lineLimit(1)
-          .truncationMode(.middle)
-        Spacer(minLength: 0)
-      }
-      Text("A project rule is sent to the translator with every request for this project. A plain note is for you only.")
-        .font(.caption)
-        .foregroundStyle(.secondary)
-
-      TextEditor(text: $text)
-        .font(.body)
-        .frame(minHeight: 110)
-        .padding(6)
-        .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.08)))
-
-      Picker("", selection: $scope) {
-        ForEach(Reconcile.NoteScope.allCases, id: \.self) { option in
-          Text(option.title).tag(option)
-        }
-      }
-      .pickerStyle(.radioGroup)
-      .labelsHidden()
-
-      if !store.projectContextText.isEmpty {
-        DisclosureGroup("Project context now (\(store.projectContextText.count) chars)") {
-          ScrollView {
-            Text(store.projectContextText)
-              .font(.caption.monospaced())
-              .textSelection(.enabled)
-              .frame(maxWidth: .infinity, alignment: .leading)
+    KitSheet(
+      title: key,
+      meta: "A project rule is sent to the translator with every request for this project. A plain note is for you only.",
+      systemImage: "text.bubble", hue: .yellow, width: 540
+    ) {
+      VStack(alignment: .leading, spacing: KitMetrics.gutter) {
+        TextEditor(text: $text)
+          .kitFont(.body)
+          .scrollContentBackground(.hidden)
+          .frame(minHeight: 110)
+          .padding(6)
+          .kitSurface(.field)
+        KitSegmented(
+          selection: $scope,
+          segments: Reconcile.NoteScope.allCases.map { KitSegment($0.title, value: $0) })
+        if !store.projectContextText.isEmpty {
+          DisclosureGroup("Project context now (\(store.projectContextText.count) chars)") {
+            KitCodeBlock(store.projectContextText, maxHeight: 110, font: .monoSmall)
           }
-          .frame(height: 110)
+          .kitFont(.caption)
         }
-        .font(.caption)
       }
-
-      HStack {
-        Button("Remove Note", role: .destructive) {
-          store.setNote(key: key, note: "", scope: scope)
-          dismiss()
-        }
-        .disabled(text.isEmpty && store.note(for: key).text.isEmpty)
-        Spacer()
-        Button("Cancel") { dismiss() }
-        Button("Save") {
-          store.setNote(key: key, note: text, scope: scope)
-          dismiss()
-        }
-        .keyboardShortcut(.defaultAction)
+      .padding(.horizontal, KitMetrics.gutter)
+    } footer: {
+      Button("Remove Note", role: .destructive) {
+        store.setNote(key: key, note: "", scope: scope)
+        dismiss()
       }
+      .disabled(text.isEmpty && store.note(for: key).text.isEmpty)
+      Button("Cancel") { dismiss() }
+        .keyboardShortcut(.cancelAction)
+      Button("Save") {
+        store.setNote(key: key, note: text, scope: scope)
+        dismiss()
+      }
+      .buttonStyle(.kitPrimary)
+      .keyboardShortcut(.defaultAction)
     }
-    .padding(18)
-    .frame(width: 540)
     .onAppear {
       guard !initialized else { return }
       let existing = store.note(for: key)
@@ -1105,38 +1074,28 @@ private struct ContextDocsView: View {
   @State private var initialized = false
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      HStack(spacing: 8) {
-        Image(systemName: "text.book.closed")
-        Text("Project Context")
-          .font(.headline)
-        Spacer(minLength: 0)
-        Text("\(text.count) chars")
-          .font(.caption)
-          .foregroundStyle(.secondary)
-      }
-      Text("One rule per line. Sent with every translation request for this project, and followed over the model's own defaults (prompt rule 4).")
-        .font(.caption)
-        .foregroundStyle(.secondary)
-
+    KitSheet(
+      title: "Project Context",
+      meta: "\(text.count) chars. One rule per line. Sent with every translation request for this project, and followed over the model's own defaults (prompt rule 4).",
+      systemImage: "text.book.closed", width: 640
+    ) {
       TextEditor(text: $text)
-        .font(.body.monospaced())
+        .kitFont(.mono)
+        .scrollContentBackground(.hidden)
         .frame(minHeight: 320)
         .padding(6)
-        .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.08)))
-
-      HStack {
-        Spacer()
-        Button("Cancel") { dismiss() }
-        Button("Save") {
-          store.setProjectContext(text)
-          dismiss()
-        }
-        .keyboardShortcut(.defaultAction)
+        .kitSurface(.field)
+        .padding(.horizontal, KitMetrics.gutter)
+    } footer: {
+      Button("Cancel") { dismiss() }
+        .keyboardShortcut(.cancelAction)
+      Button("Save") {
+        store.setProjectContext(text)
+        dismiss()
       }
+      .buttonStyle(.kitPrimary)
+      .keyboardShortcut(.defaultAction)
     }
-    .padding(18)
-    .frame(width: 640)
     .onAppear {
       guard !initialized else { return }
       text = store.projectContextText
@@ -1167,10 +1126,10 @@ private struct LanguageEditCell: View {
     Group {
       if isEditing {
         TextEditor(text: $draft)
-          .font(.body)
+          .kitFont(.body)
           .focused($focused)
           .scrollContentBackground(.hidden)
-          .background(hasOverride ? editedTint : Color.clear)
+          .background(Hue.accent.soft(hasOverride ? 0.08 : 0))
           .onAppear { focused = true }
           .onExitCommand { cancel() }
           .onChange(of: focused) { _, isFocused in
@@ -1180,7 +1139,7 @@ private struct LanguageEditCell: View {
         Group {
           if liveText.isEmpty {
             Text("missing")
-              .foregroundStyle(.tertiary)
+              .foregroundStyle(.kitTertiary)
           } else {
             Text(liveText)
               .lineLimit(3)
@@ -1188,7 +1147,7 @@ private struct LanguageEditCell: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .help(helpText)
-        .background(hasOverride ? editedTint : Color.clear)
+        .background(Hue.accent.soft(hasOverride ? 0.08 : 0))
         .onTapGesture {
           guard cell.isEditable else { return }
           draft = store.value(for: rowKey, language: language)
@@ -1249,9 +1208,6 @@ private struct LanguageEditCell: View {
     isEditing = false
   }
 
-  private var editedTint: Color {
-    Color.accentColor.opacity(0.08)
-  }
 }
 
 /// Plural slot status: the worst form dot (needs_review orange wins, then
@@ -1305,7 +1261,7 @@ private struct PluralFormsEditor: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
       Text("\(rowKey) — \(language)")
-        .font(.headline)
+        .kitFont(.headline)
         .lineLimit(1)
       ForEach(PluralRules.categories(for: language), id: \.self) { category in
         PluralFormRow(store: store, rowKey: rowKey, language: language, category: category)
@@ -1347,23 +1303,23 @@ private struct PluralFormRow: View {
           WidthBadge(chars: value.count, limit: limit)
         }
         Text(PluralRules.displayName(for: category))
-          .font(.caption)
-          .foregroundStyle(.secondary)
+          .kitFont(.caption)
+          .foregroundStyle(.kitSecondary)
         Spacer()
         if let record = formRecord,
            let provenance = record.provenanceSummary {
           Text(provenance.components(separatedBy: "\n").first ?? "")
-            .font(.caption2)
-            .foregroundStyle(.tertiary)
+            .kitFont(.caption)
+            .foregroundStyle(.kitTertiary)
         }
       }
       Text(sourceReference)
-        .font(.caption)
-        .foregroundStyle(.tertiary)
+        .kitFont(.caption)
+        .foregroundStyle(.kitTertiary)
         .lineLimit(2)
       if isEditing {
         TextEditor(text: $draft)
-          .font(.body)
+          .kitFont(.body)
           .focused($focused)
           .scrollContentBackground(.hidden)
           .frame(minHeight: 44)
@@ -1376,7 +1332,7 @@ private struct PluralFormRow: View {
         Group {
           if liveText.isEmpty {
             Text("missing — click to add")
-              .foregroundStyle(.tertiary)
+              .foregroundStyle(.kitTertiary)
           } else {
             Text(liveText)
               .lineLimit(3)
@@ -1454,7 +1410,7 @@ private struct PluralEditCell: View {
     Group {
       if liveSummary.isEmpty {
         Text("missing")
-          .foregroundStyle(.tertiary)
+          .foregroundStyle(.kitTertiary)
       } else {
         Text(liveSummary)
           .lineLimit(3)
@@ -1466,7 +1422,7 @@ private struct PluralEditCell: View {
       guard cell.isEditable else { return }
       showingEditor = true
     }
-    .popover(isPresented: $showingEditor) {
+    .kitPopover(isPresented: $showingEditor) {
       PluralFormsEditor(store: store, rowKey: rowKey, language: language)
     }
   }
@@ -1499,33 +1455,25 @@ private struct FooterBar: View {
   let store: LocalizationStore
 
   var body: some View {
-    HStack(spacing: 6) {
+    MetaLine {
       // The store catching up behind the pane (a whole-catalog mirror, a language seeding):
       // the table and a run are already usable, so this is a NOTE, not a block — it is what
       // the badges and the counts are still waiting for.
       if store.isSyncing {
-        Text("indexing in the background").foregroundStyle(.kitSecondary)
-        separator
+        Text("indexing in the background")
       }
       // A bulk add shows its result here: the columns it would need are not
       // opened for it (see LocalizationStore.addLanguages).
       if let statusNote = store.statusNote {
-        Text(statusNote).foregroundStyle(.kitSecondary)
-        separator
+        Text(statusNote)
       }
       ForEach(store.selectedLanguages, id: \.self) { language in
-        Text("\(language): \(store.missingCount(for: language)) missing").foregroundStyle(.kitSecondary)
-        separator
+        Text("\(language): \(store.missingCount(for: language)) missing")
       }
       Text("\(store.totalKeyCount) keys, showing \(store.visibleRows.count)")
-        .foregroundStyle(.kitSecondary)
         .monospacedDigit()
     }
     .lineLimit(1)
-  }
-
-  private var separator: some View {
-    Text("·").foregroundStyle(.kitTertiary)
   }
 }
 

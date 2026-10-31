@@ -25,21 +25,21 @@ struct ControlsBar: ToolbarContent {
         TranslationDBControl(store: store)
         if allowsOpenCatalog {
           Button("Open…", systemImage: "folder") { store.openPanelAndLoad() }
-            .help("Open a String Catalog")
+            .kitHelp("Open…", meta: "Open a String Catalog", systemImage: "folder")
         }
         Button("Scan Strings", systemImage: "text.magnifyingglass") {
           store.startScan()
         }
         .disabled(!store.canScan)
-        .help("Scan the project's Swift packages and Xcode targets for localizable strings, then merge the new keys into this catalog (existing translations are never touched)")
+        .kitHelp("Scan Strings", meta: "Scan the project's Swift packages and Xcode targets for localizable strings, then merge the new keys into this catalog (existing translations are never touched)", systemImage: "text.magnifyingglass")
         Button("Save", systemImage: "square.and.arrow.down") {
           Task { await store.save() }
         }
         .keyboardShortcut("s")
         .disabled(!store.canSave)
-        .help(store.canSave
+        .kitHelp("Save", shortcut: "⌘S", meta: store.canSave
           ? "Write the edited catalog to \(store.unsavedCatalogName) — nothing saves on its own"
-          : "No unsaved changes")
+          : "No unsaved changes", systemImage: "square.and.arrow.down")
       }
     }
     KitToolbarItem(placement: .primaryAction) {
@@ -48,30 +48,30 @@ struct ControlsBar: ToolbarContent {
           Task { await store.reload() }
         }
         .disabled(!store.isLoaded)
-        .help("Read the catalog file again")
+        .kitHelp("Reload", meta: "Read the catalog file again", systemImage: "arrow.clockwise")
         Button("Non-translatable Keys", systemImage: "eye") {
           withKitAnimation { store.includeNonTranslatable.toggle() }
         }
         .kitToolOn(store.includeNonTranslatable)
         .accessibilityAddTraits(store.includeNonTranslatable ? .isSelected : [])
-        .help("Include the \(store.nonTranslatableCount) keys marked shouldTranslate = false (hidden by default)")
+        .kitHelp("Non-translatable Keys", meta: "Include the \(store.nonTranslatableCount) keys marked shouldTranslate = false (hidden by default)", systemImage: "eye")
         Button("Comments", systemImage: "text.bubble") {
           withKitAnimation { store.setShowComments(!store.showComments) }
         }
         .kitToolOn(store.showComments)
         .accessibilityAddTraits(store.showComments ? .isSelected : [])
-        .help("Show comment text under each source value")
+        .kitHelp("Comments", meta: "Show comment text under each source value", systemImage: "text.bubble")
         Button("Longest", systemImage: "ruler") {
           withKitAnimation { store.setShowLongest(!store.showLongest) }
         }
         .kitToolOn(store.showLongest)
         .accessibilityAddTraits(store.showLongest ? .isSelected : [])
-        .help("Show the Longest column (longest value across all languages)")
+        .kitHelp("Longest", meta: "Show the Longest column (longest value across all languages)", systemImage: "ruler")
         Button("Context Rules", systemImage: "text.book.closed") {
           store.openContextDocs()
         }
         .disabled(!store.isLoaded)
-        .help("Edit the project context rules the translator follows — one rule per line, and deleting a line retracts it")
+        .kitHelp("Context Rules", meta: "Edit the project context rules the translator follows — one rule per line, and deleting a line retracts it", systemImage: "text.book.closed")
       }
     }
   }

@@ -5,6 +5,7 @@
 //  Created by Dmitry on 14.09.26.
 //
 
+import ComponentKit
 import SwiftUI
 
 extension Translation.VerticalLearn {
@@ -57,26 +58,26 @@ extension Translation.VerticalLearn {
         ScrollView {
           LazyVStack(alignment: .leading, spacing: 8) {
             Text("Learning \(operation.language)")
-              .font(.largeTitle.bold())
+              .kitFont(.largeTitle).bold()
               .frame(maxWidth: .infinity)
             Text("Your corrections against the model's own output. They fold into the language document and memory — never into a value.")
-              .font(.callout)
-              .foregroundStyle(.secondary)
+              .kitFont(.callout)
+              .foregroundStyle(.kitSecondary)
               .padding(.bottom, 8)
             ForEach(Array(operation.items.enumerated()), id: \.offset) { (index, item) in
               HStack(alignment: .firstTextBaseline) {
-                Image(systemName: mark(item).icon).font(.title.bold()).frame(width: 32, height: 32)
+                Image(systemName: mark(item).icon).kitFont(.title1).bold().frame(width: 32, height: 32)
                   .opacity(mark(item).isWaiting ? 0.1 : 1)
                 VStack(alignment: .leading, spacing: 2) {
-                  Text(item.key).font(.caption.monospaced()).foregroundStyle(.tertiary)
+                  Text(item.key).kitFont(.monoSmall).foregroundStyle(.kitTertiary)
                   Translation.VerticalTranslate.StringView(value: item.source)
-                    .foregroundStyle(.secondary)
-                    .font(.callout)
+                    .foregroundStyle(.kitSecondary)
+                    .kitFont(.callout)
                   HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Translation.VerticalTranslate.StringView(value: item.machine)
-                      .foregroundStyle(.secondary)
+                      .foregroundStyle(.kitSecondary)
                       .strikethrough()
-                    Image(systemName: "arrow.right").font(.caption).foregroundStyle(.tertiary)
+                    Image(systemName: "arrow.right").kitFont(.caption).foregroundStyle(.kitTertiary)
                     Translation.VerticalTranslate.StringView(value: item.target)
                       .fontWeight(.semibold)
                   }
@@ -84,8 +85,8 @@ extension Translation.VerticalLearn {
                   // KEY, SOURCE, VALUE, tab separated.
                   if operation.isCompleted {
                     Text("\(item.key)\t\(item.source.catalogValue)\t\(item.target.catalogValue)")
-                      .font(.caption.monospaced())
-                      .foregroundStyle(.tertiary)
+                      .kitFont(.monoSmall)
+                      .foregroundStyle(.kitTertiary)
                       .transition(.opacity)
                   }
                 }

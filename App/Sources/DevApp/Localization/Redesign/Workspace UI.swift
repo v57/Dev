@@ -61,14 +61,14 @@ extension Translation {
 
     var body: some View {
       VStack(spacing: 8) {
-        Text(workspace.project.id).font(.title3.bold())
+        Text(workspace.project.id).kitFont(.title3).bold()
         // The state, not a claim: what this says is what the app's own dirty flag says (8.3).
         Text(
           workspace.isDirty
             ? "The run's edits are in memory until Save — a run never writes the .xcstrings."
             : "Nothing is waiting for Save — the catalog carries everything this session produced.")
-          .font(.callout)
-          .foregroundStyle(.secondary)
+          .kitFont(.callout)
+          .foregroundStyle(.kitSecondary)
           .multilineTextAlignment(.center)
       }
       .padding(32)
@@ -123,9 +123,9 @@ extension Translation {
 
     private func header(_ run: Run?) -> some View {
       HStack(spacing: 12) {
-        Text(workspace.stage.title).font(.title2.bold())
+        Text(workspace.stage.title).kitFont(.title2).bold()
         if let state = run?.state {
-          Text(state.title).font(.callout).foregroundStyle(.secondary)
+          Text(state.title).kitFont(.callout).foregroundStyle(.kitSecondary)
         }
         Spacer()
         Button {
@@ -151,8 +151,8 @@ extension Translation {
             }
           } else {
             Text("No run yet — Start runs prepare, prelearn, learn, translate and the row pass.")
-              .font(.callout)
-              .foregroundStyle(.secondary)
+              .kitFont(.callout)
+              .foregroundStyle(.kitSecondary)
           }
         }
         .padding(.horizontal, 12)
@@ -181,10 +181,10 @@ extension Translation {
       if let run, let binding, let step = displayed(run) {
         switch step {
         case .prepare:
-          Notice(icon: "gearshape", title: "Preparing", detail: "Reading the project's rows and the imported database. No model call.")
+          EmptyState(systemImage: "gearshape", title: "Preparing", message: "Reading the project's rows and the imported database. No model call.", status: .working)
         case .prelearn:
           if binding.prelearn.isEmpty {
-            Notice(icon: "wand.and.stars", title: "\(step.title) had nothing to do", detail: "No settled slot is missing its machine record.")
+            EmptyState(systemImage: "wand.and.stars", title: "\(step.title) had nothing to do", message: "No settled slot is missing its machine record.")
           } else {
             VerticalPrelearn.Content(
               index: binding.pageIndex(step), operations: binding.prelearn,
@@ -192,7 +192,7 @@ extension Translation {
           }
         case .learn:
           if binding.learn.isEmpty {
-            Notice(icon: "graduationcap", title: "\(step.title) had nothing to do", detail: "No correction differs from what the model produced.")
+            EmptyState(systemImage: "graduationcap", title: "\(step.title) had nothing to do", message: "No correction differs from what the model produced.")
           } else {
             VerticalLearn.Content(
               index: binding.pageIndex(step), operations: binding.learn,
@@ -200,7 +200,7 @@ extension Translation {
           }
         case .vertical:
           if binding.vertical.isEmpty {
-            Notice(icon: "translate", title: "\(step.title) had nothing to do", detail: "Every slot of every column is already settled.")
+            EmptyState(systemImage: "translate", title: "\(step.title) had nothing to do", message: "Every slot of every column is already settled.")
           } else {
             VerticalTranslate.Content(
               index: binding.pageIndex(step), operations: binding.vertical,
@@ -208,7 +208,7 @@ extension Translation {
           }
         case .horizontal:
           if binding.rows.isEmpty {
-            Notice(icon: "tablecells", title: "\(step.title) had nothing to do", detail: "No translatable row to sweep.")
+            EmptyState(systemImage: "tablecells", title: "\(step.title) had nothing to do", message: "No translatable row to sweep.")
           } else {
             HorizontalTranslate.Content(
               index: binding.pageIndex(step), operations: binding.rows,
@@ -217,10 +217,10 @@ extension Translation {
           }
         }
       } else {
-        Notice(
-          icon: "play.circle",
+        EmptyState(
+          systemImage: "play.circle",
           title: workspace.canStart ? "Ready" : "No model configured",
-          detail: workspace.museNote
+          message: workspace.museNote
             ?? "One button runs the whole plan: prepare, prelearn, learn, translate, then the row pass.")
       }
     }
@@ -235,9 +235,10 @@ extension Translation {
         }
         HStack(spacing: 12) {
           controls(run)
+            .buttonStyle(.kit)
           Spacer()
           if let run {
-            Text(Self.tally(run)).font(.callout).foregroundStyle(.secondary).monospacedDigit()
+            Text(Self.tally(run)).kitFont(.callout).foregroundStyle(.kitSecondary).monospacedDigit()
           }
         }
         HStack(spacing: 12) {
@@ -247,11 +248,12 @@ extension Translation {
             Label(
               "In memory until Save — the .xcstrings is unchanged.",
               systemImage: "square.and.arrow.down")
-              .font(.caption)
-              .foregroundStyle(.secondary)
+              .kitFont(.caption)
+              .foregroundStyle(.kitSecondary)
             Button("Save") {
               Task { await workspace.save() }
             }
+            .buttonStyle(.kit)
             .help(
               "Write this session's results into "
                 + (workspace.fileName ?? "the catalog") + " — Save is the only writer of the file")
@@ -259,20 +261,21 @@ extension Translation {
             Label(
               "Nothing is waiting for Save — the catalog carries everything this session produced.",
               systemImage: "checkmark.circle")
-              .font(.caption)
-              .foregroundStyle(.secondary)
+              .kitFont(.caption)
+              .foregroundStyle(.kitSecondary)
           }
           if let failure = run?.failure {
             Label(failure.message, systemImage: "exclamationmark.triangle.fill")
-              .font(.caption)
-              .foregroundStyle(.red)
+              .kitFont(.caption)
+              .foregroundStyle(Hue.red.text)
               .lineLimit(2)
           }
           if let note = workspace.museNote {
             HStack(spacing: 6) {
-              Text(note).font(.caption).foregroundStyle(.secondary)
+              Text(note).kitFont(.caption).foregroundStyle(.kitSecondary)
               if !workspace.canStart {
                 SettingsLink { Text("Open Settings…") }
+                  .buttonStyle(.kit)
                   .controlSize(.small)
               }
             }
@@ -297,19 +300,15 @@ extension Translation {
           Button("Cancel") { workspace.cancel() }
         case .paused:
           Button("Resume") { Task { try? await workspace.resume() } }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.kitPrimary)
           Button("Cancel") { workspace.cancel() }
         case .cancelled, .finished, .idle, nil:
           // 5.11: a FINISHED run that gave up on batches offers the re-ask BESIDE Start — the same
           // batches again, not a second run of the whole plan. It covers both translate jobs (the
           // column pass and the row pass), and a run with nothing failed offers nothing.
           if let run, run.canRetryFailedBatches {
-            Button {
+            Button("Retry failed batches (\(run.failedBatches.count))", systemImage: "arrow.clockwise") {
               Task { try? await workspace.retryFailedBatches() }
-            } label: {
-              Label(
-                "Retry failed batches (\(run.failedBatches.count))",
-                systemImage: "arrow.clockwise")
             }
             .disabled(!workspace.canStart)
             .help(
@@ -317,7 +316,7 @@ extension Translation {
                 + "No scan and no re-cut: they go out as they stand.")
           }
           Button("Start") { Task { try? await workspace.start() } }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.kitPrimary)
             .disabled(!workspace.canStartRun)
             .help(workspace.museNote ?? "Runs prepare, prelearn, learn, translate and the row pass")
           // The SECOND way in, immediately after Start (reader, 2026-09-14: "Place it right after
@@ -325,11 +324,10 @@ extension Translation {
           // out. Icon-only, because Start is the button that needs a word — this one differs from
           // it by ONE thing, and its tooltip is where that thing is spelled out. Same shape as
           // Start: the same disabled rule (`canStartRun`), the same `museNote` fallback.
-          Button {
+          Button("Start Without Learning", systemImage: "forward.fill") {
             Task { try? await workspace.startSkippingLearning() }
-          } label: {
-            Image(systemName: "forward.fill")
           }
+          .buttonStyle(.kitIcon)
           .disabled(!workspace.canStartRun)
           .help(workspace.museNote ?? Run.skipLearningHelp)
         }
@@ -377,14 +375,11 @@ extension Translation {
       let isActive = run.state == .running || run.state == .scanning
       TimelineView(.animation(minimumInterval: 0.5, paused: !isActive)) { _ in
         let estimate = run.estimate
-        HStack(spacing: 12) {
-          KitProgressBar(
-            status: isActive
-              ? .working(progress: estimate?.fraction)
-              : run.state == .finished ? .done : .paused(progress: estimate?.fraction))
-          Text(estimate?.line ?? (isActive ? "Estimating…" : ""))
-            .font(.callout).foregroundStyle(.secondary).monospacedDigit()
-        }
+        KitProgressEstimate(
+          status: isActive
+            ? .working(progress: estimate?.fraction)
+            : run.state == .finished ? .done : .paused(progress: estimate?.fraction),
+          line: estimate?.line)
       }
     }
   }
@@ -436,7 +431,7 @@ extension Translation {
       ) {
         Text(workspace.status.summary).monospacedDigit()
         if workspace.status.isRunning, let line = estimate?.line {
-          Text(line).monospacedDigit().foregroundStyle(.secondary)
+          Text(line).monospacedDigit().foregroundStyle(.kitSecondary)
         }
         // A run's edits are in memory until Save (8.3), and the bar is where the user looks
         // once the run's pages are closed — so the state is a READING here, not a sentence
@@ -744,38 +739,9 @@ extension Translation {
     }
 
     var body: some View {
-      HStack(spacing: 6) {
-        Image(systemName: icon)
-        Text(step.id.title)
-        if step.showsCounts {
-          Text("\(step.done)/\(step.total)").monospacedDigit().foregroundStyle(.secondary)
-        }
-      }
-      .font(.callout)
-      .foregroundStyle(step.hasRun ? .primary : .secondary)
-      .padding(.horizontal, 10)
-      .padding(.vertical, 5)
-      .background(
-        Capsule().fill(Color.accentColor.opacity(step.isCurrent ? 0.15 : 0.06))
-      )
-    }
-  }
-
-  /// A step with nothing to page through, or a workspace with no run at all: one line
-  /// where a page would be, instead of an empty pager.
-  private struct Notice: View {
-    let icon: String
-    let title: String
-    let detail: String
-
-    var body: some View {
-      VStack(spacing: 8) {
-        Image(systemName: icon).font(.largeTitle).foregroundStyle(.tertiary)
-        Text(title).font(.headline)
-        Text(detail).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
-      }
-      .padding(32)
-      .frame(maxWidth: .infinity, maxHeight: .infinity)
+      Chip(
+        step.showsCounts ? "\(step.id.title) \(step.done)/\(step.total)" : step.id.title, systemImage: icon,
+        hue: step.isCurrent ? .accent : step.hasRun ? .green : nil, style: step.hasRun ? .soft : .quiet)
     }
   }
 
