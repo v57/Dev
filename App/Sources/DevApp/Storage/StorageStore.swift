@@ -65,7 +65,7 @@ final class StorageStore {
   init() {
     loadSnapshot()
     refreshVolume()
-    activation = DevDesktop.onActivation { [weak self] in
+    activation = KitDesktop.onActivation { [weak self] in
       self?.hasFullDiskAccess = FullDiskAccess.isGranted
     }
   }

@@ -6,7 +6,6 @@
 //
 
 import ComponentKit
-import DevDesktop
 import SwiftUI
 import Foundation
 import UniformTypeIdentifiers
@@ -493,8 +492,8 @@ final class SidebarViewModel {
   /// project never depends on dragging. Selects the first project added.
   func addProjectsFromPanel() {
     Task {
-      let urls = await DevDesktop.chooseFiles(
-        message: "Choose a project folder, a folder of repos, or a String Catalog.", prompt: "Add",
+      let urls = await KitDesktop.chooseFiles(
+        prompt: "Add", message: "Choose a project folder, a folder of repos, or a String Catalog.",
         contentTypes: [.folder, .init(filenameExtension: "xcstrings") ?? .data], canChooseFolders: true,
         allowsMultipleSelection: true)
       guard !urls.isEmpty else { return }

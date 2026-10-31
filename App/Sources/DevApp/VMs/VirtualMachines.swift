@@ -3,8 +3,8 @@
 //  Dev
 //
 
-import DevDesktop
 import Foundation
+import ComponentKit
 import Observation
 
 // MARK: - VirtualMachine
@@ -96,7 +96,7 @@ final class VMStore {
 
   /// Whether UTM is open: only then may `utmctl` ask it anything.
   nonisolated static var isUTMRunning: Bool {
-    DevDesktop.isAppRunning(bundleIdentifier: "com.utmapp.UTM")
+    KitDesktop.isAppRunning("com.utmapp.UTM")
   }
 
   func refresh() async {

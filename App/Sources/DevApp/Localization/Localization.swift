@@ -5,8 +5,8 @@
 //  Created by Dmitry on 09.09.26.
 //
 
-import DevDesktop
 import Foundation
+import ComponentKit
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -1384,7 +1384,7 @@ final class LocalizationStore {
   private func presentOpenPanel() {
     Task {
       guard
-        let url = await DevDesktop.chooseFiles(
+        let url = await KitDesktop.chooseFiles(
           message: "Choose an .xcstrings catalog", contentTypes: UTType(filenameExtension: "xcstrings").map { [$0] } ?? []
         ).first
       else { return }

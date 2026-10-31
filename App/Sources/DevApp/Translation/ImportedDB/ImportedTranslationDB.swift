@@ -5,8 +5,8 @@
 //  Created by Dmitry on 10.09.26.
 //
 
-import DevDesktop
 import Foundation
+import ComponentKit
 import Observation
 import SQLiteKit
 import UniformTypeIdentifiers
@@ -157,9 +157,9 @@ final class ImportedTranslationDB {
   /// `errorMessage` (shown by the calling view).
   func importViaPanel() async {
     guard
-      let url = await DevDesktop.chooseFiles(
-        title: "Import Translation Database",
-        message: "Choose a sqlite file with a translations (language, source, target, app) table", prompt: "Import",
+      let url = await KitDesktop.chooseFiles(
+        title: "Import Translation Database", prompt: "Import",
+        message: "Choose a sqlite file with a translations (language, source, target, app) table",
         contentTypes: [.data]
       ).first
     else { return }

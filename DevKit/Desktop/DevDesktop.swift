@@ -1,59 +1,15 @@
 import Foundation
 import SwiftUI
-import UniformTypeIdentifiers
 
 #if canImport(AppKit)
   import AppKit
 #endif
 
-/// What Dev needs from the desktop beyond ComponentKit's `KitDesktop`, without the platform's types: file panels
-/// that take files, the icons the file manager shows, other apps, the app's activation and its quit guard. AppKit on
-/// the Mac; elsewhere SwiftUI's file dialogs and the process table, with what has no counterpart left out
+/// What Dev needs from the desktop beyond ComponentKit's `KitDesktop` (file panels, file icons, other apps and the
+/// app's activation are `KitDesktop`'s), without the platform's types: its own other instances, its alerts and its
+/// quit guard. AppKit on the Mac; elsewhere the process table, with what has no counterpart left out
 /// (`DevCapabilities` says which tools need the Mac).
 public enum DevDesktop {
-  /// Asks for files (and folders, with `canChooseFolders`) with the system's open panel; empty when cancelled.
-  @MainActor public static func chooseFiles(
-    title: String? = nil, message: String? = nil, prompt: String = "Open", contentTypes: [UTType] = [],
-    canChooseFolders: Bool = false, allowsMultipleSelection: Bool = false
-  ) async -> [URL] {
-    #if canImport(AppKit)
-      let panel = NSOpenPanel()
-      if let title { panel.title = title }
-      if let message { panel.message = message }
-      panel.prompt = prompt
-      panel.canChooseFiles = true
-      panel.canChooseDirectories = canChooseFolders
-      panel.allowsMultipleSelection = allowsMultipleSelection
-      if !contentTypes.isEmpty { panel.allowedContentTypes = contentTypes }
-      return panel.runModal() == .OK ? panel.urls : []
-    #else
-      var request = FileDialogRequest(
-        kind: .open, contentTypes: contentTypes.map(\.identifier), allowsMultipleSelection: allowsMultipleSelection,
-        canChooseDirectories: canChooseFolders)
-      request.options.confirmationLabel = prompt
-      request.options.message = message ?? title
-      return await FileDialogs.present(request) ?? []
-    #endif
-  }
-
-  /// The icon the file manager shows for a file or an app bundle; nil where the system has none to give.
-  @MainActor public static func icon(forFile path: String) -> Image? {
-    #if canImport(AppKit)
-      Image(nsImage: NSWorkspace.shared.icon(forFile: path))
-    #else
-      nil
-    #endif
-  }
-
-  /// Whether an app with this bundle identifier is running (the Mac's apps; false elsewhere).
-  public static func isAppRunning(bundleIdentifier: String) -> Bool {
-    #if canImport(AppKit)
-      !NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier).isEmpty
-    #else
-      false
-    #endif
-  }
-
   /// Whether this app is running in another process as the app (not as a command-line helper started with one of
   /// `helperArguments`, such as `--mcp`).
   public static func isOwnAppRunning(helperArguments: [String] = []) -> Bool {
@@ -91,18 +47,6 @@ public enum DevDesktop {
       process.standardOutput = FileHandle.nullDevice
       process.standardError = FileHandle.nullDevice
       try? process.run()
-    #endif
-  }
-
-  /// Calls `handler` each time the app becomes the active one (the user comes back to it), until the returned
-  /// observation is released. Never called where the system doesn't say (Linux).
-  @MainActor public static func onActivation(_ handler: @escaping @MainActor () -> Void) -> AnyObject? {
-    #if canImport(AppKit)
-      NotificationCenter.default.addObserver(
-        forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
-      ) { _ in MainActor.assumeIsolated { handler() } }
-    #else
-      nil
     #endif
   }
 

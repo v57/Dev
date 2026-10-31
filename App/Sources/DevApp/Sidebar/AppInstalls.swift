@@ -7,6 +7,7 @@ import DevDesktop
 import CodeActions
 import CodeWorkspace
 import Foundation
+import ComponentKit
 import Observation
 import PlatformBroadcast
 
@@ -71,7 +72,7 @@ import PlatformBroadcast
 
   private init() {
     // Another app may have installed or removed one meanwhile.
-    activation = DevDesktop.onActivation {
+    activation = KitDesktop.onActivation {
       Task { @MainActor in AppInstalls.shared.checkAllIfStale() }
     }
     #if DEBUG
