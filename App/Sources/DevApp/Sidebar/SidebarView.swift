@@ -200,7 +200,7 @@ struct SidebarView: View {
         if let root = row.rootURL {
           Button("Open in \(ProjectOpener.appName)", systemImage: "arrow.up.forward.app") { ProjectOpener.open(root) }
           Button("Show in \(KitDesktop.fileManagerName)", systemImage: "folder") { KitDesktop.reveal([root]) }
-          OtherPlacesMenu(root: root)
+          VaultOtherPlacesMenu(root: root)
           Divider()
           if installs.canInstall(root), let name = installs.appName(root) {
             switch installs.phase(for: root) {
