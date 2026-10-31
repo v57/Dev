@@ -53,14 +53,10 @@ struct ServersSidebarSection: View {
           .padding(.horizontal, 6)
       }
       if store.servers.isEmpty {
-        Button {
-          onEdit(.add)
-        } label: {
-          SidebarRow("Add Connection", systemImage: "plus.circle")
-            .foregroundStyle(.kitSecondary)
-        }
-        .buttonStyle(.plain)
-        .help("Connect a server that serves its strings through the Localization Server API")
+        SidebarRow("Add Connection", systemImage: "plus.circle")
+          .action { onEdit(.add) }
+          .foregroundStyle(.kitSecondary)
+          .kitHelp("Add Connection", meta: "Connect a server that serves its strings through the Localization Server API")
       } else {
         ForEach(store.servers) { row in
           ServerSidebarRow(row: row, status: store.statuses[row.id] ?? .unknown)
@@ -75,7 +71,7 @@ struct ServersSidebarSection: View {
     } accessory: {
       Button("Add Localization Server…", systemImage: "plus") { onEdit(.add) }
         .buttonStyle(.kitIcon)
-        .help("Add a Localization Server")
+        .kitHelp("Add Localization Server…", systemImage: "plus")
     }
     .kitConfirmation(
       "Remove \(pendingRemoval?.name ?? "")?",
@@ -101,9 +97,8 @@ struct ServerSidebarRow: View {
   var body: some View {
     SidebarRow(value: SidebarSelection.server(row.id), row.name, subtitle: row.hostLabel, systemImage: "server.rack") {
       StatusDot(hue: dotHue, isHollow: status == .checking || status == .unknown)
-        .help(status.short)
     }
-    .help("\(row.endpoint)\n\(row.keySource.label)\n\(status.short)")
+    .kitHelp(row.name, meta: "\(row.endpoint) · \(row.keySource.label) · \(status.short)", systemImage: "server.rack")
   }
 
   private var dotHue: Hue {

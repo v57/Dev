@@ -11,7 +11,7 @@ import SwiftUI
 /// skip-learning twin — followed by what the run is doing.
 ///
 /// The pair is deliberately the SAME pair the Localization pane offers
-/// (`Label("Translate", systemImage: "translate")`, `.borderedProminent`, then
+/// (`Label("Translate", systemImage: "translate")`, `.kitPrimary`, then
 /// the `forward.fill` twin sharing `Translation.Run.skipLearningHelp`), because
 /// both panes start the same plan; only the rows differ (a project's catalog
 /// here, this server's corpus there). A start that cannot run says WHY in its
@@ -35,23 +35,17 @@ struct ServerRunBar: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
       HStack(spacing: 10) {
-        Picker("Locale", selection: $locale) {
-          ForEach(localeChoices, id: \.self) { code in
-            Text(label(for: code)).tag(code)
-          }
-        }
-        .frame(maxWidth: 220)
-        .help("The language this run translates into")
+        KitPicker("Locale", selection: $locale, segments: localeChoices.map { KitSegment(label(for: $0), value: $0) })
+          .frame(maxWidth: 220)
+          .kitHelp("Locale", meta: "The language this run translates into")
 
         if !namespaces.isEmpty {
-          Picker("Scope", selection: $scope) {
-            Text("All sentences").tag(String?.none)
-            ForEach(namespaces, id: \.self) { namespace in
-              Text(namespace).tag(String?.some(namespace))
-            }
-          }
-          .frame(maxWidth: 200)
-          .help("Translate only this namespace (a smaller, cheaper run)")
+          KitPicker(
+            "Scope", selection: $scope,
+            segments: [KitSegment("All sentences", value: String?.none)]
+              + namespaces.map { KitSegment($0, value: String?.some($0)) })
+            .frame(maxWidth: 200)
+            .kitHelp("Scope", meta: "Translate only this namespace (a smaller, cheaper run)")
         }
 
         Button {
@@ -59,24 +53,24 @@ struct ServerRunBar: View {
         } label: {
           Label("Translate", systemImage: "translate")
         }
-        .buttonStyle(.borderedProminent)
+        .buttonStyle(.kitPrimary)
         .disabled(!canStart)
-        .help(translateHelp)
+        .kitHelp("Translate", meta: translateHelp, systemImage: "translate")
 
         // The twin: the same run with the learning step left out. Icon-only,
         // because the difference is ONE thing and the tooltip is where it is
         // said — the sentence is shared with the other panes' twin.
-        Button {
+        Button("Translate Without Learning", systemImage: "forward.fill") {
           start(.skipLearning)
-        } label: {
-          Image(systemName: "forward.fill")
         }
+        .buttonStyle(.kitIcon)
         .disabled(!canStart)
-        .help(skipLearningHelp)
+        .kitHelp("Translate Without Learning", meta: skipLearningHelp, systemImage: "forward.fill")
 
         if run.isRunning {
           Button("Stop") { run.cancel() }
-            .help("Stops between batches — every value already accepted stays")
+            .buttonStyle(.kit)
+            .kitHelp("Stop", meta: "Stops between batches — every value already accepted stays")
         }
       }
 
@@ -85,14 +79,13 @@ struct ServerRunBar: View {
       }
       if !run.summaryLine.isEmpty {
         Text(run.summaryLine)
-          .font(.caption)
-          .foregroundStyle(run.isRunning ? .secondary : .primary)
+          .kitFont(.caption)
+          .foregroundStyle(run.isRunning ? .kitSecondary : .kitLabel)
           .textSelection(.enabled)
       }
       ForEach(run.notes.suffix(4), id: \.self) { note in
         Text(note)
-          .font(.caption2)
-          .foregroundStyle(.secondary)
+          .kitFont(.caption)
           .lineLimit(2)
       }
     }
@@ -165,11 +158,7 @@ struct ServerRunEstimateBar: View {
   var body: some View {
     TimelineView(.animation(minimumInterval: 0.5, paused: !run.isRunning)) { _ in
       let estimate = run.estimate
-      HStack(spacing: 12) {
-        KitProgressBar(status: status(estimate))
-        Text(estimate?.line ?? (run.isRunning ? "Estimating…" : ""))
-          .font(.caption).foregroundStyle(.secondary).monospacedDigit()
-      }
+      KitProgressEstimate(status: status(estimate), line: estimate?.line)
     }
   }
 

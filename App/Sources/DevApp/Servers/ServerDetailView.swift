@@ -48,17 +48,17 @@ struct ServerDetailView: View {
     }
     .navigationTitle(row?.name ?? "Server")
     .toolbar {
-      ToolbarItemGroup(placement: .primaryAction) {
-        Button {
-          Task { await check() }
-        } label: {
-          Label("Check", systemImage: "arrow.clockwise")
-        }
-        .disabled(row == nil || isLoading)
-        .help("Ask this server for its tally")
+      KitToolbarItem(placement: .primaryAction) {
+        ToolGroup {
+          Button("Check", systemImage: "arrow.clockwise") {
+            Task { await check() }
+          }
+          .disabled(row == nil || isLoading)
+          .kitHelp("Check", meta: "Ask this server for its tally", systemImage: "arrow.clockwise")
 
-        Button("Edit…") { editing = true }
-          .disabled(row == nil)
+          Button("Edit…", systemImage: "pencil") { editing = true }
+            .disabled(row == nil)
+        }
       }
     }
     .kitSheet(isPresented: $editing) {
@@ -86,7 +86,7 @@ struct ServerDetailView: View {
         namespaces: namespaces)
       if let loadError {
         Label(loadError, systemImage: "exclamationmark.triangle.fill")
-          .foregroundStyle(.orange)
+          .foregroundStyle(Hue.orange.text)
       }
       if !rows.isEmpty {
         statsTable
@@ -95,8 +95,8 @@ struct ServerDetailView: View {
         // deployment: the boot registration fills the inventory, values
         // appear only after a client's run.
         Text("No translated values in any locale yet — the inventory is registered, nothing is translated.")
-          .font(.caption)
-          .foregroundStyle(.secondary)
+          .kitFont(.caption)
+          .foregroundStyle(.kitSecondary)
       }
       corpusSection
     }
@@ -112,7 +112,7 @@ struct ServerDetailView: View {
   private var corpusSection: some View {
     VStack(alignment: .leading, spacing: 6) {
       Text("Lines")
-        .font(.headline)
+        .kitFont(.headline)
       ServerCorpusTable(corpus: corpus, serverLocales: rows)
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -121,15 +121,15 @@ struct ServerDetailView: View {
   private func header(_ row: ServerRow) -> some View {
     VStack(alignment: .leading, spacing: 6) {
       Text(row.endpoint)
-        .font(.system(.body, design: .monospaced))
+        .kitFont(.mono)
         .textSelection(.enabled)
       Text(row.keySource.label)
-        .font(.caption)
-        .foregroundStyle(row.keySource == .missing ? .orange : .secondary)
+        .kitFont(.caption)
+        .foregroundStyle(row.keySource == .missing ? AnyShapeStyle(Hue.orange.text) : AnyShapeStyle(.kitSecondary))
       if let at = store.checkedAt[serverID] {
         Text("last checked \(at.formatted(date: .omitted, time: .standard))")
-          .font(.caption)
-          .foregroundStyle(.secondary)
+          .kitFont(.caption)
+          .foregroundStyle(.kitSecondary)
       }
     }
   }
@@ -139,19 +139,19 @@ struct ServerDetailView: View {
       switch status {
       case .online(let messages, let commented):
         Label("\(messages) sentences, \(commented) commented", systemImage: "checkmark.circle.fill")
-          .foregroundStyle(.green)
+          .foregroundStyle(Hue.green.text)
       case .checking:
         Label("checking…", systemImage: "clock")
-          .foregroundStyle(.secondary)
+          .foregroundStyle(.kitSecondary)
       case .unknown:
         Label("not checked yet", systemImage: "questionmark.circle")
-          .foregroundStyle(.secondary)
+          .foregroundStyle(.kitSecondary)
       case .offline(let detail):
         Label(detail, systemImage: "xmark.circle.fill")
-          .foregroundStyle(.red)
+          .foregroundStyle(Hue.red.text)
       case .notConfigured(let detail):
         Label(detail, systemImage: "exclamationmark.circle.fill")
-          .foregroundStyle(.orange)
+          .foregroundStyle(Hue.orange.text)
       }
     }
     .textSelection(.enabled)
@@ -160,15 +160,15 @@ struct ServerDetailView: View {
   private var statsTable: some View {
     VStack(alignment: .leading, spacing: 6) {
       Text("Corpus by locale")
-        .font(.headline)
+        .kitFont(.headline)
       Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 4) {
         GridRow {
-          Text("locale").font(.caption).foregroundStyle(.secondary)
-          Text("total").font(.caption).foregroundStyle(.secondary)
-          Text("machine").font(.caption).foregroundStyle(.secondary)
-          Text("gold").font(.caption).foregroundStyle(.secondary)
-          Text("missing").font(.caption).foregroundStyle(.secondary)
-          Text("stale").font(.caption).foregroundStyle(.secondary)
+          Text("locale").kitFont(.caption).foregroundStyle(.kitSecondary)
+          Text("total").kitFont(.caption).foregroundStyle(.kitSecondary)
+          Text("machine").kitFont(.caption).foregroundStyle(.kitSecondary)
+          Text("gold").kitFont(.caption).foregroundStyle(.kitSecondary)
+          Text("missing").kitFont(.caption).foregroundStyle(.kitSecondary)
+          Text("stale").kitFont(.caption).foregroundStyle(.kitSecondary)
         }
         ForEach(rows, id: \.locale) { stats in
           GridRow {
