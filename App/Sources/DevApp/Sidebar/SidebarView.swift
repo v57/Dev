@@ -156,17 +156,12 @@ struct SidebarView: View {
       if model.projects.isEmpty {
         dropHintRow
       } else {
-        if layout.hasGroups {
-          // During a search every group is open, so the chevrons can't close one.
-          KitOutline(
-            layout.roots, children: \.children, collapsed: search.isEmpty ? $collapsedGroups.ids : .constant([])
-          ) { node in
-            projectsNode(node)
-          }
-        } else {
-          ForEach(layout.roots) { node in
-            projectsNode(node)
-          }
+        // During a search every group is open, so the chevrons can't close one. Without groups the outline is
+        // flat and keeps no chevron slot.
+        KitOutline(
+          layout.roots, children: \.children, collapsed: search.isEmpty ? $collapsedGroups.ids : .constant([])
+        ) { node in
+          projectsNode(node)
         }
       }
     } accessory: {

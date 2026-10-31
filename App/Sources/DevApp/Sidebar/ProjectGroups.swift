@@ -31,11 +31,6 @@ struct ProjectGroupsLayout {
   let roots: [Node]
   /// The rows on screen with `collapsed` closed (every group is open during a search), for the sidebar's animation.
   let visibleIDs: [String]
-  /// Whether any group is on screen: the projects then keep the chevron's slot, so their icons line up.
-  var hasGroups: Bool {
-    roots.contains { $0.children != nil }
-  }
-
   init(projects: [SidebarProjectRow], tree: VaultProjectTree, collapsed: Set<String>, search: String) {
     let shown = search.isEmpty ? projects : projects.filter { $0.name.localizedCaseInsensitiveContains(search) }
     let device = VaultDevice.id
