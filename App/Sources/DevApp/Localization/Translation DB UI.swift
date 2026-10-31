@@ -35,9 +35,7 @@ struct TranslationDBControl: View {
         ? "Imported translation DB: \(db.fileURL?.lastPathComponent ?? "—"). Click for info, import or remove."
         : "No translation DB imported — translations come from the AI pipeline. Click to import one.",
       systemImage: "cylinder.split.1x2", hue: db.isImported ? .green : .accent)
-    // The system popover, not .kitPopover: this button is a tool in a kitToolbar slot, where the kit's popover
-    // currently opens a card per measuring copy of the bar (a kit fix is coming).
-    .popover(isPresented: $showingInfo, arrowEdge: .bottom) {
+    .kitPopover(isPresented: $showingInfo) {
       ImportedDBInfoView(store: store)
     }
   }
