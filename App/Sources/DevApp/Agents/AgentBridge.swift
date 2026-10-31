@@ -104,7 +104,6 @@ struct AgentsSettingsView: View {
   @AppStorage(AgentPermissions.enabledKey) private var enabled = true
   @State private var levels: [AgentPermissions.Action: AgentPermissions.Level] = [:]
   @State private var log: [String] = []
-  @State private var copied = false
 
   private var command: String {
     let path = Bundle.main.executablePath ?? "/Applications/Dev.app/Contents/MacOS/Dev"
@@ -127,11 +126,7 @@ struct AgentsSettingsView: View {
             .textSelection(.enabled)
             .lineLimit(2)
           Spacer()
-          Button(copied ? "Copied" : "Copy") {
-            KitPasteboard.copy(command)
-            copied = true
-          }
-          .buttonStyle(.kitPlain)
+          KitCopyButton(value: command).buttonStyle(.kitPlain)
         })
       }
       FormCard(
