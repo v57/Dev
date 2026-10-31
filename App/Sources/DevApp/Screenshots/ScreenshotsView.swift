@@ -46,11 +46,11 @@ struct ScreenshotsView: View {
           Button(role: .destructive) { store.cancelCapture(root) } label: { Label("Stop", systemImage: "stop.fill") }
         } else {
           Button { store.capture(root) } label: { Label("Capture", systemImage: "camera") }
-            .help("Take the scenes in .dev/screenshots.json, then frame them")
+            .kitHelp("Capture", meta: "Take the scenes in .dev/screenshots.json, then frame them", systemImage: "camera")
             .disabled(store.phase(root) != .idle || library?.config == nil)
         }
         Button { uploading = true } label: { Label("Upload…", systemImage: "icloud.and.arrow.up") }
-          .help("Upload the framed screenshots to App Store Connect")
+          .kitHelp("Upload", meta: "Upload the framed screenshots to App Store Connect", systemImage: "icloud.and.arrow.up")
           .disabled(library?.shots.contains { $0.final != nil } != true)
       }
     }
@@ -92,12 +92,12 @@ struct ScreenshotsView: View {
       stage(4, "Upload", "App Store Connect", done: false, current: false)
       Spacer()
       if !store.logs[root, default: []].isEmpty {
-        Button("Show Log") { showsLog = true }.buttonStyle(.link)
+        Button("Show Log") { showsLog = true }.buttonStyle(.kitPlain)
       }
     }
     .padding(.horizontal, 18)
     .padding(.vertical, 10)
-    .background(.background.secondary)
+    .kitPane(.secondary)
   }
 
   private func captureDetail(_ library: ScreenshotLibrary?) -> String {
@@ -112,27 +112,27 @@ struct ScreenshotsView: View {
   ) -> some View {
     HStack(spacing: 8) {
       ZStack {
-        Circle().fill(done ? Color.green : (warning ? Color.orange : (current ? Color.accentColor : Color.clear)))
-        if !done && !current && !warning { Circle().strokeBorder(.tertiary, lineWidth: 1.5) }
+        Circle().fill(done ? Hue.green.fill : (warning ? Hue.orange.fill : (current ? Hue.accent.fill : Hue.gray.soft(0))))
+        if !done && !current && !warning { Circle().strokeBorder(.kitTertiary, lineWidth: 1.5) }
         if done {
-          Image(systemName: "checkmark").font(.caption.weight(.bold)).foregroundStyle(.white)
+          Image(systemName: "checkmark").kitFont(.caption).fontWeight(.bold).foregroundStyle(.white)
         } else if warning {
-          Image(systemName: "exclamationmark").font(.caption.weight(.bold)).foregroundStyle(.white)
+          Image(systemName: "exclamationmark").kitFont(.caption).fontWeight(.bold).foregroundStyle(.white)
         } else {
-          Text("\(number)").font(.caption.weight(.bold)).foregroundStyle(current ? .white : .secondary)
+          Text("\(number)").kitFont(.caption).fontWeight(.bold).foregroundStyle(current ? .white : .secondary)
         }
       }
       .frame(width: 22, height: 22)
       VStack(alignment: .leading, spacing: 1) {
         Text(title).fontWeight(.semibold)
-        Text(detail).font(.caption).foregroundStyle(warning ? .orange : .secondary).lineLimit(1)
+        Text(detail).kitFont(.caption).foregroundStyle(warning ? .orange : .secondary).lineLimit(1)
       }
     }
   }
 
   private func connector(_ done: Bool) -> some View {
     Capsule()
-      .fill(done ? Color.green : Color.secondary.opacity(0.25))
+      .fill(done ? Hue.green.fill : Hue.gray.soft(0.25))
       .frame(width: 28, height: 2)
   }
 
@@ -172,8 +172,8 @@ struct ScreenshotsView: View {
                   flag: overflowing.contains(shot.file) ? "Caption too long" : nil)
                   .padding(4)
                   .background(
-                    RoundedRectangle(cornerRadius: 10)
-                      .strokeBorder(selectedScene == shot.name ? Color.accentColor : .clear, lineWidth: 2))
+                    RoundedRectangle(cornerRadius: KitMetrics.radiusLarge)
+                      .strokeBorder(selectedScene == shot.name ? Hue.accent.fill : Hue.accent.soft(0), lineWidth: 2))
               }
               .buttonStyle(.kitHoverEffect)
             }
@@ -226,8 +226,8 @@ struct ScreenshotsView: View {
         }
         if let error = store.errors[root] {
           Label(error, systemImage: "exclamationmark.triangle.fill")
-            .font(.callout)
-            .foregroundStyle(.orange)
+            .kitFont(.callout)
+            .foregroundStyle(Hue.orange.text)
             .textSelection(.enabled)
         }
         if let config = draft {
@@ -235,10 +235,10 @@ struct ScreenshotsView: View {
             framingEditor(library)
           } else {
             VStack(alignment: .leading, spacing: 8) {
-              Text("Framing").font(.headline)
+              Text("Framing").kitFont(.headline)
               Text("Framing puts each capture on a background under its translated caption, at an App Store size. Until it is set up, Dev frames with the defaults.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
+                .kitFont(.callout)
+                .foregroundStyle(.kitSecondary)
               Button("Set Up Framing") {
                 draft?.framing = .starter(for: config.framedPlatform ?? .mac)
               }
@@ -249,30 +249,29 @@ struct ScreenshotsView: View {
       }
       .padding(16)
     }
-    .background(.background.secondary)
+    .kitPane(.secondary)
   }
 
   private func agentCard(_ framing: ScreenshotConfig.Framing, author: String) -> some View {
     VStack(alignment: .leading, spacing: 8) {
       HStack {
-        Image(systemName: "powerplug").foregroundStyle(Color.accentColor)
+        Image(systemName: "powerplug").foregroundStyle(Hue.accent.text)
         Text("Set up by an agent").fontWeight(.semibold)
         Spacer()
         if let date = framing.updatedAt {
-          Text(date, format: .relative(presentation: .named)).font(.caption).foregroundStyle(.secondary)
+          Text(date, format: .relative(presentation: .named)).kitFont(.caption).foregroundStyle(.kitSecondary)
         }
       }
       Text("\(author) changed the framing. Review the pictures, or edit it below.")
-        .font(.callout)
-        .foregroundStyle(.secondary)
+        .kitFont(.callout)
+        .foregroundStyle(.kitSecondary)
       Button("Show Screenshots File") {
         KitDesktop.reveal([ScreenshotConfig.url(in: root)])
       }
-      .buttonStyle(.link)
+      .buttonStyle(.kitPlain)
     }
     .padding(12)
-    .background(.background, in: RoundedRectangle(cornerRadius: 12))
-    .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.quaternary))
+    .kitSurface(.card)
   }
 
   @ViewBuilder
@@ -281,20 +280,19 @@ struct ScreenshotsView: View {
       get: { draft?.framing ?? ScreenshotConfig.Framing() }, set: { draft?.framing = $0 })
     VStack(alignment: .leading, spacing: 12) {
       HStack {
-        Text("Framing").font(.headline)
+        Text("Framing").kitFont(.headline)
         Spacer()
         Text(".dev/screenshots.json")
-          .font(.system(.caption, design: .monospaced))
-          .foregroundStyle(.secondary)
+          .kitFont(.monoSmall)
+          .foregroundStyle(.kitSecondary)
       }
       LabeledContent("Size") {
-        Picker("Size", selection: Binding(
-          get: { [framing.wrappedValue.width, framing.wrappedValue.height] },
-          set: { size in framing.wrappedValue.width = size[0]; framing.wrappedValue.height = size[1] })
-        ) {
-          ForEach(sizeOptions(framing.wrappedValue), id: \.self) { Text("\($0[0]) × \($0[1])").tag($0) }
-        }
-        .labelsHidden()
+        KitPicker(
+          "Size",
+          selection: Binding(
+            get: { [framing.wrappedValue.width, framing.wrappedValue.height] },
+            set: { size in framing.wrappedValue.width = size[0]; framing.wrappedValue.height = size[1] }),
+          options: sizeOptions(framing.wrappedValue).map { ("\($0[0]) × \($0[1])", $0) })
       }
       LabeledContent("Background") {
         ColorPicker("", selection: hexBinding(framing.background), supportsOpacity: false).labelsHidden()
@@ -305,7 +303,7 @@ struct ScreenshotsView: View {
       LabeledContent("Caption color") {
         ColorPicker("", selection: hexBinding(framing.caption.color), supportsOpacity: false).labelsHidden()
       }
-      Toggle("Bold caption", isOn: framing.caption.bold)
+      Toggle("Bold caption", isOn: framing.caption.bold).toggleStyle(.kitSwitch)
       LabeledContent("Window") {
         HStack {
           Slider(value: framing.window.scale, in: 0.5...1)
@@ -313,29 +311,31 @@ struct ScreenshotsView: View {
             .monospacedDigit().frame(width: 40)
         }
       }
-      Picker("Window position", selection: framing.window.align) {
-        Text("Bottom edge").tag(ScreenshotConfig.Framing.Align.bottom)
-        Text("Floating").tag(ScreenshotConfig.Framing.Align.center)
+      LabeledContent("Window position") {
+        KitSegmented(
+          selection: framing.window.align,
+          options: [("Bottom edge", ScreenshotConfig.Framing.Align.bottom), ("Floating", .center)])
       }
-      Toggle("Window shadow", isOn: framing.window.shadow)
+      Toggle("Window shadow", isOn: framing.window.shadow).toggleStyle(.kitSwitch)
 
       Divider()
-      Text("Scenes").font(.headline)
+      Text("Scenes").kitFont(.headline)
       Text("Captions are keys in \(framing.wrappedValue.caption.catalog): translate them in Localization.")
-        .font(.caption)
-        .foregroundStyle(.secondary)
+        .kitFont(.caption)
+        .foregroundStyle(.kitSecondary)
       ForEach(Array((draft?.scenes ?? []).enumerated()), id: \.element.id) { index, scene in
         sceneEditor(index, scene, framing)
       }
       HStack {
         Button("Revert") { draft = store.config(root) }
+          .buttonStyle(.kit)
           .disabled(draft == store.config(root))
         Spacer()
         Button("Save & Render") {
           guard let draft else { return }
           Task { await store.save(draft, in: root) }
         }
-        .buttonStyle(.borderedProminent)
+        .buttonStyle(.kitPrimary)
         .disabled(store.phase(root) != .idle || draft == nil)
       }
     }
@@ -346,10 +346,10 @@ struct ScreenshotsView: View {
   ) -> some View {
     VStack(alignment: .leading, spacing: 6) {
       HStack {
-        Text(scene.id).font(.callout.weight(.semibold))
+        Text(scene.id).kitFont(.callout).fontWeight(.semibold)
         Spacer()
         ColorPicker("", selection: Binding(
-          get: { Color(hex: framing.wrappedValue.background(of: scene.id)) },
+          get: { Color(hex: framing.wrappedValue.background(of: scene.id)) ?? .black },
           set: { color in framing.wrappedValue.backgrounds[scene.id] = color.hexString }), supportsOpacity: false)
           .labelsHidden()
       }
@@ -363,7 +363,7 @@ struct ScreenshotsView: View {
         .textFieldStyle(.roundedBorder)
     }
     .padding(10)
-    .background(selectedScene == scene.id ? Color.accentColor.opacity(0.08) : Color.clear, in: RoundedRectangle(cornerRadius: 10))
+    .background(Hue.accent.soft(selectedScene == scene.id ? 0.08 : 0), in: RoundedRectangle(cornerRadius: KitMetrics.radiusLarge))
   }
 
   private func sizeOptions(_ framing: ScreenshotConfig.Framing) -> [[Int]] {
@@ -376,7 +376,7 @@ struct ScreenshotsView: View {
 
   private func hexBinding(_ hex: Binding<String>) -> Binding<Color> {
     Binding(
-      get: { Color(hex: hex.wrappedValue) },
+      get: { Color(hex: hex.wrappedValue) ?? .black },
       set: { color in hex.wrappedValue = color.hexString })
   }
 
@@ -412,52 +412,31 @@ struct ScreenshotsView: View {
       if !missing.isEmpty { items.append(("Not framed yet: \(missing.joined(separator: ", "))", .orange)) }
     }
     return VStack(alignment: .leading, spacing: 7) {
-      Text("Checks").font(.headline)
+      Text("Checks").kitFont(.headline)
       if items.isEmpty {
-        Text("Capture and render to check the pictures.").font(.callout).foregroundStyle(.secondary)
+        Text("Capture and render to check the pictures.").kitFont(.callout).foregroundStyle(.kitSecondary)
       }
       ForEach(Array(items.enumerated()), id: \.offset) { _, item in
         HStack(alignment: .firstTextBaseline, spacing: 8) {
           Circle().fill(item.1).frame(width: 7, height: 7)
-          Text(item.0).font(.callout)
+          Text(item.0).kitFont(.callout)
         }
       }
     }
   }
 
   private var logSheet: some View {
-    VStack(alignment: .leading) {
-      Text("Capture Log").font(.headline)
-      ScrollView {
-        Text(store.logs[root, default: []].joined(separator: "\n"))
-          .font(.system(.caption, design: .monospaced))
-          .textSelection(.enabled)
-          .frame(maxWidth: .infinity, alignment: .leading)
-      }
-      HStack {
-        Spacer()
-        Button("Done") { showsLog = false }.keyboardShortcut(.defaultAction)
-      }
+    KitSheet(title: "Capture Log", systemImage: "camera", width: 680) {
+      KitCodeBlock(lines: store.logs[root, default: []], maxHeight: .infinity, followsEnd: true, font: .monoSmall)
+        .frame(height: 360)
+    } footer: {
+      Spacer()
+      Button("Done") { showsLog = false }.buttonStyle(.kitPrimary).keyboardShortcut(.defaultAction)
     }
-    .padding(20)
-    .frame(width: 680, height: 460)
   }
 }
 
 extension Color {
-  /// `#RRGGBB` → sRGB; anything else is black.
-  init(hex: String) {
-    var value: UInt64 = 0
-    let digits = hex.trimmingCharacters(in: CharacterSet(charactersIn: "# "))
-    guard digits.count == 6, Scanner(string: digits).scanHexInt64(&value) else {
-      self.init(.sRGB, red: 0, green: 0, blue: 0)
-      return
-    }
-    self.init(
-      .sRGB, red: Double((value >> 16) & 0xFF) / 255, green: Double((value >> 8) & 0xFF) / 255,
-      blue: Double(value & 0xFF) / 255)
-  }
-
   /// `#RRGGBB` in sRGB.
   var hexString: String {
     let color = resolve(in: EnvironmentValues())

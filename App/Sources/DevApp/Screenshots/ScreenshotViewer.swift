@@ -7,6 +7,7 @@ import DevDesktop
 import DevGraphics
 import DevScreenshots
 import PlatformImage
+import ComponentKit
 import SwiftUI
 
 /// Full-screen preview of a list of screenshots, opened by a click on one in the Overview or the
@@ -146,7 +147,7 @@ private struct ScreenshotViewerView: View {
           }
         }
         .aspectRatio(CGFloat(max(picture.width, 1)) / CGFloat(max(picture.height, 1)), contentMode: .fit)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .clipShape(RoundedRectangle(cornerRadius: KitMetrics.radiusLarge))
         .shadow(color: .black.opacity(0.5), radius: 24, y: 8)
         .padding(.horizontal, 90)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -162,30 +163,30 @@ private struct ScreenshotViewerView: View {
   private func topBar(_ shot: ScreenshotLibrary.Shot) -> some View {
     HStack(spacing: 14) {
       VStack(alignment: .leading, spacing: 2) {
-        Text(shot.name).font(.headline)
-        Text(detail(shot)).font(.caption).foregroundStyle(.secondary)
+        Text(shot.name).kitFont(.headline)
+        Text(detail(shot)).kitFont(.caption).foregroundStyle(.kitSecondary)
       }
       Spacer()
       if viewer.hasBothAppearances {
         Button { viewer.toggleDark() } label: {
           Label("Dark", systemImage: viewer.dark ? "moon.fill" : "moon")
-            .font(.callout.weight(.medium))
+            .kitFont(.callout).fontWeight(.medium)
             .padding(.horizontal, 12)
             .frame(height: 28)
             .foregroundStyle(viewer.dark ? Color.black : .white)
             .background(viewer.dark ? Color.white : Color.white.opacity(0.12), in: Capsule())
         }
         .buttonStyle(.plain)
-        .help(viewer.dark ? "Show the light captures (D)" : "Show the dark captures (D)")
+        .kitHelp("Dark", shortcut: "D", meta: viewer.dark ? "Show the light captures" : "Show the dark captures", systemImage: "moon")
       }
       Button(action: close) {
         Image(systemName: "xmark")
-          .font(.body.weight(.semibold))
+          .kitFont(.body).fontWeight(.semibold)
           .frame(width: 28, height: 28)
           .background(.white.opacity(0.12), in: Circle())
       }
       .buttonStyle(.plain)
-      .help("Close (Esc)")
+      .kitHelp("Close", shortcut: "⎋")
     }
     .foregroundStyle(.white)
     .padding(.horizontal, 28)
@@ -206,7 +207,7 @@ private struct ScreenshotViewerView: View {
   private func arrow(_ symbol: String, action: @escaping () -> Void) -> some View {
     Button(action: action) {
       Image(systemName: symbol)
-        .font(.title2.weight(.semibold))
+        .kitFont(.title2).fontWeight(.semibold)
         .foregroundStyle(.white)
         .frame(width: 44, height: 44)
         .background(.white.opacity(0.1), in: Circle())
@@ -227,8 +228,8 @@ private struct ScreenshotViewerView: View {
               AsyncImageFile(url: picture.url)
                 .aspectRatio(CGFloat(max(picture.width, 1)) / CGFloat(max(picture.height, 1)), contentMode: .fit)
                 .frame(height: 64)
-                .clipShape(RoundedRectangle(cornerRadius: 5))
-                .overlay(RoundedRectangle(cornerRadius: 5)
+                .clipShape(RoundedRectangle(cornerRadius: KitMetrics.radiusXS))
+                .overlay(RoundedRectangle(cornerRadius: KitMetrics.radiusXS)
                   .strokeBorder(index == viewer.index ? Color.white : .clear, lineWidth: 2))
                 .opacity(index == viewer.index ? 1 : 0.55)
                 .id(slot.id)
