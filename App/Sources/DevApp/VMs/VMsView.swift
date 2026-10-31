@@ -17,9 +17,7 @@ struct VMsView: View {
   @State private var selectedVM: String?
 
   var body: some View {
-    HSplitView {
-      machineList
-        .frame(minWidth: 240, idealWidth: 280, maxWidth: 340)
+    ResizableSplit("vms.listWidth", pane: .leading, width: 280, range: 240...340, mainMinWidth: 380) {
       Group {
         if let vm = store.machines.first(where: { $0.id == selectedVM }) {
           VMDetail(vm: vm, projects: projects, runner: store.runner(for: vm))
@@ -30,7 +28,9 @@ struct VMsView: View {
             message: "Start it, then run a project's build or tests inside it.")
         }
       }
-      .frame(minWidth: 380, maxWidth: .infinity, maxHeight: .infinity)
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+    } pane: {
+      machineList
     }
     .task {
       await store.refresh()
@@ -40,41 +40,36 @@ struct VMsView: View {
 
   private var machineList: some View {
     VStack(spacing: 0) {
-      List(selection: $selectedVM) {
+      KitList(selection: $selectedVM) {
         ForEach(store.machines) { vm in
-          HStack {
-            Image(systemName: vm.guessedSystem == .windows ? "pc" : "terminal")
-              .foregroundStyle(.secondary)
-            VStack(alignment: .leading, spacing: 2) {
-              Text(vm.name)
-              Text(statusText(vm)).font(.caption).foregroundStyle(.secondary)
-            }
-            Spacer()
-            Circle()
-              .fill(vm.status.isRunning ? Color.green : vm.status.isBusy ? .orange : .secondary.opacity(0.4))
-              .frame(width: 8, height: 8)
+          SidebarRow(
+            value: vm.id, vm.name, subtitle: statusText(vm),
+            systemImage: vm.guessedSystem == .windows ? "pc" : "terminal",
+            status: store.pending.contains(vm.id) ? .working : .idle
+          ) {
+            StatusDot(hue: vm.status.isRunning ? .green : vm.status.isBusy ? .orange : .gray, isHollow: !vm.status.isRunning && !vm.status.isBusy)
           }
-          .tag(vm.id)
         }
       }
       if let error = store.error {
-        Text(error).font(.caption).foregroundStyle(.red).padding(8)
+        Text(error).kitFont(.caption).foregroundStyle(Hue.red.text).padding(8)
       }
-      Divider()
       HStack {
-        Button {
+        Button("Refresh", systemImage: "arrow.clockwise") {
           Task { await store.refresh() }
-        } label: {
-          Label("Refresh", systemImage: "arrow.clockwise")
         }
+        .buttonStyle(.kit)
         .disabled(store.isRefreshing)
         Spacer()
         Button("Open UTM") {
           KitDesktop.open(URL(fileURLWithPath: "/Applications/UTM.app"))
         }
+        .buttonStyle(.kit)
       }
-      .padding(8)
+      .controlSize(.small)
+      .padding(KitMetrics.gutter)
     }
+    .kitPane(.secondary)
   }
 
   private func statusText(_ vm: VirtualMachine) -> String {
@@ -116,82 +111,91 @@ private struct VMDetail: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
-      Form {
-        Section {
-          HStack {
-            Text(vm.name).font(.headline)
-            Text(vm.status.rawValue).foregroundStyle(.secondary)
-            Spacer()
-            if vm.status.isRunning {
-              Button("Suspend") { Task { await store.suspend(vm) } }
-              Button("Stop") { Task { await store.stop(vm) } }
-            } else {
-              Button("Start") { Task { await store.start(vm) } }
-                .buttonStyle(.borderedProminent)
-            }
-          }
-          .disabled(store.pending.contains(vm.id) || vm.status.isBusy)
-        }
-        Section("Connection") {
-          Picker("System", selection: Binding(
-            get: { system }, set: { settings.system = $0; settings.save(vm.id) })) {
-            ForEach(VirtualMachine.System.allCases, id: \.self) { Text($0.title).tag($0) }
-          }
-          TextField("SSH user", text: $settings.user)
-            .onSubmit { settings.save(vm.id) }
-          TextField("Host", text: $settings.host, prompt: Text(address ?? "found automatically"))
-            .onSubmit { settings.save(vm.id); Task { await resolve() } }
-          HStack {
-            if isResolving {
-              ProgressView().controlSize(.small)
-              Text("Looking for the VM's address…").foregroundStyle(.secondary)
-            } else if let target {
-              Text("ssh \(target)").font(.callout.monospaced()).textSelection(.enabled)
-              Spacer()
-              Button("Open in Terminal") { openTerminal(target) }
-            } else {
-              Text(vm.status.isRunning
-                ? "No address yet. Enter the VM's host, or wait for it to finish booting."
-                : "Start the VM to connect.")
-                .foregroundStyle(.secondary)
-              Spacer()
-              if vm.status.isRunning { Button("Retry") { Task { await resolve() } } }
-            }
-          }
-          .font(.callout)
-        }
-        Section("Run on VM") {
-          Picker("Project", selection: $projectID) {
-            Text("Choose…").tag(URL?.none)
-            ForEach(projects.filter { $0.rootURL != nil }) { row in
-              Text(row.name).tag(row.rootURL)
-            }
-          }
-          TextField("Command", text: $command, prompt: Text("swift build"))
-            .font(.body.monospaced())
-          HStack {
-            Text(system == .windows
-              ? "Copied with tar to dev-sync\\<project> in the user's home."
-              : "Mirrored with rsync to ~/dev-sync/<project>; runs in a login shell.")
-              .font(.caption).foregroundStyle(.secondary)
-            Spacer()
-            if runner.isRunning {
-              Button("Stop", role: .destructive) { runner.cancel() }
-            } else {
-              Button("Run") {
-                guard let root = projectID, let target else { return }
-                settings.save(vm.id)
-                runner.run(project: root, on: target, system: system, command: command)
+      ScrollView {
+        VStack(spacing: KitMetrics.gutter) {
+          FormCard {
+            FormRow(
+              vm.name, help: vm.status.rawValue, systemImage: system == .windows ? "pc" : "terminal",
+              hue: vm.status.isRunning ? .green : .gray
+            ) {
+              HStack {
+                if vm.status.isRunning {
+                  Button("Suspend") { Task { await store.suspend(vm) } }
+                  Button("Stop") { Task { await store.stop(vm) } }
+                } else {
+                  Button("Start") { Task { await store.start(vm) } }
+                    .buttonStyle(.kitPrimary)
+                }
               }
-              .keyboardShortcut(.defaultAction)
-              .disabled(projectID == nil || target == nil || command.isEmpty)
+              .buttonStyle(.kit)
+              .disabled(store.pending.contains(vm.id) || vm.status.isBusy)
+            }
+          }
+          FormCard("Connection") {
+            FormRow("System", systemImage: "cpu") {
+              KitPicker(
+                "System",
+                selection: Binding(get: { system }, set: { settings.system = $0; settings.save(vm.id) }),
+                segments: VirtualMachine.System.allCases.map { KitSegment($0.title, value: $0) })
+            }
+            FormRow(
+              "SSH user", systemImage: "person",
+              field: TextField("SSH user", text: $settings.user).onSubmit { settings.save(vm.id) })
+            FormRow(
+              "Host", help: isResolving ? "Looking for the VM's address…" : nil, systemImage: "network",
+              status: isResolving ? .working : .idle,
+              field: TextField("Host", text: $settings.host, prompt: Text(address ?? "found automatically"))
+                .onSubmit { settings.save(vm.id); Task { await resolve() } })
+            if let target {
+              FormRow("ssh \(target)", help: "Signs in with your SSH key", systemImage: "terminal", hue: .green) {
+                Button("Open in Terminal") { openTerminal(target) }.buttonStyle(.kit)
+              }
+            } else if !isResolving {
+              FormRow(
+                "No address yet",
+                help: vm.status.isRunning
+                  ? "Enter the VM's host, or wait for it to finish booting." : "Start the VM to connect.",
+                systemImage: "terminal", hue: .gray
+              ) {
+                if vm.status.isRunning { Button("Retry") { Task { await resolve() } }.buttonStyle(.kit) }
+              }
+            }
+          }
+          FormCard(
+            "Run on VM",
+            footer: system == .windows
+              ? "Copied with tar to dev-sync\\<project> in the user's home."
+              : "Mirrored with rsync to ~/dev-sync/<project>; runs in a login shell."
+          ) {
+            FormRow("Project", systemImage: "folder") {
+              KitPicker(
+                "Project", selection: $projectID,
+                segments: [KitSegment("Choose…", value: URL?.none)]
+                  + projects.filter { $0.rootURL != nil }.map { KitSegment($0.name, value: $0.rootURL) })
+            }
+            FormRow(
+              "Command", systemImage: "chevron.left.forwardslash.chevron.right",
+              field: TextField("Command", text: $command, prompt: Text("swift build")).kitFont(.mono))
+            FormRow(runner.isRunning ? "Running…" : "Run", systemImage: "play", hue: runner.isRunning ? .green : .accent) {
+              if runner.isRunning {
+                Button("Stop", role: .destructive) { runner.cancel() }
+                  .buttonStyle(.kit)
+              } else {
+                Button("Run") {
+                  guard let root = projectID, let target else { return }
+                  settings.save(vm.id)
+                  runner.run(project: root, on: target, system: system, command: command)
+                }
+                .buttonStyle(.kitPrimary)
+                .keyboardShortcut(.defaultAction)
+                .disabled(projectID == nil || target == nil || command.isEmpty)
+              }
             }
           }
         }
+        .padding(KitMetrics.gutter)
       }
-      .formStyle(.grouped)
       .frame(maxHeight: 460)
-      Divider()
       logView
     }
     .task(id: vm.status) { await resolve() }
@@ -202,29 +206,18 @@ private struct VMDetail: View {
   }
 
   private var logView: some View {
-    ScrollViewReader { proxy in
-      ScrollView {
-        LazyVStack(alignment: .leading, spacing: 1) {
-          ForEach(Array(runner.log.enumerated()), id: \.offset) { index, line in
-            Text(line)
-              .font(.system(.caption, design: .monospaced))
-              .foregroundStyle(line.hasPrefix("::") ? Color.accentColor
-                : line.contains("error") ? .red : .primary)
-              .textSelection(.enabled)
-              .frame(maxWidth: .infinity, alignment: .leading)
-              .id(index)
-          }
-          if let status = runner.exitStatus {
-            Label(status == 0 ? "Finished" : "Exited with \(status)",
-                  systemImage: status == 0 ? "checkmark.circle.fill" : "xmark.octagon.fill")
-              .foregroundStyle(status == 0 ? .green : .red)
-              .padding(.top, 6)
-          }
-        }
-        .padding(10)
+    VStack(alignment: .leading, spacing: 6) {
+      KitCodeBlock(
+        lines: runner.log, maxHeight: .infinity, followsEnd: true, font: .monoSmall,
+        placeholder: "The run's output shows here."
+      ) { line in
+        line.hasPrefix("::") ? .accent : line.contains("error") ? .red : nil
       }
-      .onChange(of: runner.log.count) { _, count in proxy.scrollTo(count - 1, anchor: .bottom) }
+      if let status = runner.exitStatus {
+        StatusLabel(status == 0 ? "Finished" : "Exited with \(status)", hue: status == 0 ? .green : .red)
+      }
     }
+    .padding(KitMetrics.gutter)
   }
 
   private func resolve() async {
@@ -258,7 +251,7 @@ struct VMsSidebarRow: View {
       }
     }
     .task { await store.refresh() }
-    .help(status)
+    .kitHelp("Virtual Machines", meta: status, systemImage: "desktopcomputer")
   }
 
   private var running: Int { store.machines.filter(\.status.isRunning).count }
