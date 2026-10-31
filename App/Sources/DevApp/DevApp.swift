@@ -59,7 +59,7 @@ public struct DevApp: App {
         Settings {
             SettingsView().componentKit().kitLazyLoading(!LaunchOptions.isScreenshotMode)
         }
-        // KitSettings(…, window: .hiddenTitleBar) runs its sidebar up under the traffic lights.
+        // KitSettings(…, window: .hiddenTitleBar) runs its sidebar and pane title up under the traffic lights.
         .windowStyle(.hiddenTitleBar)
     }
 }

@@ -22,8 +22,6 @@ struct SettingsView: View {
       SettingsPane("Advanced", systemImage: "slider.horizontal.3", id: "advanced") { AdvancedSettingsView() }
     }
     .frame(width: 640, height: 560)
-    .toolbar(removing: .title)
-    .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
   }
 }
 
@@ -133,13 +131,11 @@ struct TranslationSettingsView: View {
         modelSection(preset)
         FormCard {
           FormRow(
-            "Test", help: model.testResult?.message ?? model.problem,
-            systemImage: model.testResult.map { $0.succeeded ? "checkmark" : "xmark" } ?? "bolt",
-            hue: model.testResult.map { $0.succeeded ? .green : .red } ?? .gray
+            "Test", help: model.testResult?.message ?? model.problem, systemImage: "bolt", hue: .gray,
+            status: model.isTesting ? .working : model.testResult.map { $0.succeeded ? .done : .failed } ?? .idle
           ) {
             Button("Test") { Task { await model.test() } }
               .buttonStyle(.kit)
-              .status(model.isTesting ? .working : .idle)
               .disabled(model.isTesting)
           }
           .textSelection(.enabled)
