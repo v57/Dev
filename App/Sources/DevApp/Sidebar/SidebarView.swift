@@ -42,7 +42,7 @@ struct SidebarView: View {
   @State private var showsAddMenu = false
   @State private var confirmsRemoveAll = false
   /// The project groups closed in the Projects section (vault group ids).
-  @AppStorage("CollapsedProjectGroups") private var collapsedGroups = CollapsedGroups()
+  @AppStorage("CollapsedProjectGroups") private var collapsedGroups = KitIDSet()
   /// Settings ▸ General: the projects that aren't Xcode projects leave the list.
   @AppStorage(SidebarPreferences.onlyXcodeProjects) private var onlyXcodeProjects = true
 
@@ -156,23 +156,17 @@ struct SidebarView: View {
       if model.projects.isEmpty {
         dropHintRow
       } else {
-        ForEach(layout.rows) { row in
-          Group {
-            switch row.item {
-            case .group(let group, let projects):
-              ProjectGroupRow(
-                group: group, projects: projects, isExpanded: groupIsExpanded(group.id), isSearching: !search.isEmpty,
-                holdsSelection: projects.contains { model.selection == .project($0.id) })
-              .kitContextMenu {
-                Button("Remove Group from List", systemImage: "minus.circle") {
-                  withAnimation(.kit) { model.removeGroup(id: group.id, localization: localization) }
-                }
-              }
-            case .project(let project):
-              projectRow(project, reservesDisclosure: layout.hasGroups)
-            }
+        if layout.hasGroups {
+          // During a search every group is open, so the chevrons can't close one.
+          KitOutline(
+            layout.roots, children: \.children, collapsed: search.isEmpty ? $collapsedGroups.ids : .constant([])
+          ) { node in
+            projectsNode(node)
           }
-          .kitRowIndent(row.depth)
+        } else {
+          ForEach(layout.roots) { node in
+            projectsNode(node)
+          }
         }
       }
     } accessory: {
@@ -184,7 +178,7 @@ struct SidebarView: View {
       Button("Remove All Projects from List", systemImage: "minus.circle") { confirmsRemoveAll = true }
         .disabled(model.projects.isEmpty)
     }
-    .animation(.kit, value: layout.rows.map(\.id))
+    .animation(.kit, value: layout.visibleIDs)
     .kitConfirmation(
       model.projects.count == 1 ? "Remove 1 project from the list?" : "Remove all \(model.projects.count) projects from the list?", isPresented: $confirmsRemoveAll,
       message: "Their folders and catalogs stay on disk, and Git and the other apps keep them.",
@@ -194,8 +188,8 @@ struct SidebarView: View {
     }
   }
 
-  private func projectRow(_ row: SidebarProjectRow, reservesDisclosure: Bool) -> some View {
-    ProjectRow(row: row, reservesDisclosure: reservesDisclosure)
+  private func projectRow(_ row: SidebarProjectRow) -> some View {
+    ProjectRow(row: row)
       .kitContextMenu {
         if let root = row.rootURL {
           Button("Open in \(ProjectOpener.appName)", systemImage: "arrow.up.forward.app") { ProjectOpener.open(root) }
@@ -221,13 +215,22 @@ struct SidebarView: View {
       }
   }
 
-  /// Whether a group is open, as Dev keeps it.
-  private func groupIsExpanded(_ id: String) -> Binding<Bool> {
-    Binding(
-      get: { !collapsedGroups.ids.contains(id) },
-      set: { isOpen in
-        if isOpen { collapsedGroups.ids.remove(id) } else { collapsedGroups.ids.insert(id) }
-      })
+  /// A group of the Projects tree (it opens and closes on a click), or a project.
+  @ViewBuilder
+  private func projectsNode(_ node: ProjectGroupsLayout.Node) -> some View {
+    switch node.item {
+    case .group(let group, let projects):
+      ProjectGroupRow(
+        group: group, projects: projects, isOpen: !search.isEmpty || !collapsedGroups.contains(group.id),
+        holdsSelection: projects.contains { model.selection == .project($0.id) })
+      .kitContextMenu {
+        Button("Remove Group from List", systemImage: "minus.circle") {
+          withAnimation(.kit) { model.removeGroup(id: group.id, localization: localization) }
+        }
+      }
+    case .project(let project):
+      projectRow(project)
+    }
   }
 
   /// "1 project · DemoApp": how many, and which one is open.
@@ -266,15 +269,13 @@ struct SidebarView: View {
 private struct ProjectGroupRow: View {
   let group: VaultProjectGroup
   let projects: [SidebarProjectRow]
-  @Binding var isExpanded: Bool
-  /// A search opens every group, so the chevron can't close it.
-  let isSearching: Bool
+  /// Open in the outline (which draws the chevron and opens it on a click), or during a search.
+  let isOpen: Bool
   /// The open project is in it.
   let holdsSelection: Bool
   @AppStorage(SidebarPreferences.showReviewBadge) private var showsReviewBadge = true
 
   var body: some View {
-    let isOpen = isExpanded || isSearching
     let needsReview = projects.reduce(0) { $0 + $1.needsReview }
     SidebarRow(group.name, subtitle: group.note?.isEmpty == false ? group.note : nil) {
       RowTile(systemImage: isOpen ? "folder.fill" : "folder", hue: StableHue.pick(group.name))
@@ -284,9 +285,7 @@ private struct ProjectGroupRow: View {
           .help("\(needsReview) strings need review")
       }
     }
-    .disclosure(isExpanded: isSearching ? .constant(true) : $isExpanded)
     .isCurrent(holdsSelection && !isOpen)
-    .action { if !isSearching { withAnimation(.kit) { isExpanded.toggle() } } }
     .help(projects.count == 1 ? "1 project" : "\(projects.count) projects")
     .accessibilityHint(isOpen ? "Collapses the group" : "Expands the group")
   }
@@ -298,8 +297,6 @@ private struct ProjectGroupRow: View {
 /// than the app on this Mac (then its place in the queue, or the install's step and progress, with Cancel).
 private struct ProjectRow: View {
   let row: SidebarProjectRow
-  /// Keeps the chevron's slot, so the icon lines up with the groups' beside it.
-  var reservesDisclosure = false
   @AppStorage(SidebarPreferences.showReviewBadge) private var showsReviewBadge = true
   private let installs = AppInstalls.shared
 
@@ -315,7 +312,6 @@ private struct ProjectRow: View {
       installButton(install)
     }
     .progress(Self.progress(install), status: .working)
-    .disclosureSlot(reservesDisclosure)
   }
 
   @ViewBuilder
