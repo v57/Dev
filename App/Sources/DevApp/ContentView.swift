@@ -175,7 +175,7 @@ struct ContentView: View {
             selection: $model.projectTool,
             segments: DevTool.allCases.map { KitSegment($0.title, value: $0) }
           )
-          .help("Switch between this project's tools (⌘1–⌘5)")
+          .kitHelp("Project Tools", shortcut: "⌘1–⌘5", meta: "Switch between this project's tools")
         }
       }
       // One Translate button for the project whose Localization pane is showing:
@@ -192,9 +192,9 @@ struct ContentView: View {
               Button("Translate Without Learning", systemImage: "forward.fill") {
                 Task { await translation.startSkippingLearning(catalogURL) }
               }
-              .help(translation.skipLearningHelp(catalogURL))
+              .help(translation.skipLearningHelp(catalogURL))  // .help: inside a kit menu
             }
-            .help(translation.startHelp(catalogURL))
+            .kitHelp("Translate", meta: translation.startHelp(catalogURL), systemImage: "play.fill")
           }
           .disabled(!translation.canStart(catalogURL))
         }

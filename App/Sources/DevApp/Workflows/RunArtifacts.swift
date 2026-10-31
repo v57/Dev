@@ -42,10 +42,10 @@ struct RunArtifacts: View {
         }
         Button(exportTitle) { Task { await export() } }
           .disabled(!isFinished || isExporting || run.files.isEmpty)
-          .help(exportHelp)
+          .kitHelp(exportTitle, meta: exportHelp)
         if isFinished {
           Button("Delete Run…", role: .destructive) { deletingRun = true }
-            .help("Moves the run's folder to the Trash and removes the run")
+            .kitHelp("Delete Run", meta: "Moves the run's folder to the Trash and removes the run")
         }
       }
       .buttonStyle(.kit)

@@ -25,7 +25,7 @@ struct ControlsBar: ToolbarContent {
         TranslationDBControl(store: store)
         if allowsOpenCatalog {
           Button("Open…", systemImage: "folder") { store.openPanelAndLoad() }
-            .kitHelp("Open…", meta: "Open a String Catalog", systemImage: "folder")
+            .kitHelp("Open", meta: "Open a String Catalog", systemImage: "folder")
         }
         Button("Scan Strings", systemImage: "text.magnifyingglass") {
           store.startScan()

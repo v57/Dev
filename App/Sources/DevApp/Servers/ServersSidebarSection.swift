@@ -71,7 +71,7 @@ struct ServersSidebarSection: View {
     } accessory: {
       Button("Add Localization Server…", systemImage: "plus") { onEdit(.add) }
         .buttonStyle(.kitIcon)
-        .kitHelp("Add Localization Server…", systemImage: "plus")
+        .kitHelp("Add Localization Server", systemImage: "plus")
     }
     .kitConfirmation(
       "Remove \(pendingRemoval?.name ?? "")?",

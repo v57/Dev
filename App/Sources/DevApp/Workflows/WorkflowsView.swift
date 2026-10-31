@@ -55,13 +55,13 @@ struct WorkflowsView: View {
         ToolGroup {
           if store.isRunning(root) {
             Button("Stop", systemImage: "stop.fill", role: .destructive) { store.cancel(root) }
-              .help("Stop the run in flight")
+              .kitHelp("Stop", meta: "Stop the run in flight", systemImage: "stop.fill")
           } else if let workflow {
             // Short, so it never crowds the project's tabs in the toolbar's centre.
             Button("Run", systemImage: "play.fill") {
               if workflow.steps.contains(where: \.publishes) { confirmingRun = workflow } else { start(workflow, confirmed: false) }
             }
-            .help("Run \(workflow.name) now")
+            .kitHelp("Run", meta: "Run \(workflow.name) now", systemImage: "play.fill")
             .disabled(releaseConfig == nil && workflow.steps.contains { $0.kind != .command })
           }
         }
@@ -205,7 +205,7 @@ struct WorkflowsView: View {
             Workflow.Step(id: "build", name: "Build", kind: .release, releaseStep: "build"),
           ])
         }
-        .help("New Workflow…")
+        .kitHelp("New Workflow", systemImage: "plus")
       }
       if let selected {
         let runs = store.runs(for: root).filter { $0.workflowID == selected.id }
@@ -374,7 +374,7 @@ struct WorkflowsView: View {
           Button("Edit…") { editing = workflow }
           Button("Release Settings…") { showsReleaseSettings = true }
             .disabled(releaseConfig == nil)
-            .help("The project's release.env: scheme, signing, notarization, GitHub and App Store Connect")
+            .kitHelp("Release Settings", meta: "The project's release.env: scheme, signing, notarization, GitHub and App Store Connect")
         }
         .buttonStyle(.kit)
         if run == nil || run?.state != .running {

@@ -133,7 +133,7 @@ extension Translation {
         } label: {
           Label("Close", systemImage: "chevron.down")
         }
-        .help("Close the run's pages — the run keeps going")
+        .kitHelp("Close", meta: "Close the run's pages — the run keeps going", systemImage: "chevron.down")
       }
       .padding(12)
     }
@@ -254,7 +254,7 @@ extension Translation {
               Task { await workspace.save() }
             }
             .buttonStyle(.kit)
-            .help(
+            .kitHelp("Save", shortcut: "⌘S", meta:
               "Write this session's results into "
                 + (workspace.fileName ?? "the catalog") + " — Save is the only writer of the file")
           } else {
@@ -292,7 +292,7 @@ extension Translation {
         // there is no cursor to resume from. The batches it did not reach stay failed, and the
         // button below offers them again the moment the re-ask is over.
         Button("Stop") { workspace.stopRetry() }
-          .help("Stop re-asking — the batches it did not reach stay failed and are offered again")
+          .kitHelp("Stop", meta: "Stop re-asking — the batches it did not reach stay failed and are offered again")
       } else {
         switch run?.state {
         case .scanning, .running:
@@ -311,14 +311,16 @@ extension Translation {
               Task { try? await workspace.retryFailedBatches() }
             }
             .disabled(!workspace.canStart)
-            .help(
-              "Re-ask exactly the batches this run gave up on — the column pass and the row pass. "
-                + "No scan and no re-cut: they go out as they stand.")
+            .kitHelp(
+              "Retry Failed Batches",
+              meta: "Re-ask exactly the batches this run gave up on — the column pass and the row pass. "
+                + "No scan and no re-cut: they go out as they stand.",
+              systemImage: "arrow.clockwise")
           }
           Button("Start") { Task { try? await workspace.start() } }
             .buttonStyle(.kitPrimary)
             .disabled(!workspace.canStartRun)
-            .help(workspace.museNote ?? "Runs prepare, prelearn, learn, translate and the row pass")
+            .kitHelp("Start", meta: workspace.museNote ?? "Runs prepare, prelearn, learn, translate and the row pass")
           // The SECOND way in, immediately after Start (reader, 2026-09-14: "Place it right after
           // start button with `forward.fill` icon"): the same run with the two learning steps left
           // out. Icon-only, because Start is the button that needs a word — this one differs from
@@ -329,7 +331,7 @@ extension Translation {
           }
           .buttonStyle(.kitIcon)
           .disabled(!workspace.canStartRun)
-          .help(workspace.museNote ?? Run.skipLearningHelp)
+          .kitHelp("Start Without Learning", meta: workspace.museNote ?? Run.skipLearningHelp, systemImage: "forward.fill")
         }
       }
     }
@@ -444,7 +446,7 @@ extension Translation {
             Task { await workspace.save() }
           }
           .buttonStyle(.kitPlain)
-          .help(
+          .kitHelp("Save", shortcut: "⌘S", meta:
             "Write this session's results into "
               + (workspace.fileName ?? "the catalog") + " — Save is the only writer of the file")
         }
@@ -455,7 +457,7 @@ extension Translation {
             workspace.reopenOverlay()
           }
           .buttonStyle(.kitPlain)
-          .help("Reopen the run's pages where the run is now")
+          .kitHelp("Show Run", meta: "Reopen the run's pages where the run is now", systemImage: "chevron.up")
         }
         trailing
       }

@@ -364,7 +364,7 @@ struct ScanStringsView: View {
     .disabled(store.scan.report == nil)
     Button("Choose Folder…") { store.scan.chooseRoot() }
       .disabled(store.scan.isRunning)
-      .kitHelp("Choose Folder…", meta: "Scan a different folder — a catalog can live deep inside the repo")
+      .kitHelp("Choose Folder", meta: "Scan a different folder — a catalog can live deep inside the repo")
     if store.scan.isRunning || store.scan.isCommenting {
       Button("Cancel") { store.scan.cancel() }
         .keyboardShortcut(.cancelAction)

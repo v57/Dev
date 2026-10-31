@@ -140,18 +140,18 @@ extension Translation {
       HStack(spacing: 10) {
         Button { go(shown - 1) } label: { Image(systemName: "chevron.left") }
           .disabled(shown <= 0)
-          .help("Previous batch (←)")
+          .kitHelp("Previous Batch", shortcut: "←", systemImage: "chevron.left")
         Text(count > 0 ? "Batch \(shown + 1) of \(count)" : "No batch")
           .kitFont(.callout)
           .monospacedDigit()
           .foregroundStyle(.kitSecondary)
         Button { go(shown + 1) } label: { Image(systemName: "chevron.right") }
           .disabled(shown >= count - 1)
-          .help("Next batch (→)")
+          .kitHelp("Next Batch", shortcut: "→", systemImage: "chevron.right")
         Spacer()
         if chosen != nil {
           Button("Live") { chosen = nil }
-            .help("Follow the batch the run is on")
+            .kitHelp("Live", meta: "Follow the batch the run is on")
         }
       }
       .buttonStyle(.kitIcon)

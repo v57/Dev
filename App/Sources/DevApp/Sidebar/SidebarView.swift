@@ -71,7 +71,7 @@ struct SidebarView: View {
           Button("Add Project…", systemImage: "folder.badge.plus") { model.addProjectsFromPanel() }.kitMenuHint("⇧⌘O")
           Button("Add Localization Server…", systemImage: "server.rack") { serverSheet = .add }
         }
-        .help("Add a project or a Localization Server")
+        .kitHelp("Add", meta: "Add a project or a Localization Server", systemImage: "plus")
     }
     .kitSheet(item: $serverSheet) { sheet in
       switch sheet {
@@ -172,7 +172,7 @@ struct SidebarView: View {
     } accessory: {
       Button("Add Project…", systemImage: "plus") { model.addProjectsFromPanel() }
         .buttonStyle(.kitIcon)
-        .help("Add a project folder")
+        .kitHelp("Add Project", meta: "Add a project folder", systemImage: "plus")
     }
     .headerMenu {
       Button("Remove All Projects from List", systemImage: "minus.circle") { confirmsRemoveAll = true }
@@ -247,7 +247,7 @@ struct SidebarView: View {
   private var dropHintRow: some View {
     VStack(spacing: 6) {
       Image(systemName: "folder.badge.plus")
-        .font(.title3)
+        .kitFont(.title3)
         .foregroundStyle(.kitSecondary)
       Text("Drop project folders here")
         .kitFont(.callout)
@@ -282,11 +282,11 @@ private struct ProjectGroupRow: View {
     } trailing: {
       if showsReviewBadge, !isOpen, needsReview > 0 {
         Count(needsReview.formatted(.number.notation(.compactName)), .attention)
-          .help("\(needsReview) strings need review")
+          .kitHelp("Needs Review", meta: "\(needsReview) strings need review")
       }
     }
     .isCurrent(holdsSelection && !isOpen)
-    .help(projects.count == 1 ? "1 project" : "\(projects.count) projects")
+    .kitHelp(group.name, meta: projects.count == 1 ? "1 project" : "\(projects.count) projects", systemImage: "folder")
     .accessibilityHint(isOpen ? "Collapses the group" : "Expands the group")
   }
 }
@@ -307,7 +307,7 @@ private struct ProjectRow: View {
     } trailing: {
       if showsReviewBadge, row.needsReview > 0 {
         Count(row.needsReview.formatted(.number.notation(.compactName)), .attention)
-          .help("\(row.needsReview) strings need review")
+          .kitHelp("Needs Review", meta: "\(row.needsReview) strings need review")
       }
       installButton(install)
     }
@@ -321,16 +321,16 @@ private struct ProjectRow: View {
     case .available(let installed):
       Button("Install", systemImage: "arrow.down.circle") { installs.install(row.rootURL) }
         .buttonStyle(.kitIcon)
-        .help(installed ? "The source is newer than \(name) on this Mac: install it" : "Install \(name) on this Mac")
+        .kitHelp("Install", meta: installed ? "The source is newer than \(name) on this Mac: install it" : "Install \(name) on this Mac", systemImage: "arrow.down.circle")
     case .queued, .installing:
       Button("Cancel Install", systemImage: "xmark.circle") { installs.cancel(row.rootURL) }
         .buttonStyle(.kitIcon)
-        .help("Cancel installing \(name)")
+        .kitHelp("Cancel Install", meta: "Cancel installing \(name)", systemImage: "xmark.circle")
     case .failed(let reason):
       Button("Install Again", systemImage: "exclamationmark.arrow.circlepath") { installs.install(row.rootURL) }
         .buttonStyle(.kitIcon)
-        .foregroundStyle(.red)
-        .help("Installing \(name) failed: \(reason). Click to try again; the context menu shows the log.")
+        .foregroundStyle(Hue.red.text)
+        .kitHelp("Install Again", meta: "Installing \(name) failed: \(reason). Click to try again; the context menu shows the log.", systemImage: "exclamationmark.arrow.circlepath")
     case .none, .current:
       EmptyView()
     }
