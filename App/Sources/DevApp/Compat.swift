@@ -11,19 +11,6 @@ import SwiftUI
 /// one goes through here, so the fallback is written once and the call sites read
 /// the same on both systems.
 extension View {
-  /// `safeAreaBar` on macOS 26 (the bar blurs the content scrolling under it);
-  /// `safeAreaInset` before it, which reserves the same space without the blur.
-  @ViewBuilder
-  func compatSafeAreaBar<Content: View>(
-    edge: VerticalEdge, @ViewBuilder content: () -> Content
-  ) -> some View {
-    if #available(macOS 26, *) {
-      safeAreaBar(edge: edge, content: content)
-    } else {
-      safeAreaInset(edge: edge, spacing: 0, content: content)
-    }
-  }
-
   /// Liquid Glass on macOS 26; nothing before it, where the shape's own fill shows.
   @ViewBuilder
   func compatInteractiveGlass<S: Shape>(in shape: S) -> some View {
