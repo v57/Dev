@@ -350,7 +350,7 @@ struct ScreenshotsView: View {
         Spacer()
         ColorPicker("", selection: Binding(
           get: { Color(hex: framing.wrappedValue.background(of: scene.id)) ?? .black },
-          set: { color in framing.wrappedValue.backgrounds[scene.id] = color.hexString }), supportsOpacity: false)
+          set: { color in framing.wrappedValue.backgrounds[scene.id] = color.hex() }), supportsOpacity: false)
           .labelsHidden()
       }
       TextField("Caption", text: Binding(
@@ -377,7 +377,7 @@ struct ScreenshotsView: View {
   private func hexBinding(_ hex: Binding<String>) -> Binding<Color> {
     Binding(
       get: { Color(hex: hex.wrappedValue) ?? .black },
-      set: { color in hex.wrappedValue = color.hexString })
+      set: { color in hex.wrappedValue = color.hex() })
   }
 
   // MARK: - Checks
@@ -433,14 +433,5 @@ struct ScreenshotsView: View {
       Spacer()
       Button("Done") { showsLog = false }.buttonStyle(.kitPrimary).keyboardShortcut(.defaultAction)
     }
-  }
-}
-
-extension Color {
-  /// `#RRGGBB` in sRGB.
-  var hexString: String {
-    let color = resolve(in: EnvironmentValues())
-    func byte(_ component: Float) -> Int { Int((max(0, min(1, Double(component))) * 255).rounded()) }
-    return String(format: "#%02X%02X%02X", byte(color.red), byte(color.green), byte(color.blue))
   }
 }

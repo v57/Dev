@@ -143,7 +143,7 @@ private struct ScreenshotViewerView: View {
               .resizable()
               .interpolation(.high)
           } else {
-            AsyncImageFile(url: picture.url)
+            KitImageFile(url: picture.url, maxPixelSize: 900)
           }
         }
         .aspectRatio(CGFloat(max(picture.width, 1)) / CGFloat(max(picture.height, 1)), contentMode: .fit)
@@ -225,7 +225,7 @@ private struct ScreenshotViewerView: View {
             ForEach(Array(viewer.slots.enumerated()), id: \.element.id) { index, slot in
               let shot = slot.shot(dark: viewer.dark)
               let picture = shot.picture(framed: viewer.framed)
-              AsyncImageFile(url: picture.url)
+              KitImageFile(url: picture.url, maxPixelSize: 900)
                 .aspectRatio(CGFloat(max(picture.width, 1)) / CGFloat(max(picture.height, 1)), contentMode: .fit)
                 .frame(height: 64)
                 .clipShape(RoundedRectangle(cornerRadius: KitMetrics.radiusXS))

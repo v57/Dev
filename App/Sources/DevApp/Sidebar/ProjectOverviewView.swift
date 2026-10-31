@@ -4,8 +4,6 @@
 //
 
 import DevDesktop
-import DevGraphics
-import PlatformImage
 import CodeWorkspace
 import DevScreenshots
 import DevScreenshotsCapture
@@ -439,7 +437,7 @@ struct ScreenshotThumbnail: View {
     VStack(alignment: .leading, spacing: 6) {
       let picture = shot.picture(framed: preferFinal)
       ZStack(alignment: .topTrailing) {
-        AsyncImageFile(url: picture.url)
+        KitImageFile(url: picture.url, maxPixelSize: 900)
           .aspectRatio(CGFloat(max(picture.width, 1)) / CGFloat(max(picture.height, 1)), contentMode: .fit)
           .clipShape(RoundedRectangle(cornerRadius: KitMetrics.radius))
           .shadow(color: .black.opacity(0.15), radius: 3, y: 1)
@@ -469,29 +467,6 @@ struct ScreenshotThumbnail: View {
       Button("Show in \(KitDesktop.fileManagerName)", systemImage: "folder") {
         KitDesktop.reveal([shot.final ?? shot.captured])
       }
-    }
-  }
-}
-
-/// An image file loaded off the main actor, so a strip of 2880-pixel PNGs
-/// does not stall scrolling.
-struct AsyncImageFile: View {
-  let url: URL
-  @State private var image: Image?
-
-  var body: some View {
-    Group {
-      if let image {
-        image
-          .resizable()
-          .interpolation(.high)
-      } else {
-        Rectangle().fill(.kitFillSoft)
-      }
-    }
-    .task(id: url) {
-      let bitmap = await Task.detached(priority: .utility) { ImageFile.thumbnail(at: url, maxPixel: 900) }.value
-      image = bitmap.flatMap { Image(rgba: $0.rgba, width: $0.width, height: $0.height) }
     }
   }
 }
