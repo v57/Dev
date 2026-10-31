@@ -3,6 +3,7 @@
 //  Dev
 //
 
+import ComponentKit
 import SwiftUI
 
 /// The directories a drop passed over, offered as projects. A drop adds the git
@@ -23,43 +24,41 @@ struct ImportSuggestionsSheet: View {
   }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      Text("Add these folders too?")
-        .font(.headline)
-      Text("They hold no git repository, so the drop skipped them. Ticked ones look like projects.")
-        .foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
-      List(suggestions) { item in
-        Toggle(isOn: binding(for: item.url)) {
-          VStack(alignment: .leading, spacing: 2) {
-            Text(item.url.lastPathComponent)
-            Text(item.url.deletingLastPathComponent().path(percentEncoded: false)
-              .replacingOccurrences(of: NSHomeDirectory(), with: "~"))
-              .font(.caption)
-              .foregroundStyle(.secondary)
-              .lineLimit(1)
-              .truncationMode(.middle)
+    KitSheet(
+      title: "Add these folders too?",
+      meta: "They hold no git repository, so the drop skipped them. Ticked ones look like projects.",
+      systemImage: "folder.badge.plus"
+    ) {
+      FormCard {
+        ForEach(suggestions) { item in
+          FormRow(
+            item.url.lastPathComponent,
+            help: item.url.deletingLastPathComponent().path(percentEncoded: false)
+              .replacingOccurrences(of: NSHomeDirectory(), with: "~"),
+            systemImage: "folder", hue: item.looksLikeProject ? .blue : .gray
+          ) {
+            Toggle(item.url.lastPathComponent, isOn: binding(for: item.url))
+              .labelsHidden()
+              .toggleStyle(.kitCheckbox)
           }
         }
       }
-      .listStyle(.bordered)
-      .frame(minHeight: 160, maxHeight: 320)
-      HStack {
-        Button(picked.count == suggestions.count ? "Select None" : "Select All") {
-          picked = picked.count == suggestions.count ? [] : Set(suggestions.map(\.url))
-        }
-        Spacer()
-        Button("Not Now") { onAdd([]) }
-          .keyboardShortcut(.cancelAction)
-        Button(picked.isEmpty ? "Add" : "Add \(picked.count)") {
-          onAdd(suggestions.map(\.url).filter(picked.contains))
-        }
-        .keyboardShortcut(.defaultAction)
-        .disabled(picked.isEmpty)
+    } footer: {
+      Button(picked.count == suggestions.count ? "Select None" : "Select All") {
+        picked = picked.count == suggestions.count ? [] : Set(suggestions.map(\.url))
       }
+      .buttonStyle(.kitPlain)
+      Spacer()
+      Button("Not Now") { onAdd([]) }
+        .buttonStyle(.kit)
+        .keyboardShortcut(.cancelAction)
+      Button(picked.isEmpty ? "Add" : "Add \(picked.count)") {
+        onAdd(suggestions.map(\.url).filter(picked.contains))
+      }
+      .buttonStyle(.kitPrimary)
+      .keyboardShortcut(.defaultAction)
+      .disabled(picked.isEmpty)
     }
-    .padding(20)
-    .frame(width: 440)
   }
 
   private func binding(for url: URL) -> Binding<Bool> {

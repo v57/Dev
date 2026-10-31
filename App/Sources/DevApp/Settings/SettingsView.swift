@@ -271,28 +271,23 @@ private struct ImportKeysSheet: View {
   let model: ModelSettingsModel
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      Text("Import \(model.importCandidates.count == 1 ? "this key" : "these keys")?")
-        .font(.headline)
-      Text("Each key is copied into your login keychain for Dev.")
-        .foregroundStyle(.secondary)
-      ForEach(model.importCandidates) { candidate in
-        VStack(alignment: .leading, spacing: 2) {
-          Text(candidate.providerName)
-          Text("from \(candidate.source)").font(.caption).foregroundStyle(.secondary)
+    KitSheet(
+      title: "Import \(model.importCandidates.count == 1 ? "this key" : "these keys")?",
+      meta: "Each key is copied into your login keychain for Dev.",
+      systemImage: "key.fill", hue: .orange, width: 400
+    ) {
+      FormCard {
+        ForEach(model.importCandidates) { candidate in
+          FormRow(candidate.providerName, help: "from \(candidate.source)", systemImage: "key", hue: .orange)
         }
       }
-      HStack {
-        Spacer()
-        Button("Cancel") { model.importCandidates = [] }
-          .buttonStyle(.kit)
-          .keyboardShortcut(.cancelAction)
-        Button("Import") { model.importKeys() }
-          .buttonStyle(.kitPrimary)
-          .keyboardShortcut(.defaultAction)
-      }
+    } footer: {
+      Button("Cancel") { model.importCandidates = [] }
+        .buttonStyle(.kit)
+        .keyboardShortcut(.cancelAction)
+      Button("Import") { model.importKeys() }
+        .buttonStyle(.kitPrimary)
+        .keyboardShortcut(.defaultAction)
     }
-    .padding(20)
-    .frame(width: 400)
   }
 }

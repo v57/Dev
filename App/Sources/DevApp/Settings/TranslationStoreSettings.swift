@@ -33,7 +33,7 @@ struct ClearTranslationStoreSection: View {
       Button("Clear…", role: .destructive) { prompt = .confirm }
         .buttonStyle(.kit)
         .disabled(blocker != nil || context.localization == nil)
-        .help("Clear Translation Store…")
+        .kitHelp("Clear Translation Store", systemImage: "brain")
     }
     .onAppear { refreshBlocker() }
     .kitConfirmation(
