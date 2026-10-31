@@ -287,7 +287,7 @@ struct ContentView: View {
   }
 
   /// A screenshot scene's screen, from its arguments: `-DevTool <tab>` picks the project's tab
-  /// (`overview|localization|icon|screenshots|workflows`), `-DevOpen storage|vms` a tool instead (`welcome`: nothing),
+  /// (`overview|localization|icon|screenshots|workflows`), `-DevOpen storage|vms` a tool instead (`welcome`: nothing; `storageClean`: Storage with its clean sheet open),
   /// `-DevSettings` or `-DevSettingsTab <tab>` opens Settings, and `-DevRunWorkflow <id>` starts that
   /// workflow of the demo project.
   private func open(_ arguments: [String]) async {
@@ -297,7 +297,7 @@ struct ContentView: View {
       return arguments[index + 1]
     }
     switch value(after: "-DevOpen") {
-    case "storage": model.selection = .storage
+    case "storage", "storageClean": model.selection = .storage
     case "vms": model.selection = .vms
     case "welcome": model.selection = nil
     default: if let demoProject { model.selection = .project(demoProject) }

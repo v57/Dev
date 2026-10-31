@@ -16,50 +16,26 @@ struct StorageAccessBanner: View {
 
   var body: some View {
     if !store.hasFullDiskAccess {
-      banner(
-        icon: "lock.fill", tint: .orange,
-        title: "Full Disk Access is off",
+      Banner(
+        "Full Disk Access is off",
         message: "Browser profiles, app containers, Mail and Messages attachments, iOS backups and the Trash can't be measured, and macOS may ask about Desktop, Documents and Downloads during a scan.",
-        action: "Open Settings…"
+        systemImage: "lock.fill", hue: .orange
       ) {
-        FullDiskAccess.openSettings()
+        Button("Open Settings…") { FullDiskAccess.openSettings() }
+          .disabled(store.isBusy)
       }
+      .padding([.horizontal, .top], KitMetrics.gutter)
     } else if store.rescanWouldSeeMore {
-      banner(
-        icon: "lock.open.fill", tint: .green,
-        title: "Full Disk Access is on",
+      Banner(
+        "Full Disk Access is on",
         message: "The scan on screen was made without it. Rescan to include protected folders.",
-        action: "Rescan"
+        systemImage: "lock.open.fill", hue: .green
       ) {
-        store.scan()
+        Button("Rescan") { store.scan() }
+          .disabled(store.isBusy)
       }
+      .padding([.horizontal, .top], KitMetrics.gutter)
     }
-  }
-
-  private func banner(
-    icon: String, tint: Color, title: String, message: String, action: String,
-    perform: @escaping () -> Void
-  ) -> some View {
-    HStack(alignment: .top, spacing: 10) {
-      Image(systemName: icon)
-        .foregroundStyle(tint)
-        .frame(width: 18)
-      VStack(alignment: .leading, spacing: 2) {
-        Text(title).font(.callout.weight(.semibold))
-        // A line limit, not fixedSize: fixedSize lets the window's minimum-size
-        // pass wrap this at near-zero width into a column taller than the screen.
-        Text(message)
-          .font(.callout)
-          .foregroundStyle(.secondary)
-          .lineLimit(3)
-      }
-      .frame(maxWidth: .infinity, alignment: .leading)
-      Button(action, action: perform)
-        .disabled(store.isBusy)
-    }
-    .padding(.horizontal, 16)
-    .padding(.vertical, 10)
-    .background(tint.opacity(0.08))
   }
 }
 
@@ -67,13 +43,8 @@ struct StorageSafetyBadge: View {
   let safety: StorageSafety
 
   var body: some View {
-    Text(safety.title)
-      .font(.caption2.weight(.medium))
-      .padding(.horizontal, 6)
-      .padding(.vertical, 2)
-      .foregroundStyle(safety.color)
-      .background(safety.color.opacity(0.14), in: Capsule())
-      .frame(width: 84)
+    Chip(safety.title, hue: safety.hue)
+      .controlSize(.small)
       .help(safety.help)
   }
 }
@@ -94,91 +65,97 @@ struct StorageCleanSheet: View {
       if case .command = $0.cleanup { return true }
       return false
     }
-    VStack(alignment: .leading, spacing: 14) {
-      Text("Clean \(items.count) items · \(store.selectedBytes.byteString)")
-        .font(.title2.weight(.semibold))
-
-      List {
-        ForEach(StorageCategory.allCases) { category in
-          let inCategory = items.filter { $0.category == category }.sorted { $0.bytes > $1.bytes }
-          if !inCategory.isEmpty {
-            Section(category.title) {
-              ForEach(inCategory) { item in
-                HStack {
-                  Text(item.title).lineLimit(1)
-                  if item.safety == .data {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                      .foregroundStyle(.orange)
-                      .help(StorageSafety.data.help)
+    let admin = items.filter(StorageCleaner.needsRoot)
+    let clones = items.filter {
+      if case .cloneDuplicates = $0.cleanup { return true }
+      return false
+    }
+    KitSheet(
+      title: "Clean \(items.count) items · \(store.selectedBytes.byteString)",
+      meta: deleteImmediately ? "Deleted at once, without the Trash." : "Moved to the Trash.",
+      systemImage: "trash", hue: .red, width: 560
+    ) {
+      ScrollView {
+        LazyVStack(spacing: KitMetrics.gutter) {
+          ForEach(StorageCategory.allCases) { category in
+            let inCategory = items.filter { $0.category == category }.sorted { $0.bytes > $1.bytes }
+            if !inCategory.isEmpty {
+              FormCard(category.title) {
+                ForEach(inCategory) { item in
+                  HStack {
+                    Text(item.title).lineLimit(1)
+                    if item.safety == .data {
+                      Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(Hue.orange.text)
+                        .help(StorageSafety.data.help)
+                    }
+                    Spacer()
+                    Text(item.cleanup.verb)
+                      .kitFont(.caption)
+                    Text(item.bytes.byteString)
+                      .monospacedDigit()
+                      .frame(width: 80, alignment: .trailing)
                   }
-                  Spacer()
-                  Text(item.cleanup.verb)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                  Text(item.bytes.byteString)
-                    .monospacedDigit()
-                    .frame(width: 80, alignment: .trailing)
+                  .padding(.horizontal, 12)
+                  .padding(.vertical, 6)
                 }
               }
             }
           }
         }
       }
-      .frame(minHeight: 240)
-
-      if !data.isEmpty {
-        Label(
-          "\(data.count) of these are your data (\(data.reduce(0) { $0 + $1.bytes }.byteString)) — VMs, models, media, app state. They are not recreated on their own.",
-          systemImage: "exclamationmark.triangle.fill")
-          .foregroundStyle(.orange)
-      }
-      let admin = items.filter(StorageCleaner.needsRoot)
-      if !admin.isEmpty {
-        Label(
-          "\(admin.count) need your administrator password — macOS asks once for all of them.",
-          systemImage: "lock.fill")
-          .foregroundStyle(.secondary)
-      }
-      let clones = items.filter {
-        if case .cloneDuplicates = $0.cleanup { return true }
-        return false
-      }
-      if !clones.isEmpty {
-        Label(
-          "Identical files become clones of one copy and keep their paths: nothing is removed, and the files are read again first, so it takes a while.",
-          systemImage: "square.on.square")
-          .foregroundStyle(.secondary)
-      }
-      if !commands.isEmpty {
-        Label(
-          "\(commands.count) are removed by their own tool (simctl, ollama, go) and do not go through the Trash.",
-          systemImage: "terminal")
-          .foregroundStyle(.secondary)
-      }
-      Toggle("Delete immediately instead of moving to the Trash", isOn: $deleteImmediately)
-        .help("Frees the space now. The Trash is the only way back, so this cannot be undone.")
-
-      HStack {
-        Spacer()
-        Button("Cancel", role: .cancel) { dismiss() }
-          .keyboardShortcut(.cancelAction)
-        Button(deleteImmediately ? "Delete" : "Move to Trash", role: .destructive) {
-          dismiss()
-          Task { await store.cleanSelection(deleteImmediately: deleteImmediately) }
+      .frame(height: 240)
+      FormCard {
+        if !data.isEmpty {
+          FormRow(
+            "\(data.count) of these are your data (\(data.reduce(0) { $0 + $1.bytes }.byteString))",
+            help: "VMs, models, media, app state. They are not recreated on their own.",
+            systemImage: "exclamationmark.triangle.fill", hue: .orange)
         }
-        .keyboardShortcut(.defaultAction)
-        .disabled(items.isEmpty)
+        if !admin.isEmpty {
+          FormRow(
+            "\(admin.count) need your administrator password", help: "macOS asks once for all of them.",
+            systemImage: "lock.fill", hue: .gray)
+        }
+        if !clones.isEmpty {
+          FormRow(
+            "Identical files become clones of one copy",
+            help: "They keep their paths: nothing is removed, and the files are read again first, so it takes a while.",
+            systemImage: "square.on.square", hue: .gray)
+        }
+        if !commands.isEmpty {
+          FormRow(
+            "\(commands.count) are removed by their own tool",
+            help: "simctl, ollama and go remove them; they do not go through the Trash.",
+            systemImage: "terminal", hue: .gray)
+        }
+        FormRow(
+          "Delete immediately", help: "Frees the space now instead of moving to the Trash. The Trash is the only way back, so this cannot be undone.",
+          systemImage: "trash.slash", hue: .red
+        ) {
+          Toggle("Delete immediately", isOn: $deleteImmediately)
+            .labelsHidden()
+            .toggleStyle(.kitSwitch)
+        }
       }
+    } footer: {
+      Button("Cancel", role: .cancel) { dismiss() }
+        .keyboardShortcut(.cancelAction)
+      Button(deleteImmediately ? "Delete" : "Move to Trash", role: .destructive) {
+        dismiss()
+        Task { await store.cleanSelection(deleteImmediately: deleteImmediately) }
+      }
+      .buttonStyle(.kitPrimary)
+      .keyboardShortcut(.defaultAction)
+      .disabled(items.isEmpty)
     }
-    .padding(20)
-    .frame(width: 560, height: 520)
   }
 }
 
-// MARK: - Colors
+// MARK: - Hues
 
 extension StorageSection {
-  var color: Color {
+  var hue: Hue {
     switch self {
     case .development: .orange
     case .ai: .purple
@@ -190,31 +167,22 @@ extension StorageSection {
 }
 
 extension StorageCategory {
-  /// A section's categories share its color; the ones on their own have theirs.
-  var color: Color {
-    if let section { return section.color }
+  /// A section's categories share its hue; the ones on their own have theirs.
+  var hue: Hue {
+    if let section { return section.hue }
     switch self {
     case .virtualMachines: return .indigo
-    case .databases: return .cyan
+    case .databases: return .teal
     case .media: return .pink
     default: return .gray
     }
   }
 }
 
-extension StorageSidebarEntry {
-  var color: Color {
-    switch self {
-    case .section(let section): section.color
-    case .category(let category): category.color
-    }
-  }
-}
-
 extension StorageSafety {
-  var color: Color {
+  var hue: Hue {
     switch self {
-    case .lossless: .mint
+    case .lossless: .teal
     case .cache: .green
     case .rebuildable: .blue
     case .data: .orange

@@ -11,7 +11,7 @@ import SwiftUI
 // MARK: - Storage
 
 /// Where the Storage tool is: Smart Scan, one category, or the Languages view.
-enum StoragePage: Hashable {
+nonisolated enum StoragePage: Hashable, Sendable {
   case smartScan
   case category(StorageCategory)
   case languages
@@ -79,6 +79,9 @@ struct StorageView: View {
       "Couldn't scan system folders",
       isPresented: Binding(get: { store.systemScanError != nil }, set: { if !$0 { store.systemScanError = nil } }),
       message: store.systemScanError)
+    .task {
+      if LaunchOptions.isScreenshotMode, LaunchOptions.open == "storageClean" { isConfirming = true }
+    }
     .task(id: store.lastScan) {
       let runners = await Task.detached { StorageStore.workflowRunnerNames() }.value
       store.applyLocks(runnerNames: runners)
@@ -148,9 +151,9 @@ private struct StorageToolbar: ToolbarContent {
           if store.phase == .idle {
             if store.hasResults {
               Button("Export Selection…", systemImage: "square.and.arrow.up") { store.exportSelection() }
-                .help("Saves what is picked, and what is not and why, as a Markdown report")
+                .kitHelp("Export Selection", meta: "Saves what is picked, and what is not and why, as a Markdown report")
               Button("Scan System Folders…", systemImage: "lock.shield") { store.scanSystem() }
-                .help("Asks for your administrator password, then measures the whole disk as root: system logs and caches, other accounts, and whatever no category explains")
+                .kitHelp("Scan System Folders", meta: "Asks for your administrator password, then measures the whole disk as root: system logs and caches, other accounts, and whatever no category explains")
             }
             Button(store.hasResults ? "Scan Again" : "Scan", systemImage: "arrow.clockwise") { store.scan() }
           } else {
@@ -170,26 +173,37 @@ private struct StorageNav: View {
   @Environment(StorageStore.self) private var store
 
   var body: some View {
-    List(selection: Binding(get: { Optional(page) }, set: { if let value = $0 { page = value } })) {
-      row(.smartScan, title: "Smart Scan", symbol: "sparkles", color: .accentColor,
-          trailing: store.selectedBytes > 0 ? store.selectedBytes.byteString : nil, bold: true)
+    KitList(selection: $page) {
+      SidebarRow(value: StoragePage.smartScan, "Smart Scan", systemImage: "sparkles", hue: .accent) {
+        trailing(store.selectedBytes > 0 ? store.selectedBytes.byteString : nil)
+      }
       ForEach(StorageSection.allCases) { section in
         let categories = section.categories.filter { store.hasItems($0) || $0 == .applications }
         if !categories.isEmpty {
-          Section(section.title) {
+          KitSection(section.title, systemImage: section.systemImage, hue: section.hue) {
             ForEach(categories) { category in
-              row(.category(category), title: category.title, symbol: category.systemImage, color: section.color,
-                  trailing: trailing(category))
+              SidebarRow(value: StoragePage.category(category), category.title, systemImage: category.systemImage,
+                         hue: section.hue) {
+                trailing(trailing(category))
+              }
               if category == .applications {
-                row(.languages, title: "Languages", symbol: "chevron.left.forwardslash.chevron.right",
-                    color: section.color, trailing: nil)
+                SidebarRow(value: StoragePage.languages, "Languages",
+                           systemImage: "chevron.left.forwardslash.chevron.right", hue: section.hue)
               }
             }
           }
         }
       }
     }
-    .listStyle(.sidebar)
+    .kitSectionStyle(.plain)
+    .kitPane(.secondary)
+  }
+
+  @ViewBuilder
+  private func trailing(_ text: String?) -> some View {
+    if let text {
+      Text(text).kitFont(.caption).monospacedDigit().foregroundStyle(.kitSecondary)
+    }
   }
 
   private func trailing(_ category: StorageCategory) -> String? {
@@ -198,66 +212,29 @@ private struct StorageNav: View {
     let picked = items.filter(store.isSelected).reduce(0) { $0 + $1.bytes }
     return picked > 0 ? picked.byteString : store.bytes(in: category).byteString
   }
-
-  private func row(
-    _ value: StoragePage, title: String, symbol: String, color: Color, trailing: String?, bold: Bool = false
-  ) -> some View {
-    HStack(spacing: 8) {
-      Image(systemName: symbol)
-        .font(.system(size: 11, weight: .semibold))
-        .foregroundStyle(.white)
-        .frame(width: 20, height: 20)
-        .background(color, in: RoundedRectangle(cornerRadius: 5))
-      Text(title)
-        .fontWeight(bold ? .semibold : .regular)
-        .lineLimit(1)
-      Spacer(minLength: 4)
-      if let trailing {
-        Text(trailing)
-          .font(.caption.monospacedDigit())
-          .foregroundStyle(.secondary)
-      }
-    }
-    .tag(value)
-  }
 }
 
 // MARK: - Shared pieces
 
-/// Off, on or mixed, as a round check: the cleaner's checkbox.
-struct RoundCheck: View {
+/// Off, on or mixed: the kit's checkbox for picking what to clean.
+struct StorageCheck: View {
   enum State { case off, on, mixed }
   let state: State
-  var size: CGFloat = 20
   var disabled = false
   let action: () -> Void
 
   var body: some View {
-    Button(action: action) {
-      ZStack {
-        Circle()
-          .fill(state == .off ? Color.clear : Color.accentColor)
-        Circle()
-          .strokeBorder(state == .off ? Color.secondary.opacity(0.6) : Color.accentColor, lineWidth: 1.5)
-        if state == .on {
-          Image(systemName: "checkmark").font(.system(size: size * 0.5, weight: .bold)).foregroundStyle(.white)
-        } else if state == .mixed {
-          Image(systemName: "minus").font(.system(size: size * 0.5, weight: .bold)).foregroundStyle(.white)
-        }
-      }
-      .frame(width: size, height: size)
-      .contentShape(Circle())
-    }
-    .buttonStyle(.plain)
-    .disabled(disabled)
-    .opacity(disabled ? 0.4 : 1)
-    .accessibilityValue(state == .on ? "checked" : (state == .mixed ? "partly checked" : "unchecked"))
+    Toggle("Pick", isOn: Binding(get: { state != .off }, set: { _ in action() }))
+      .labelsHidden()
+      .toggleStyle(.kitCheckbox)
+      .kitMixed(state == .mixed)
+      .disabled(disabled)
   }
 }
 
 extension StorageStore {
   /// The check state of a set of items: the cleanable, unlocked ones count.
-  func checkState(_ items: [StorageItem]) -> RoundCheck.State {
+  func checkState(_ items: [StorageItem]) -> StorageCheck.State {
     let pickable = items.filter { $0.cleanup.isCleanable && !$0.isLocked }
     let on = pickable.filter(isSelected).count
     if on == 0 { return .off }
@@ -297,52 +274,24 @@ private struct StorageActionButton: View {
     let label = label(items)
     HStack(spacing: 14) {
       Button(action: action) {
-        Text(label)
-          .font(.system(size: 14, weight: .bold))
-          .foregroundStyle(.white)
-          .frame(width: 72, height: 72)
-          .background(Circle().fill(none ? Color.secondary.opacity(0.4) : Color.accentColor))
-          .shadow(color: none ? .clear : Color.accentColor.opacity(0.35), radius: 10, y: 4)
-          .overlay(Circle().strokeBorder(Color.accentColor.opacity(none ? 0 : 0.18), lineWidth: 6).padding(-6))
+        Text(label).kitFont(.headline).fontWeight(.bold)
       }
-      .buttonStyle(.plain)
+      .buttonStyle(KitRoundButtonStyle(prominent: true, size: 72))
       .disabled(none || store.isBusy)
       .keyboardShortcut(.return, modifiers: .command)
+      .kitHelp(label, shortcut: "⌘↩", meta: none ? "Tick what to remove" : store.selectedBytes.byteString)
       VStack(alignment: .leading, spacing: 1) {
         Text(none ? "Nothing picked" : store.selectedBytes.byteString)
-          .font(.title3.weight(.bold).monospacedDigit())
+          .kitFont(.title3).fontWeight(.bold).monospacedDigit()
         Text(none ? "Tick what to remove" : "\(items.count) items from every category")
-          .font(.caption)
-          .foregroundStyle(.secondary)
+          .kitFont(.caption)
+          .foregroundStyle(.kitSecondary)
       }
     }
     .padding(.leading, 8)
     .padding(.trailing, 20)
     .padding(.vertical, 8)
-    .background(.regularMaterial, in: Capsule())
-    .overlay(Capsule().strokeBorder(.quaternary))
-    .shadow(color: .black.opacity(0.12), radius: 14, y: 6)
-  }
-}
-
-/// A coloured squircle with a symbol or two letters: a category's or a
-/// language's icon.
-struct BadgeIcon: View {
-  var symbol: String?
-  var text: String?
-  let color: Color
-  var size: CGFloat = 36
-
-  var body: some View {
-    ZStack {
-      RoundedRectangle(cornerRadius: size * 0.25).fill(color)
-      if let symbol {
-        Image(systemName: symbol).font(.system(size: size * 0.48, weight: .medium)).foregroundStyle(.white)
-      } else if let text {
-        Text(text).font(.system(size: size * 0.34, weight: .bold, design: .monospaced)).foregroundStyle(.white)
-      }
-    }
-    .frame(width: size, height: size)
+    .kitSurface(.floating, cornerRadius: 44)
   }
 }
 
@@ -356,32 +305,32 @@ struct StorageFileRow: View {
   var body: some View {
     let cleanup = store.cleanup(of: item)
     HStack(spacing: 12) {
-      RoundCheck(state: store.isSelected(item) ? .on : .off, size: 18,
-                 disabled: !item.cleanup.isCleanable || item.isLocked || store.isBusy) {
+      StorageCheck(state: store.isSelected(item) ? .on : .off,
+                   disabled: !item.cleanup.isCleanable || item.isLocked || store.isBusy) {
         store.setSelected(!store.isSelected(item), [item])
       }
       VStack(alignment: .leading, spacing: 2) {
         HStack(spacing: 8) {
           Text(item.title).fontWeight(.medium).lineLimit(1).layoutPriority(1)
           if let reason = item.lockReason {
-            Text(reason).font(.caption).foregroundStyle(Color.accentColor)
+            Text(reason).kitFont(.caption).foregroundStyle(Hue.accent.text)
           } else if let detail = item.detail {
-            Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            Text(detail).kitFont(.caption).foregroundStyle(.kitSecondary).lineLimit(1)
           }
         }
         Text(item.primaryPath.abbreviatingHome)
-          .font(.system(.caption, design: .monospaced))
-          .foregroundStyle(.secondary)
+          .kitFont(.monoSmall)
+          .foregroundStyle(.kitSecondary)
           .lineLimit(1)
           .truncationMode(.middle)
       }
       Spacer(minLength: 8)
       if case .command(_, _, let verb) = cleanup {
-        Text(verb).font(.caption).foregroundStyle(.secondary)
+        Text(verb).kitFont(.caption).foregroundStyle(.kitSecondary)
       } else if case .cloneDuplicates = cleanup {
-        Text(cleanup.verb).font(.caption).foregroundStyle(.secondary)
+        Text(cleanup.verb).kitFont(.caption).foregroundStyle(.kitSecondary)
       } else if case .revealOnly(let reason) = cleanup {
-        Image(systemName: "info.circle").foregroundStyle(.secondary).help(reason)
+        Image(systemName: "info.circle").foregroundStyle(.kitSecondary).help(reason)
       }
       Text(item.bytes.byteString)
         .monospacedDigit()
@@ -391,12 +340,12 @@ struct StorageFileRow: View {
       } label: {
         Image(systemName: "magnifyingglass")
       }
-      .buttonStyle(.borderless)
+      .buttonStyle(.kitIcon)
       .help("Show in Finder")
     }
     .padding(.horizontal, 10)
     .padding(.vertical, 7)
-    .background(store.isSelected(item) ? Color.accentColor.opacity(0.07) : .clear, in: RoundedRectangle(cornerRadius: 10))
+    .background(Hue.accent.soft(store.isSelected(item) ? 0.07 : 0), in: RoundedRectangle(cornerRadius: KitMetrics.radiusLarge))
     .padding(.leading, nested ? 28 : 0)
     .opacity(item.isLocked ? 0.6 : 1)
     .kitContextMenu {
@@ -422,22 +371,18 @@ private struct SmartScanPage: View {
   var body: some View {
     ScrollView {
       KitLazyStack(alignment: .leading, spacing: 20) {
-        HStack(spacing: 28) {
-          StorageRing(segments: segments, used: used, total: store.volumeTotal)
-            .frame(width: 140, height: 140)
-          VStack(alignment: .leading, spacing: 8) {
-            Text("\(store.recommendedBytes.byteString) is safe to clean")
-              .font(.largeTitle.weight(.bold))
-            Text("Caches and build output, which your tools make again on their own. Your own data, what you installed and scratch space that may be in use are never picked for you.")
-              .font(.title3)
-              .foregroundStyle(.secondary)
-              .fixedSize(horizontal: false, vertical: true)
-            if let date = store.lastScan {
-              Text("Scanned \(date.formatted(.relative(presentation: .named)))")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-            }
-          }
+        VStack(alignment: .leading, spacing: 8) {
+          Text("\(store.recommendedBytes.byteString) is safe to clean")
+            .kitFont(.largeTitle)
+          Text("Caches and build output, which your tools make again on their own. Your own data, what you installed and scratch space that may be in use are never picked for you.")
+            .kitFont(.title3).fontWeight(.regular)
+            .foregroundStyle(.kitSecondary)
+            .fixedSize(horizontal: false, vertical: true)
+          MeterBar(segments: segments, total: Double(store.volumeTotal))
+            .padding(.top, 6)
+          MetaLine(
+            ["\(used.byteString) used of \(store.volumeTotal.byteString)"]
+              + (store.lastScan.map { ["Scanned \($0.kitFormatted(.ago))"] } ?? []))
         }
         VStack(spacing: 0) {
           ForEach(Array(sections.enumerated()), id: \.element) { index, section in
@@ -445,7 +390,7 @@ private struct SmartScanPage: View {
             sectionRow(section)
           }
         }
-        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.quaternary))
+        .kitSurface(.card)
         if !store.scratchItems.isEmpty {
           ScratchPicker()
         }
@@ -484,8 +429,17 @@ private struct SmartScanPage: View {
     StorageSection.allCases.filter { store.bytes(in: .section($0)) > 0 }
   }
 
-  private var segments: [StorageRing.Segment] {
-    sections.map { .init(color: $0.color, bytes: store.bytes(in: .section($0))) }
+  /// The disk by section, then what is used that no section measured.
+  private var segments: [MeterSegment] {
+    var parts = sections.map { section in
+      let bytes = store.bytes(in: .section(section))
+      return MeterSegment(
+        section.title, value: Double(bytes), hue: section.hue, systemImage: section.systemImage,
+        valueText: bytes.byteString)
+    }
+    let other = used - sections.reduce(0) { $0 + store.bytes(in: .section($1)) }
+    if other > 0 { parts.append(MeterSegment("Not in a category", value: Double(other), hue: .gray, valueText: other.byteString)) }
+    return parts
   }
 
   private var used: Int64 { max(0, store.volumeTotal - store.volumeAvailable) }
@@ -495,25 +449,25 @@ private struct SmartScanPage: View {
     let recommended = items.filter(\.isRecommended)
     let picked = items.filter(store.isSelected).reduce(0) { $0 + $1.bytes }
     return HStack(spacing: 14) {
-      RoundCheck(state: store.checkState(recommended), disabled: recommended.isEmpty || store.isBusy) {
+      StorageCheck(state: store.checkState(recommended), disabled: recommended.isEmpty || store.isBusy) {
         store.toggleGroup(recommended)
       }
-      BadgeIcon(symbol: section.systemImage, color: section.color)
+      Tile(systemImage: section.systemImage, hue: section.hue, size: 36, style: .solid)
       VStack(alignment: .leading, spacing: 2) {
         Text(section.title).fontWeight(.semibold)
         Text(section.categories.filter(store.hasItems).map(\.title).joined(separator: ", "))
-          .font(.callout)
-          .foregroundStyle(.secondary)
+          .kitFont(.callout)
+          .foregroundStyle(.kitSecondary)
           .lineLimit(1)
       }
       Spacer()
       Text(picked.byteString)
-        .font(.title3.weight(.bold).monospacedDigit())
-        .foregroundStyle(picked > 0 ? .primary : .secondary)
+        .kitFont(.title3).fontWeight(.bold).monospacedDigit()
+        .foregroundStyle(picked > 0 ? .kitLabel : .kitSecondary)
       Button("Review") {
         if let first = section.categories.first(where: store.hasItems) { page = .category(first) }
       }
-      .buttonStyle(.link)
+      .buttonStyle(.kitPlain)
     }
     .padding(.horizontal, 16)
     .padding(.vertical, 12)
@@ -521,17 +475,18 @@ private struct SmartScanPage: View {
 
   private func tip(_ title: String, _ names: String, symbol: String, button: String, action: @escaping () -> Void) -> some View {
     HStack(spacing: 12) {
-      BadgeIcon(symbol: symbol, color: .orange)
+      Tile(systemImage: symbol, hue: .orange, size: 36, style: .solid)
       VStack(alignment: .leading, spacing: 2) {
         Text(title).fontWeight(.semibold)
-        Text(names).font(.callout).foregroundStyle(.secondary).lineLimit(1)
+        Text(names).kitFont(.callout).foregroundStyle(.kitSecondary).lineLimit(1)
       }
       Spacer()
       Button(button, action: action)
+        .buttonStyle(.kit)
     }
     .padding(14)
     .frame(maxWidth: .infinity)
-    .background(Color.orange.opacity(0.09), in: RoundedRectangle(cornerRadius: 14))
+    .background(Hue.orange.soft(0.09), in: RoundedRectangle(cornerRadius: KitMetrics.radiusXL))
   }
 }
 
@@ -544,14 +499,14 @@ private struct ScratchPicker: View {
     let items = store.scratchItems
     let picked = items.filter(store.isSelected)
     HStack(spacing: 14) {
-      BadgeIcon(symbol: "clock.arrow.circlepath", color: .teal)
+      Tile(systemImage: "clock.arrow.circlepath", hue: .teal, size: 36, style: .solid)
       VStack(alignment: .leading, spacing: 2) {
         Text("Scratch and temp folders · \(items.reduce(0) { $0 + $1.bytes }.byteString)").fontWeight(.semibold)
         Text(picked.isEmpty
           ? "Agent scratchpads and temp files, \(items.count) folders. Some may be in use, so pick by age."
           : "\(picked.count) of \(items.count) folders picked · \(picked.reduce(0) { $0 + $1.bytes }.byteString)")
-          .font(.callout)
-          .foregroundStyle(.secondary)
+          .kitFont(.callout)
+          .foregroundStyle(.kitSecondary)
           .lineLimit(1)
       }
       Spacer(minLength: 8)
@@ -563,69 +518,7 @@ private struct ScratchPicker: View {
       .disabled(store.isBusy)
     }
     .padding(14)
-    .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.quaternary))
-  }
-}
-
-/// The disk as an Apple Watch–style ring: one segment per section with round
-/// ends, each drawn over the one before with a soft shadow at its head, then
-/// the free space as the track.
-struct StorageRing: View {
-  struct Segment {
-    let color: Color
-    let bytes: Int64
-  }
-
-  let segments: [Segment]
-  let used: Int64
-  let total: Int64
-
-  var body: some View {
-    GeometryReader { geometry in
-      let line = geometry.size.width * 0.1
-      let total = Double(max(self.total, 1))
-      // Round caps reach half the line past each end: the used arc is scaled so
-      // the outermost caps stay inside it.
-      let circumference = Double.pi * (geometry.size.width - line)
-      let cap = Double(line / 2) / circumference
-      let usedFraction = min(1, Double(used) / total)
-      let measured = Double(segments.reduce(0) { $0 + $1.bytes })
-      let scale = measured > 0 ? max(0, usedFraction - 2 * cap) / (measured / total) : 0
-      ZStack {
-        Circle()
-          .stroke(Color.secondary.opacity(0.15), lineWidth: line)
-        ForEach(Array(arcs(total: total, scale: scale, cap: cap).enumerated()), id: \.offset) { index, arc in
-          if index > 0 {
-            Circle()
-              .trim(from: arc.from, to: arc.from + 0.0001)
-              .stroke(arc.color, style: StrokeStyle(lineWidth: line, lineCap: .round))
-              .shadow(color: .black.opacity(0.4), radius: 2)
-          }
-          Circle()
-            .trim(from: arc.from, to: max(arc.from + 0.0001, arc.to))
-            .stroke(arc.color, style: StrokeStyle(lineWidth: line, lineCap: .round))
-        }
-        .rotationEffect(.degrees(-90))
-        VStack(spacing: 2) {
-          Text(used.byteString)
-            .font(.title3.weight(.bold).monospacedDigit())
-          Text("of \(self.total.byteString)")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-        }
-      }
-      .padding(line / 2)
-    }
-    .aspectRatio(1, contentMode: .fit)
-  }
-
-  private func arcs(total: Double, scale: Double, cap: Double) -> [(from: Double, to: Double, color: Color)] {
-    var start = cap
-    return segments.map { segment in
-      let length = Double(segment.bytes) / total * scale
-      defer { start += length }
-      return (start, start + length, segment.color)
-    }
+    .kitSurface(.card)
   }
 }
 
@@ -644,8 +537,8 @@ private struct GroupsPage: View {
     HStack(spacing: 0) {
       VStack(alignment: .leading, spacing: 0) {
         VStack(alignment: .leading, spacing: 4) {
-          Text(category.title).font(.title2.weight(.bold))
-          Text(category.subtitle).font(.callout).foregroundStyle(.secondary)
+          Text(category.title).kitFont(.title2).fontWeight(.bold)
+          Text(category.subtitle).kitFont(.callout).foregroundStyle(.kitSecondary)
             .fixedSize(horizontal: false, vertical: true)
         }
         .padding(16)
@@ -656,7 +549,7 @@ private struct GroupsPage: View {
           }
           .disabled(all.isEmpty || store.isBusy)
           Spacer()
-          Text("Sorted by size").font(.caption).foregroundStyle(.secondary)
+          Text("Sorted by size").kitFont(.caption).foregroundStyle(.kitSecondary)
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 6)
@@ -679,7 +572,7 @@ private struct GroupsPage: View {
       if let current {
         files(current)
           .frame(maxWidth: .infinity, maxHeight: .infinity)
-          .background(.background.secondary)
+          .kitPane(.secondary)
       } else {
         EmptyState(
           systemImage: store.isScanning ? "hourglass" : "checkmark.circle",
@@ -694,24 +587,24 @@ private struct GroupsPage: View {
     let picked = group.items.filter(store.isSelected).reduce(0) { $0 + $1.bytes }
     let safety = group.items.map(\.safety).max() ?? .cache
     return HStack(spacing: 10) {
-      RoundCheck(state: store.checkState(group.items), disabled: store.isBusy || group.items.allSatisfy(\.isLocked)) {
+      StorageCheck(state: store.checkState(group.items), disabled: store.isBusy || group.items.allSatisfy(\.isLocked)) {
         store.toggleGroup(group.items)
       }
       Button {
         groupName = group.name
       } label: {
         HStack(spacing: 10) {
-          BadgeIcon(symbol: category.systemImage, color: category.color)
+          Tile(systemImage: category.systemImage, hue: category.hue, size: 36, style: .solid)
           VStack(alignment: .leading, spacing: 2) {
             Text(group.name).fontWeight(selected ? .semibold : .medium).lineLimit(1)
             Text("\(safety.title) · \(group.items.count) item\(group.items.count == 1 ? "" : "s")")
-              .font(.caption)
-              .foregroundStyle(.secondary)
+              .kitFont(.caption)
+              .foregroundStyle(.kitSecondary)
           }
           Spacer(minLength: 4)
           Text(picked > 0 && picked < group.bytes ? "\(picked.byteString) of \(group.bytes.byteString)" : group.bytes.byteString)
-            .font(.callout.weight(.semibold).monospacedDigit())
-            .foregroundStyle(picked > 0 ? .primary : .secondary)
+            .kitFont(.callout).fontWeight(.semibold).monospacedDigit()
+            .foregroundStyle(picked > 0 ? .kitLabel : .kitSecondary)
         }
         .contentShape(Rectangle())
       }
@@ -719,7 +612,7 @@ private struct GroupsPage: View {
     }
     .padding(.horizontal, 8)
     .frame(height: 56)
-    .background(selected ? Color.accentColor.opacity(0.1) : .clear, in: RoundedRectangle(cornerRadius: 10))
+    .background(Hue.accent.soft(selected ? 0.1 : 0), in: RoundedRectangle(cornerRadius: KitMetrics.radiusLarge))
   }
 
   @ViewBuilder
@@ -727,13 +620,13 @@ private struct GroupsPage: View {
     let safety = group.items.map(\.safety).max() ?? .cache
     VStack(alignment: .leading, spacing: 0) {
       VStack(alignment: .leading, spacing: 8) {
-        Text(group.name).font(.title2.weight(.bold))
+        Text(group.name).kitFont(.title2).fontWeight(.bold)
         HStack(spacing: 8) {
           StorageSafetyBadge(safety: safety)
-          Text(group.bytes.byteString).font(.callout).foregroundStyle(.secondary)
+          Text(group.bytes.byteString).kitFont(.callout).foregroundStyle(.kitSecondary)
         }
         Text(about(safety))
-          .foregroundStyle(.secondary)
+          .foregroundStyle(.kitSecondary)
           .fixedSize(horizontal: false, vertical: true)
       }
       .padding(20)
@@ -742,8 +635,8 @@ private struct GroupsPage: View {
         Spacer()
         Text("Sort by Size")
       }
-      .font(.caption)
-      .foregroundStyle(.secondary)
+      .kitFont(.caption)
+      .foregroundStyle(.kitSecondary)
       .padding(.horizontal, 20)
       .padding(.bottom, 6)
       ScrollView {
@@ -803,28 +696,23 @@ private struct ModelCard: View {
     VStack(alignment: .leading, spacing: 8) {
       HStack(alignment: .top) {
         Text(item.title)
-          .font(.system(.callout, design: .monospaced).weight(.semibold))
+          .kitFont(.mono).fontWeight(.semibold)
           .lineLimit(3)
         Spacer()
-        RoundCheck(state: on ? .on : .off, disabled: !item.cleanup.isCleanable || store.isBusy) {
+        StorageCheck(state: on ? .on : .off, disabled: !item.cleanup.isCleanable || store.isBusy) {
           store.setSelected(!on, [item])
         }
       }
       if let detail = item.detail {
-        Text(detail)
-          .font(.caption)
-          .padding(.horizontal, 7)
-          .padding(.vertical, 2)
-          .background(Color.purple.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
-          .foregroundStyle(.purple)
+        Chip(detail, hue: .purple)
       }
       Text(item.bytes.byteString)
-        .font(.title2.weight(.bold).monospacedDigit())
+        .kitFont(.title2).fontWeight(.bold).monospacedDigit()
     }
     .padding(14)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .background(.background, in: RoundedRectangle(cornerRadius: 14))
-    .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(on ? Color.accentColor : Color.secondary.opacity(0.2), lineWidth: on ? 2 : 1))
+    .kitSurface(.card)
+    .overlay { if on { RoundedRectangle(cornerRadius: KitMetrics.radiusCard, style: .continuous).strokeBorder(Hue.accent.fill, lineWidth: 2) } }
     .kitContextMenu { Button("Show in Finder", systemImage: "folder") { store.reveal(item) } }
   }
 }
@@ -899,10 +787,10 @@ private struct UninstallerPage: View {
     HStack(spacing: 0) {
       VStack(alignment: .leading, spacing: 0) {
         VStack(alignment: .leading, spacing: 4) {
-          Text("Uninstaller").font(.title2.weight(.bold))
+          Text("Uninstaller").kitFont(.title2).fontWeight(.bold)
           let unused = store.items(in: .applications).filter { infos[$0.id]?.isUnused == true }.count
           Text("\(store.items(in: .applications).count) apps · \(unused) unused for 6 months or more")
-            .font(.callout).foregroundStyle(.secondary)
+            .kitFont(.callout).foregroundStyle(.kitSecondary)
         }
         .padding(16)
         KitSegmented(selection: $filter, options: [("All", "all"), ("Unused", "unused"), ("Large", "large"), ("Developer", "dev")])
@@ -923,7 +811,7 @@ private struct UninstallerPage: View {
         AppDetail(app: current, info: infos[current.id] ?? AppInfo())
           .id(current.id)
           .frame(maxWidth: .infinity, maxHeight: .infinity)
-          .background(.background.secondary)
+          .kitPane(.secondary)
       } else {
         EmptyState(systemImage: "app.dashed", title: "No Apps")
           .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -954,7 +842,7 @@ private struct UninstallerPage: View {
   private func appRow(_ app: StorageItem, selected: Bool) -> some View {
     let info = infos[app.id]
     return HStack(spacing: 10) {
-      RoundCheck(state: store.isSelected(app) ? (store.partialPaths[app.id] == nil ? .on : .mixed) : .off,
+      StorageCheck(state: store.isSelected(app) ? (store.partialPaths[app.id] == nil ? .on : .mixed) : .off,
                  disabled: store.isBusy) {
         store.setSelected(!store.isSelected(app), [app])
       }
@@ -962,18 +850,16 @@ private struct UninstallerPage: View {
         appID = app.id
       } label: {
         HStack(spacing: 10) {
-          (DevDesktop.icon(forFile: app.primaryPath) ?? Image(systemName: "app.dashed"))
-            .resizable()
-            .frame(width: 38, height: 38)
+          KitAppIcon(image: KitDesktop.icon(forFile: app.primaryPath), size: 38, isShaped: true)
           VStack(alignment: .leading, spacing: 2) {
             Text(app.title).fontWeight(selected ? .semibold : .medium).lineLimit(1)
             Text(info?.lastUsedText ?? " ")
-              .font(.caption)
-              .foregroundStyle(info?.isUnused == true ? .orange : .secondary)
+              .kitFont(.caption)
+              .foregroundStyle(info?.isUnused == true ? AnyShapeStyle(Hue.orange.text) : AnyShapeStyle(.kitSecondary))
           }
           Spacer(minLength: 4)
           Text(app.bytes.byteString)
-            .font(.callout.weight(.semibold).monospacedDigit())
+            .kitFont(.callout).fontWeight(.semibold).monospacedDigit()
         }
         .contentShape(Rectangle())
       }
@@ -981,7 +867,7 @@ private struct UninstallerPage: View {
     }
     .padding(.horizontal, 8)
     .frame(height: 56)
-    .background(selected ? Color.accentColor.opacity(0.1) : .clear, in: RoundedRectangle(cornerRadius: 10))
+    .background(Hue.accent.soft(selected ? 0.1 : 0), in: RoundedRectangle(cornerRadius: KitMetrics.radiusLarge))
   }
 }
 
@@ -994,61 +880,47 @@ private struct AppDetail: View {
 
   var body: some View {
     let parts = breakdown
-    let total = parts.reduce(0) { $0 + $1.bytes }
+    let total = Int64(parts.reduce(0) { $0 + $1.value })
     let anyOn = store.isSelected(app)
     let appOn = store.isPathSelected(app.primaryPath, in: app)
     ScrollView {
       VStack(alignment: .leading, spacing: 18) {
         HStack(spacing: 16) {
-          (DevDesktop.icon(forFile: app.primaryPath) ?? Image(systemName: "app.dashed"))
-            .resizable()
-            .frame(width: 72, height: 72)
+          KitAppIcon(image: KitDesktop.icon(forFile: app.primaryPath), size: 72, isShaped: true)
           VStack(alignment: .leading, spacing: 4) {
-            Text(app.title).font(.title.weight(.bold))
+            Text(app.title).kitFont(.title1).fontWeight(.bold)
             Text(["Version \(info.version ?? "—")", info.source].joined(separator: " · "))
-              .foregroundStyle(.secondary)
+              .foregroundStyle(.kitSecondary)
             Text(info.lastUsedText)
               .fontWeight(.medium)
-              .foregroundStyle(info.isUnused ? .orange : .secondary)
+              .foregroundStyle(info.isUnused ? AnyShapeStyle(Hue.orange.text) : AnyShapeStyle(.kitSecondary))
           }
           Spacer()
           VStack(alignment: .trailing) {
-            Text((total > 0 ? total : app.bytes).byteString).font(.title2.weight(.bold).monospacedDigit())
-            Text("in all").font(.caption).foregroundStyle(.secondary)
+            Text((total > 0 ? total : app.bytes).byteString).kitFont(.title2).fontWeight(.bold).monospacedDigit()
+            Text("in all").kitFont(.caption).foregroundStyle(.kitSecondary)
           }
         }
         if total > 0 {
           VStack(alignment: .leading, spacing: 8) {
-            GeometryReader { geometry in
-              HStack(spacing: 2) {
-                ForEach(parts, id: \.name) { part in
-                  Rectangle().fill(part.color)
-                    .frame(width: max(2, geometry.size.width * CGFloat(part.bytes) / CGFloat(total)))
-                }
-              }
-            }
-            .frame(height: 10)
-            .clipShape(Capsule())
+            MeterBar(segments: parts)
             HStack(spacing: 16) {
-              ForEach(parts, id: \.name) { part in
+              ForEach(parts) { part in
                 HStack(spacing: 5) {
-                  RoundedRectangle(cornerRadius: 2).fill(part.color).frame(width: 8, height: 8)
-                  Text(part.name)
-                  Text(part.bytes.byteString).foregroundStyle(.secondary)
+                  RoundedRectangle(cornerRadius: 2).fill(part.hue.fill).frame(width: 8, height: 8)
+                  Text(part.label)
+                  Text(part.valueText ?? "").foregroundStyle(.kitSecondary)
                 }
-                .font(.callout)
+                .kitFont(.callout)
               }
             }
           }
         }
-        Label(
+        Banner(
           !anyOn ? "Tick the app to uninstall it with all its files, or tick only its files to reset it and keep the app."
             : (appOn ? "Uninstall moves the app and the ticked files to the Trash. Quit it first if it is open."
                      : "Reset: the ticked files go, the app stays and starts fresh."),
-          systemImage: "info.circle")
-          .padding(10)
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .background(anyOn ? Color.accentColor.opacity(0.08) : Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
+          systemImage: "info.circle", hue: anyOn ? .accent : .gray)
         VStack(spacing: 2) {
           ForEach(app.paths, id: \.self) { path in fileRow(path) }
         }
@@ -1063,15 +935,15 @@ private struct AppDetail: View {
     let on = store.isPathSelected(path, in: app)
     let kind = Self.kind(of: path, app: app)
     return HStack(spacing: 12) {
-      RoundCheck(state: on ? .on : .off, size: 18, disabled: store.isBusy) {
+      StorageCheck(state: on ? .on : .off, disabled: store.isBusy) {
         store.setPath(path, of: app, selected: !on)
       }
-      RoundedRectangle(cornerRadius: 2).fill(kind.color).frame(width: 8, height: 8)
+      RoundedRectangle(cornerRadius: 2).fill(kind.hue.fill).frame(width: 8, height: 8)
       VStack(alignment: .leading, spacing: 2) {
         Text(kind.title).fontWeight(.medium)
         Text(path.abbreviatingHome)
-          .font(.system(.caption, design: .monospaced))
-          .foregroundStyle(.secondary)
+          .kitFont(.monoSmall)
+          .foregroundStyle(.kitSecondary)
           .lineLimit(1)
           .truncationMode(.middle)
       }
@@ -1084,26 +956,26 @@ private struct AppDetail: View {
       } label: {
         Image(systemName: "magnifyingglass")
       }
-      .buttonStyle(.borderless)
+      .buttonStyle(.kitIcon)
     }
     .padding(.horizontal, 10)
     .padding(.vertical, 7)
-    .background(on ? Color.accentColor.opacity(0.07) : .clear, in: RoundedRectangle(cornerRadius: 10))
+    .background(Hue.accent.soft(on ? 0.07 : 0), in: RoundedRectangle(cornerRadius: KitMetrics.radiusLarge))
   }
 
-  private var breakdown: [(name: String, color: Color, bytes: Int64)] {
+  private var breakdown: [MeterSegment] {
     var sums: [String: Int64] = [:]
     for path in app.paths {
       sums[Self.kind(of: path, app: app).part, default: 0] += store.pathSize(path) ?? 0
     }
-    let order: [(String, Color)] = [("App", .blue), ("Data", .purple), ("Caches", .green), ("Other", .gray)]
-    return order.compactMap { name, color in
+    let order: [(String, Hue)] = [("App", .blue), ("Data", .purple), ("Caches", .green), ("Other", .gray)]
+    return order.compactMap { name, hue in
       guard let bytes = sums[name], bytes > 0 else { return nil }
-      return (name, color, bytes)
+      return MeterSegment(name, value: Double(bytes), hue: hue, valueText: bytes.byteString)
     }
   }
 
-  static func kind(of path: String, app: StorageItem) -> (title: String, part: String, color: Color) {
+  static func kind(of path: String, app: StorageItem) -> (title: String, part: String, hue: Hue) {
     if path == app.primaryPath { return ("\(app.title).app", "App", .blue) }
     let folder = ((path as NSString).deletingLastPathComponent as NSString).lastPathComponent
     switch folder {
@@ -1132,10 +1004,10 @@ private struct LanguagesPage: View {
     HStack(spacing: 0) {
       VStack(alignment: .leading, spacing: 0) {
         VStack(alignment: .leading, spacing: 4) {
-          Text("Languages").font(.title2.weight(.bold))
+          Text("Languages").kitFont(.title2).fontWeight(.bold)
           let unused = languages.flatMap(\.unusedVersions)
           Text("\(unused.count) versions no project of yours uses · \(unused.reduce(0) { $0 + $1.bytes }.byteString)")
-            .font(.callout).foregroundStyle(.secondary)
+            .kitFont(.callout).foregroundStyle(.kitSecondary)
         }
         .padding(16)
         HStack {
@@ -1149,7 +1021,7 @@ private struct LanguagesPage: View {
           }
           .disabled(store.isBusy)
           Spacer()
-          Text("Sorted by size").font(.caption).foregroundStyle(.secondary)
+          Text("Sorted by size").kitFont(.caption).foregroundStyle(.kitSecondary)
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 6)
@@ -1166,7 +1038,7 @@ private struct LanguagesPage: View {
       if let current {
         LanguageDetail(language: current)
           .frame(maxWidth: .infinity, maxHeight: .infinity)
-          .background(.background.secondary)
+          .kitPane(.secondary)
       } else {
         EmptyState(systemImage: "chevron.left.forwardslash.chevron.right", title: "No Languages Found")
           .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1185,7 +1057,7 @@ private struct LanguagesPage: View {
     let all = language.versions + language.caches
     let unused = language.unusedVersions.count
     return HStack(spacing: 10) {
-      RoundCheck(state: store.checkState(all), disabled: store.isBusy) {
+      StorageCheck(state: store.checkState(all), disabled: store.isBusy) {
         store.toggleGroup(all) { item in
           language.caches.contains(item) || language.unusedVersions.contains(item)
         }
@@ -1194,15 +1066,15 @@ private struct LanguagesPage: View {
         name = language.name
       } label: {
         HStack(spacing: 10) {
-          BadgeIcon(text: language.mono, color: .orange)
+          Tile(letters: language.mono, hue: .orange, size: 36, style: .solid)
           VStack(alignment: .leading, spacing: 2) {
             Text(language.name).fontWeight(selected ? .semibold : .medium)
             Text("\(language.versions.count == 1 ? "1 version" : "\(language.versions.count) versions")\(unused > 0 ? " · \(unused) unused" : "") · \(language.caches.reduce(0) { $0 + $1.bytes }.byteString) caches")
-              .font(.caption)
-              .foregroundStyle(unused > 0 ? .orange : .secondary)
+              .kitFont(.caption)
+              .foregroundStyle(unused > 0 ? AnyShapeStyle(Hue.orange.text) : AnyShapeStyle(.kitSecondary))
           }
           Spacer(minLength: 4)
-          Text(language.bytes.byteString).font(.callout.weight(.semibold).monospacedDigit())
+          Text(language.bytes.byteString).kitFont(.callout).fontWeight(.semibold).monospacedDigit()
         }
         .contentShape(Rectangle())
       }
@@ -1210,7 +1082,7 @@ private struct LanguagesPage: View {
     }
     .padding(.horizontal, 8)
     .frame(height: 54)
-    .background(selected ? Color.accentColor.opacity(0.1) : .clear, in: RoundedRectangle(cornerRadius: 10))
+    .background(Hue.accent.soft(selected ? 0.1 : 0), in: RoundedRectangle(cornerRadius: KitMetrics.radiusLarge))
   }
 }
 
@@ -1222,15 +1094,15 @@ private struct LanguageDetail: View {
     ScrollView {
       VStack(alignment: .leading, spacing: 14) {
         HStack(spacing: 14) {
-          BadgeIcon(text: language.mono, color: .orange, size: 56)
+          Tile(letters: language.mono, hue: .orange, size: 56, style: .solid)
           VStack(alignment: .leading, spacing: 3) {
-            Text(language.name).font(.title.weight(.bold))
+            Text(language.name).kitFont(.title1).fontWeight(.bold)
             Text("\(language.versions.count == 1 ? "1 version" : "\(language.versions.count) versions") · \(language.caches.count) caches and downloads")
-              .foregroundStyle(.secondary)
+              .foregroundStyle(.kitSecondary)
           }
           Spacer()
           VStack(alignment: .trailing, spacing: 4) {
-            Text(language.bytes.byteString).font(.title2.weight(.bold).monospacedDigit())
+            Text(language.bytes.byteString).kitFont(.title2).fontWeight(.bold).monospacedDigit()
             Button("Pick All of \(language.name)") {
               store.setSelected(true, language.versions + language.caches)
             }
@@ -1238,7 +1110,7 @@ private struct LanguageDetail: View {
           }
         }
         Text("Versions a project of yours pins are marked with that project. Removing a version also removes the packages installed into it.")
-          .foregroundStyle(.secondary)
+          .foregroundStyle(.kitSecondary)
         header("Versions", language.versions)
         VStack(spacing: 0) {
           ForEach(language.versions) { version in
@@ -1246,12 +1118,11 @@ private struct LanguageDetail: View {
             Divider()
           }
         }
-        .background(.background, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.quaternary))
+        .kitSurface(.card)
         header("Caches and Downloaded Packages", language.caches)
         Text("Safe whether you keep the language or not: they download or build again when a project needs them.")
-          .font(.callout)
-          .foregroundStyle(.secondary)
+          .kitFont(.callout)
+          .foregroundStyle(.kitSecondary)
         VStack(spacing: 2) {
           ForEach(language.caches) { StorageFileRow(item: $0) }
         }
@@ -1263,9 +1134,9 @@ private struct LanguageDetail: View {
 
   private func header(_ title: String, _ items: [StorageItem]) -> some View {
     HStack {
-      Text(title).font(.headline)
+      Text(title).kitFont(.headline)
       Spacer()
-      Text(items.reduce(0) { $0 + $1.bytes }.byteString).foregroundStyle(.secondary).monospacedDigit()
+      Text(items.reduce(0) { $0 + $1.bytes }.byteString).foregroundStyle(.kitSecondary).monospacedDigit()
     }
     .padding(.top, 4)
   }
@@ -1274,26 +1145,22 @@ private struct LanguageDetail: View {
     let users = language.usedBy[version.id] ?? []
     let on = store.isSelected(version)
     return HStack(spacing: 12) {
-      RoundCheck(state: on ? .on : .off, size: 18, disabled: version.isLocked || store.isBusy) {
+      StorageCheck(state: on ? .on : .off, disabled: version.isLocked || store.isBusy) {
         store.setSelected(!on, [version])
       }
       VStack(alignment: .leading, spacing: 2) {
-        Text(version.title).font(.system(.callout, design: .monospaced).weight(.semibold))
-        Text(version.detail ?? version.group).font(.caption).foregroundStyle(.secondary)
+        Text(version.title).kitFont(.mono).fontWeight(.semibold)
+        Text(version.detail ?? version.group).kitFont(.caption).foregroundStyle(.kitSecondary)
       }
       .frame(width: 220, alignment: .leading)
       HStack(spacing: 4) {
         if users.isEmpty {
           Text(version.lockReason ?? "No project uses it")
-            .font(.caption)
-            .foregroundStyle(version.isLocked ? Color.accentColor : .orange)
+            .kitFont(.caption)
+            .foregroundStyle(version.isLocked ? Hue.accent.text : Hue.orange.text)
         }
         ForEach(users.prefix(4), id: \.self) { user in
-          Text(user)
-            .font(.caption)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 2)
-            .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+          Chip(user)
         }
       }
       Spacer()
@@ -1301,7 +1168,7 @@ private struct LanguageDetail: View {
     }
     .padding(.horizontal, 12)
     .padding(.vertical, 9)
-    .background(on ? Color.accentColor.opacity(0.07) : .clear)
+    .background(Hue.accent.soft(on ? 0.07 : 0))
   }
 }
 
@@ -1321,9 +1188,9 @@ private struct MachinesPage: View {
     ScrollView {
       VStack(alignment: .leading, spacing: 14) {
         VStack(alignment: .leading, spacing: 4) {
-          Text("Virtual Machines").font(.title2.weight(.bold))
+          Text("Virtual Machines").kitFont(.title2).fontWeight(.bold)
           Text("Disk images grow as a guest writes and never shrink on their own. Compacting gives back the space the guest already deleted; machines your workflows run on are kept.")
-            .foregroundStyle(.secondary)
+            .foregroundStyle(.kitSecondary)
             .fixedSize(horizontal: false, vertical: true)
         }
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 12)], spacing: 12) {
@@ -1341,7 +1208,7 @@ private struct MachinesPage: View {
       .padding(22)
       .padding(.bottom, 100)
     }
-    .background(.background.secondary)
+    .kitPane(.secondary)
     .task { if vms.machines.isEmpty { await vms.refresh() } }
   }
 
@@ -1349,20 +1216,20 @@ private struct MachinesPage: View {
   private func actionRow(_ item: StorageItem, title: String, detail: String) -> some View {
     let on = store.isSelected(item)
     return HStack(spacing: 10) {
-      RoundCheck(state: on ? .on : .off, size: 18, disabled: item.isLocked || !item.cleanup.isCleanable || store.isBusy) {
+      StorageCheck(state: on ? .on : .off, disabled: item.isLocked || !item.cleanup.isCleanable || store.isBusy) {
         store.setSelected(!on, [item])
       }
       VStack(alignment: .leading, spacing: 1) {
         Text(title).fontWeight(.medium)
         Text(item.lockReason ?? detail)
-          .font(.caption)
-          .foregroundStyle(item.isLocked ? Color.accentColor : .secondary)
+          .kitFont(.caption)
+          .foregroundStyle(item.isLocked ? AnyShapeStyle(Hue.accent.text) : AnyShapeStyle(.kitSecondary))
       }
       Spacer()
       Text(item.bytes.byteString)
         .monospacedDigit()
         .fontWeight(.semibold)
-        .foregroundStyle(on ? .primary : .secondary)
+        .foregroundStyle(on ? .kitLabel : .kitSecondary)
     }
     .opacity(item.isLocked ? 0.6 : 1)
   }
@@ -1370,15 +1237,14 @@ private struct MachinesPage: View {
   private func actionCard(_ item: StorageItem) -> some View {
     VStack(alignment: .leading, spacing: 12) {
       HStack(spacing: 12) {
-        BadgeIcon(symbol: "shippingbox", color: .indigo, size: 40)
+        Tile(systemImage: "shippingbox", hue: .indigo, size: 40, style: .solid)
         Text("Docker").fontWeight(.semibold)
       }
       Divider()
       actionRow(item, title: "Prune images and build cache", detail: item.detail ?? "")
     }
     .padding(16)
-    .background(.background, in: RoundedRectangle(cornerRadius: 16))
-    .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Color.secondary.opacity(0.2)))
+    .kitSurface(.card)
   }
 
   private func card(_ item: StorageItem, actions: [StorageItem]) -> some View {
@@ -1387,28 +1253,20 @@ private struct MachinesPage: View {
     let on = store.isSelected(item)
     return VStack(alignment: .leading, spacing: 12) {
       HStack(spacing: 12) {
-        BadgeIcon(symbol: "desktopcomputer", color: .indigo, size: 40)
+        Tile(systemImage: "desktopcomputer", hue: .indigo, size: 40, style: .solid)
         VStack(alignment: .leading, spacing: 2) {
           Text(name).fontWeight(.semibold)
-          Text(item.group).font(.caption).foregroundStyle(.secondary)
+          Text(item.group).kitFont(.caption).foregroundStyle(.kitSecondary)
         }
         Spacer()
         if item.isLocked {
-          Text("CI runner")
-            .font(.caption.weight(.semibold))
-            .padding(.horizontal, 8)
-            .padding(.vertical, 2)
-            .background(Color.accentColor.opacity(0.12), in: Capsule())
-            .foregroundStyle(Color.accentColor)
+          Chip("CI runner", hue: .accent)
         }
         if let machine {
-          HStack(spacing: 5) {
-            Circle().fill(machine.status.isRunning ? .green : .secondary.opacity(0.5)).frame(width: 7, height: 7)
-            Text(machine.status.rawValue.capitalized).font(.caption)
-          }
+          StatusLabel(machine.status.rawValue.capitalized, hue: machine.status.isRunning ? .green : .gray)
         }
       }
-      Text(item.bytes.byteString).font(.title2.weight(.bold).monospacedDigit())
+      Text(item.bytes.byteString).kitFont(.title2).fontWeight(.bold).monospacedDigit()
       Divider()
       ForEach(actions) { action in
         if action.id == "docker:prune" {
@@ -1418,14 +1276,14 @@ private struct MachinesPage: View {
         }
       }
       HStack(spacing: 10) {
-        RoundCheck(state: on ? .on : .off, size: 18, disabled: item.isLocked || store.isBusy) {
+        StorageCheck(state: on ? .on : .off, disabled: item.isLocked || store.isBusy) {
           store.setSelected(!on, [item])
         }
         VStack(alignment: .leading, spacing: 1) {
           Text(item.group == "Containers" ? "Delete disk image" : "Delete virtual machine").fontWeight(.medium)
           Text(item.lockReason ?? (item.group == "Containers" ? "Containers and images inside it go too" : "Removes the machine and its disk"))
-            .font(.caption)
-            .foregroundStyle(item.isLocked ? Color.accentColor : .secondary)
+            .kitFont(.caption)
+            .foregroundStyle(item.isLocked ? AnyShapeStyle(Hue.accent.text) : AnyShapeStyle(.kitSecondary))
         }
         Spacer()
         Button {
@@ -1433,12 +1291,12 @@ private struct MachinesPage: View {
         } label: {
           Image(systemName: "magnifyingglass")
         }
-        .buttonStyle(.borderless)
+        .buttonStyle(.kitIcon)
       }
       .opacity(item.isLocked ? 0.6 : 1)
     }
     .padding(16)
-    .background(.background, in: RoundedRectangle(cornerRadius: 16))
-    .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(on ? Color.accentColor : Color.secondary.opacity(0.2), lineWidth: on ? 2 : 1))
+    .kitSurface(.card)
+    .overlay { if on { RoundedRectangle(cornerRadius: KitMetrics.radiusCard, style: .continuous).strokeBorder(Hue.accent.fill, lineWidth: 2) } }
   }
 }
