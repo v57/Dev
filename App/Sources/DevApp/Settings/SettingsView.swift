@@ -19,6 +19,10 @@ struct SettingsView: View {
       SettingsPane("Translation", systemImage: "globe", hue: .blue, id: "translation") { TranslationSettingsView() }
       SettingsPane("Agents", systemImage: "powerplug", id: "agents") { AgentsSettingsView() }
       SettingsPane("Accounts", systemImage: "person.2", hue: .indigo, id: "accounts") { VaultAccountsSettings() }
+      #if os(macOS)
+        // Your iPhone and iPad sign in to this Mac over SSH: which of them can, and the other keys.
+        SettingsPane("Remote", systemImage: "network", hue: .teal, id: "remote") { VaultRemoteSettings() }
+      #endif
       SettingsPane("Advanced", systemImage: "slider.horizontal.3", id: "advanced") { AdvancedSettingsView() }
     }
     .frame(width: 640, height: 560)
