@@ -214,9 +214,7 @@ final class SidebarViewModel {
 
   /// Directories the last drop passed over (no repo inside, but a repo beside
   /// them), offered to the reader as projects to add. Empty = no offer showing.
-  var importSuggestions: [VaultProjectDiscovery.Skipped] = []
-  /// The directories that drop was of: the folders added from the offer join their groups.
-  var importRoots: [URL] = []
+  var importOffer: VaultImportOffer?
 
   /// The selected project's row, or nil when the selection is a projectless tool.
   var selectedProject: Project? {
@@ -454,7 +452,6 @@ final class SidebarViewModel {
     // A tree with no repo at all is one project, the dropped directory itself.
     let repos = scans.map { $0.repositories.isEmpty ? [$0.root] : $0.repositories }
     let reposByDrop = Dictionary(zip(dropRoots, repos), uniquingKeysWith: { first, _ in first })
-    let skipped = scans.filter { !$0.repositories.isEmpty }.flatMap(\.skipped)
     let catalogByRoot = await Self.discoverCatalogs(in: repos.flatMap { $0 })
 
     await TranslationData.shared.start()
@@ -482,15 +479,10 @@ final class SidebarViewModel {
         title: "No Xcode project",
         message: "Dev lists only folders with an Xcode project. To list the others too, turn off Show only Xcode projects in Settings ▸ General.")
     }
-    // Offer only what is not a project already: re-dropping a folder must not
+    // Offer only what the vault doesn't have: re-dropping a folder must not
     // keep suggesting the directories the reader added from its last drop.
-    let known = Set(projects.compactMap(\.rootURL))
-    let fresh = skipped.filter { !known.contains($0.url) }
     let offers = UserDefaults.standard.object(forKey: SidebarPreferences.offerNonGitFolders) as? Bool ?? true
-    if offers, !fresh.isEmpty {
-      importRoots = dropRoots
-      importSuggestions = fresh
-    }
+    if offers { importOffer = VaultImportOffer(scans, store: vaultProjects.vault.store) }
     return firstID
   }
 
@@ -512,7 +504,7 @@ final class SidebarViewModel {
   /// window's account, unless they came from its vault (`publishing: false`).
   @discardableResult
   func addSuggestedDirectories(_ urls: [URL], publishing: Bool = true) async -> Int64? {
-    importSuggestions = []
+    importOffer = nil
     guard !urls.isEmpty else { return nil }
     let catalogByRoot = await Self.discoverCatalogs(in: urls)
     await TranslationData.shared.start()

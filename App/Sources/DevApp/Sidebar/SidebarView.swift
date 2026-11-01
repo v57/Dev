@@ -111,16 +111,12 @@ struct SidebarView: View {
       model.isDropTargeted = $0
     }
     .kitDropTarget(model.isDropTargeted, cornerRadius: KitMetrics.radiusCard)
-    .kitSheet(isPresented: Binding(
-      get: { !model.importSuggestions.isEmpty },
-      set: { if !$0 { model.importSuggestions = [] } }
-    )) {
-      // The sheet adds them to the vault; Dev lists them too.
-      VaultFolderSuggestionsSheet(
-        model.importSuggestions, roots: model.importRoots, vault: model.vaultProjects.vault, app: "Dev"
-      ) { urls in
+    .kitSheet(item: $model.importOffer) { offer in
+      // The sheet adds them to the vault; Dev lists the folders too.
+      VaultImportSheet(offer, vault: model.vaultProjects.vault, app: "Dev") { urls in
+        let folders = urls.filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
         Task {
-          if let firstID = await model.addSuggestedDirectories(urls, publishing: false) {
+          if let firstID = await model.addSuggestedDirectories(folders, publishing: false) {
             model.selection = .project(firstID)
           }
         }
