@@ -214,7 +214,9 @@ final class SidebarViewModel {
 
   /// Directories the last drop passed over (no repo inside, but a repo beside
   /// them), offered to the reader as projects to add. Empty = no offer showing.
-  var importSuggestions: [RepoDiscovery.Skipped] = []
+  var importSuggestions: [VaultProjectDiscovery.Skipped] = []
+  /// The directories that drop was of: the folders added from the offer join their groups.
+  var importRoots: [URL] = []
 
   /// The selected project's row, or nil when the selection is a projectless tool.
   var selectedProject: Project? {
@@ -393,7 +395,7 @@ final class SidebarViewModel {
   // MARK: - drag-and-drop import
 
   /// Adds dropped Finder items as projects: a DIRECTORY is searched for git
-  /// repos (`RepoDiscovery`) and each repo becomes a directory-root project via
+  /// repos (`VaultProjectDiscovery`) and each repo becomes a directory-root project via
   /// the P10 resolver — the directory itself when it holds none; an .xcstrings
   /// FILE becomes a project rooted at its parent directory. Directories the
   /// search passed over land in `importSuggestions` for the sidebar to offer.
@@ -447,12 +449,13 @@ final class SidebarViewModel {
       return nil
     }
     let scans = await Task.detached(priority: .userInitiated) {
-      dropRoots.map { RepoDiscovery.scan($0) }
+      dropRoots.map { VaultProjectDiscovery.scan($0) }
     }.value
-    let reposByDrop = Dictionary(
-      zip(dropRoots, scans.map(\.repos)), uniquingKeysWith: { first, _ in first })
-    let skipped = scans.flatMap(\.skipped)
-    let catalogByRoot = await Self.discoverCatalogs(in: scans.flatMap(\.repos))
+    // A tree with no repo at all is one project, the dropped directory itself.
+    let repos = scans.map { $0.repositories.isEmpty ? [$0.root] : $0.repositories }
+    let reposByDrop = Dictionary(zip(dropRoots, repos), uniquingKeysWith: { first, _ in first })
+    let skipped = scans.filter { !$0.repositories.isEmpty }.flatMap(\.skipped)
+    let catalogByRoot = await Self.discoverCatalogs(in: repos.flatMap { $0 })
 
     await TranslationData.shared.start()
     var resolved: [Project] = []
@@ -470,7 +473,7 @@ final class SidebarViewModel {
     }
     // The other v57 apps list the folder too, and the vault notes which are
     // Xcode projects: the others leave the list.
-    vaultProjects.publish(resolved.compactMap(\.rootURL))
+    vaultProjects.publish(resolved.compactMap(\.rootURL), roots: dropRoots)
     refresh()
     let shown = resolved.filter { project in projects.contains { $0.id == project.id } }
     let firstID = shown.first?.id
@@ -484,7 +487,10 @@ final class SidebarViewModel {
     let known = Set(projects.compactMap(\.rootURL))
     let fresh = skipped.filter { !known.contains($0.url) }
     let offers = UserDefaults.standard.object(forKey: SidebarPreferences.offerNonGitFolders) as? Bool ?? true
-    if offers, !fresh.isEmpty { importSuggestions = fresh }
+    if offers, !fresh.isEmpty {
+      importRoots = dropRoots
+      importSuggestions = fresh
+    }
     return firstID
   }
 

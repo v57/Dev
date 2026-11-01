@@ -115,9 +115,12 @@ struct SidebarView: View {
       get: { !model.importSuggestions.isEmpty },
       set: { if !$0 { model.importSuggestions = [] } }
     )) {
-      ImportSuggestionsSheet(suggestions: model.importSuggestions) { urls in
+      // The sheet adds them to the vault; Dev lists them too.
+      VaultFolderSuggestionsSheet(
+        model.importSuggestions, roots: model.importRoots, vault: model.vaultProjects.vault, app: "Dev"
+      ) { urls in
         Task {
-          if let firstID = await model.addSuggestedDirectories(urls) {
+          if let firstID = await model.addSuggestedDirectories(urls, publishing: false) {
             model.selection = .project(firstID)
           }
         }

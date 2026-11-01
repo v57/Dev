@@ -180,11 +180,14 @@ import VaultKit
     model.refresh()
   }
 
-  /// Publishes project folders for the other apps.
-  func publish(_ roots: [URL]) {
-    guard !LaunchOptions.isScreenshotMode, !roots.isEmpty else { return }
+  /// Publishes project folders for the other apps, grouped as the dropped folders they came from are
+  /// (`VaultStore.arrangeProjects`).
+  func publish(_ folders: [URL], roots: [URL] = []) {
+    guard !LaunchOptions.isScreenshotMode, !folders.isEmpty else { return }
+    let paths = folders.map(\.standardizedFileURL.path)
     vault.perform { store in
-      for root in roots { try store.addProject(path: root.standardizedFileURL.path) }
+      for path in paths { try store.addProject(path: path) }
+      try store.arrangeProjects(paths, roots: roots.map(\.standardizedFileURL.path))
     }
   }
 
