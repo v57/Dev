@@ -186,11 +186,15 @@ import PlatformBroadcast
   }
 
   /// The scheme in `root` whose app installs: the one named after the folder, else the first (the detector ranks the
-  /// main one first). Cached while the folder's top-level files are the same.
+  /// main one first). Cached while the folder's top-level files are the same, except no scheme in a folder with an
+  /// Xcode project: `xcodebuild -list` fails or times out when it can't resolve the packages yet (a new Mac, Xcode
+  /// not set up), which reads the same as no app, so that is asked again.
   nonisolated static func installableScheme(in root: URL, cached: CachedScheme?) -> CachedScheme {
     let folder = ProjectFolder(listing: root)
     let fingerprint = ProjectScanner.fingerprint(of: folder)
-    if let cached, cached.fingerprint == fingerprint { return cached }
+    let hasXcodeProject =
+      folder.first(withSuffix: ".xcodeproj") != nil || folder.first(withSuffix: ".xcworkspace") != nil
+    if let cached, cached.fingerprint == fingerprint, cached.scheme != nil || !hasXcodeProject { return cached }
     let schemes = ProjectScanner.schemes(in: folder).filter { $0.supports(.install) }
     let scheme = schemes.first { $0.name == root.lastPathComponent } ?? schemes.first
     return CachedScheme(fingerprint: fingerprint, scheme: scheme)
