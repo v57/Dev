@@ -249,7 +249,8 @@ final class SidebarViewModel {
   }
 
   private func rebuildRows() {
-    let fetched = TranslationData.shared.projects
+    let kept = keptProjects
+    let fetched = TranslationData.shared.projects.filter { !kept.contains($0.id) }
     let fm = FileManager.default
     // Only Xcode projects: the vault knows the others' kinds and Dev leaves them to the other apps.
     let hidden = vaultProjects.hiddenRoots()
@@ -332,10 +333,11 @@ final class SidebarViewModel {
 
   // MARK: - removal
 
-  /// Removes a project from the sidebar: its row in the translation store with
-  /// its reconciled records and its project-scope context doc. The catalog
-  /// FILE on disk is never touched: removing un-imports the project, it does
-  /// not delete the artifact (re-dropping the folder imports it afresh).
+  /// Removes a project from the sidebar. `keepingRecords`: its records stay (which strings were reviewed, the notes,
+  /// the width limits, the edit history) and it only leaves the list, until its folder or catalog is added again
+  /// (`keptProjects`). Otherwise its row in the translation store goes with its reconciled records and its
+  /// project-scope context doc. Either way the translation memory keeps the values, and the catalog FILE on disk
+  /// is never touched: removing un-imports the project, it does not delete the artifact.
   ///
   /// When the project's catalog is the one open in Localization, the store is
   /// closed with it: keeping it open would render records of a deleted
@@ -346,7 +348,7 @@ final class SidebarViewModel {
   /// report through `alert`.
   ///
   /// No-op when the project is already gone (a stale row's menu action).
-  func removeProject(id: Int64, localization: LocalizationStore) {
+  func removeProject(id: Int64, keepingRecords: Bool, localization: LocalizationStore) {
     guard let project = project(id: id) else { return }
 
     if localization.catalogURL == project.catalogURL {
@@ -366,7 +368,11 @@ final class SidebarViewModel {
     }
 
     let rootURL = project.rootURL
-    TranslationData.shared.deleteProject(id: id)
+    if keepingRecords {
+      keptProjects.insert(id)
+    } else {
+      TranslationData.shared.deleteProject(id: id)
+    }
     // A removed row cannot stay selected: this drops the detail pane back to
     // its prompt and takes the project-bound toolbar picker with it.
     if selection == .project(id) {
@@ -375,6 +381,35 @@ final class SidebarViewModel {
     // Removed here only: Git and the other apps keep it, and Dev doesn't bring it back.
     vaultProjects.dismiss(rootURL: rootURL)
     refresh()
+  }
+
+  /// Whether Dev may hold records for the project, which removing it would delete: the ones loaded in memory, or
+  /// the last count. A count that isn't in yet, or that a change since made stale, counts as holding some.
+  func holdsRecords(_ id: Int64) -> Bool {
+    if TranslationData.shared.records(project: id)?.isEmpty == false { return true }
+    guard !countsAreStale, let counts = badgeCounts[id] else { return true }
+    return counts.records > 0
+  }
+
+  /// Projects removed from the list with their records kept, by id: hidden until they're added again. A screenshot
+  /// run's store is in memory, and so are its.
+  private var keptProjects: Set<Int64> {
+    get {
+      if LaunchOptions.isScreenshotMode { return keptInMemory }
+      return Set((UserDefaults.standard.stringArray(forKey: "RemovedProjectsWithRecords") ?? []).compactMap { Int64($0) })
+    }
+    set {
+      if LaunchOptions.isScreenshotMode { keptInMemory = newValue; return }
+      UserDefaults.standard.set(newValue.sorted().map(String.init), forKey: "RemovedProjectsWithRecords")
+    }
+  }
+  @ObservationIgnored private var keptInMemory: Set<Int64> = []
+
+  /// Projects added again (a drop, Add Project…, the vault): a kept one comes back with its records.
+  private func restore(_ added: [Project]) {
+    let kept = keptProjects
+    guard added.contains(where: { kept.contains($0.id) }) else { return }
+    keptProjects = kept.subtracting(added.map(\.id))
   }
 
   // MARK: - drag-and-drop import
@@ -455,6 +490,7 @@ final class SidebarViewModel {
       }
       resolved += projects
     }
+    restore(resolved)
     // The other v57 apps list the folder too, and the vault notes which are
     // Xcode projects: the others leave the list.
     vaultProjects.publish(resolved.compactMap(\.rootURL), roots: dropRoots)
@@ -498,6 +534,7 @@ final class SidebarViewModel {
     let added = urls.map { root in
       Reconcile.resolveDirectoryProject(rootDir: root, catalogURL: catalogByRoot[root] ?? nil)
     }
+    restore(added)
     if publishing { vaultProjects.publish(added.compactMap(\.rootURL)) }
     refresh()
     return added.first { project in projects.contains { $0.id == project.id } }?.id

@@ -40,6 +40,8 @@ struct SidebarView: View {
   private let installs = AppInstalls.shared
   /// The bottom bar's + menu is open.
   @State private var showsAddMenu = false
+  /// The projects a removal asks about (nil: no question).
+  @State private var removal: [SidebarProjectRow]?
   /// The project groups closed in the Projects section (vault group ids).
   @AppStorage("CollapsedProjectGroups") private var collapsedGroups = KitIDSet()
   /// Settings ▸ General: the projects that aren't Xcode projects leave the list.
@@ -130,6 +132,9 @@ struct SidebarView: View {
     ) {
       installs.answer(true)
     }
+    .kitConfirmation(
+      removalTitle, isPresented: Binding(get: { removal != nil }, set: { if !$0 { removal = nil } }),
+      message: removalMessage, systemImage: "minus.circle", buttons: removalButtons)
     .kitNotice(
       model.alert?.title ?? "", isPresented: Binding(get: { model.alert != nil }, set: { if !$0 { model.alert = nil } }),
       message: model.alert?.message)
@@ -175,8 +180,15 @@ struct SidebarView: View {
     .rowMenu { project in
       if let row = layout.rows[project.id] { projectMenu(row) }
     }
-    .removable { ids in
-      for row in ids.compactMap({ layout.rows[$0] }) { model.removeProject(id: row.id, localization: localization) }
+    .removable(confirmsRemoveAll: false) { ids in
+      var seen = Set<Int64>()
+      let rows = ids.compactMap { layout.rows[$0] }.filter { seen.insert($0.id).inserted }
+      // One project with nothing to keep goes at once; anything else asks.
+      if rows.count == 1, !model.holdsRecords(rows[0].id) {
+        model.removeProject(id: rows[0].id, keepingRecords: false, localization: localization)
+      } else if !rows.isEmpty {
+        removal = rows
+      }
     }
     .accessory {
       Button("Add Project…", systemImage: "plus") { model.addProjectsFromPanel() }
@@ -212,6 +224,38 @@ struct SidebarView: View {
       }
       Divider()
     }
+  }
+
+  // MARK: - Removal
+
+  /// "Remove Shell from the list?", "Remove 3 projects from the list?"
+  private var removalTitle: String {
+    guard let removal else { return "" }
+    return removal.count == 1 ? "Remove \(removal[0].name) from the list?" : "Remove \(removal.count) projects from the list?"
+  }
+
+  private var removalMessage: String {
+    guard let removal, removal.contains(where: { model.holdsRecords($0.id) }) else {
+      return "Their folders and catalogs stay on disk, and Git and the other apps keep them."
+    }
+    return "Dev can keep which strings were reviewed, the notes, the width limits and the edit history, and bring them back when the folder is added again. The translations stay in the catalogs and the translation memory either way."
+  }
+
+  /// Keep (the default) or delete what Dev holds; just Remove when it holds nothing.
+  private var removalButtons: [KitConfirmationButton] {
+    guard let removal else { return [] }
+    func remove(keepingRecords: Bool) {
+      withAnimation(.kit) {
+        for row in removal { model.removeProject(id: row.id, keepingRecords: keepingRecords, localization: localization) }
+      }
+    }
+    guard removal.contains(where: { model.holdsRecords($0.id) }) else {
+      return [KitConfirmationButton("Remove", role: .destructive) { remove(keepingRecords: false) }]
+    }
+    return [
+      KitConfirmationButton("Delete Review State", role: .destructive) { remove(keepingRecords: false) },
+      KitConfirmationButton("Keep Review State", isDefault: true) { remove(keepingRecords: true) },
+    ]
   }
 
   /// Empty Projects section: still a drop target, so the hint invites the
