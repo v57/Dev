@@ -153,7 +153,7 @@ struct ContentView: View {
     // each scene's tool from its arguments, all scenes in one launch.
     .task {
       Screenshots.prepare(waitsForReady: true) { scene in await open(scene.arguments) }
-      let demo = LaunchOptions.demoProjects
+      let demo = LaunchOptions.demoProjects + VaultDemo.projects
       if !demo.isEmpty, let first = await model.importDroppedURLs(demo) {
         demoProject = first
         model.selection = .project(first)

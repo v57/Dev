@@ -18,6 +18,7 @@ public struct DevApp: App {
     private let updater = AppUpdater(github: "v57/Dev", assetName: "Dev.zip")
 
     public init() {
+        VaultDemo.prepare()
         AppLifecycle.install()
         if let hangLog = LaunchOptions.hangLog { MainThreadWatchdog.start(logTo: hangLog) }
         updater.start()
@@ -32,6 +33,8 @@ public struct DevApp: App {
                     ProjectIcon.thumbnail(of: $0)
                 }
             }
+        } else if VaultDemo.isOn {
+            Vault.shared.findProjectIcons(with: { ProjectIcon.find(in: $0) }) { ProjectIcon.thumbnail(of: $0) }
         }
     }
 

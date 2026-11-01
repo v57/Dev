@@ -40,7 +40,6 @@ struct SidebarView: View {
   private let installs = AppInstalls.shared
   /// The bottom bar's + menu is open.
   @State private var showsAddMenu = false
-  @State private var confirmsRemoveAll = false
   /// The project groups closed in the Projects section (vault group ids).
   @AppStorage("CollapsedProjectGroups") private var collapsedGroups = KitIDSet()
   /// Settings ▸ General: the projects that aren't Xcode projects leave the list.
@@ -51,9 +50,9 @@ struct SidebarView: View {
     KitSidebar(selection: $model.selection, searchText: $search, searchPrompt: "Search Projects") {
       // The window's account (hidden while Personal is the only one).
       VaultAccountPicker(meta: "\(model.projects.count) project\(model.projects.count == 1 ? "" : "s")")
-      // A long Projects list keeps its title in view, and the sections it pushes off wait as titles at the bottom.
+      // A long Projects list keeps its title in view (the section does it), and the sections it pushes off wait as
+      // titles at the bottom.
       projectsSection
-        .kitSticky()
       KitSection("Tools", meta: storage.sidebarStatus, systemImage: "wrench.and.screwdriver", hue: .orange) {
         StorageSidebarRow()
         VMsSidebarRow()
@@ -146,94 +145,73 @@ struct SidebarView: View {
     }
   }
 
-  /// The Projects card: the projects (narrowed by the search) in the vault's groups, which open and close, or the
-  /// drop hint.
+  /// The Projects card: VaultUI's projects section over Dev's projects (narrowed by the search) in the vault's
+  /// groups, the open project's tools in its section under the list (or under its row); the drop hint while empty.
   private var projectsSection: some View {
     let layout = ProjectGroupsLayout(
-      projects: model.projects, tree: model.vaultProjects.vault.projectTree, collapsed: collapsedGroups.ids, search: search)
-    return KitSection("Projects", meta: projectsMeta, systemImage: "folder", hue: .blue) {
-      if model.projects.isEmpty {
-        dropHintRow
-      } else {
-        // During a search every group is open, so the chevrons can't close one. Without groups the outline is
-        // flat and keeps no chevron slot.
-        KitOutline(
-          layout.roots, children: \.children, collapsed: search.isEmpty ? $collapsedGroups.ids : .constant([])
-        ) { node in
-          projectsNode(node)
-        }
-      }
-    } accessory: {
+      projects: model.projects, tree: model.vaultProjects.vault.projectTree, search: search)
+    return VaultProjectsSection(
+      layout.tree,
+      selection: Binding(
+        get: { if case .project(let id) = model.selection { layout.ids[id] } else { nil } },
+        set: { id in if let row = id.flatMap({ layout.rows[$0] }) { model.selection = .project(row.id) } }),
+      layout: .separate, sort: .arranged, key: "SidebarProjects",
+      // During a search every group is open, so the chevrons can't close one.
+      collapsedGroups: search.isEmpty ? $collapsedGroups.ids : .constant([])
+    ) { project in
+      if let row = layout.rows[project.id] { ProjectTools(model: model, row: row) }
+    } menu: {
+      EmptyView()
+    }
+    .icon { layout.rows[$0.id]?.iconImage }
+    .trailing { project in
+      if let row = layout.rows[project.id] { ProjectTrailing(row: row) }
+    }
+    .rowSubtitle { layout.rows[$0.id].flatMap { ProjectTrailing.subtitle(installs.phase(for: $0.rootURL)) } }
+    .rowProgress { layout.rows[$0.id].flatMap { ProjectTrailing.progress(installs.phase(for: $0.rootURL)) } }
+    .groupTrailing { _, projects in
+      ReviewCount(projects.compactMap { layout.rows[$0.id]?.needsReview }.reduce(0, +))
+    }
+    .rowMenu { project in
+      if let row = layout.rows[project.id] { projectMenu(row) }
+    }
+    .removable { ids in
+      for row in ids.compactMap({ layout.rows[$0] }) { model.removeProject(id: row.id, localization: localization) }
+    }
+    .accessory {
       Button("Add Project…", systemImage: "plus") { model.addProjectsFromPanel() }
         .buttonStyle(.kitIcon)
         .kitHelp("Add Project", meta: "Add a project folder", systemImage: "plus")
     }
-    .headerMenu {
-      Button("Remove All Projects from List", systemImage: "minus.circle") { confirmsRemoveAll = true }
-        .disabled(model.projects.isEmpty)
-    }
-    .animation(.kit, value: layout.visibleIDs)
-    .kitConfirmation(
-      model.projects.count == 1 ? "Remove 1 project from the list?" : "Remove all \(model.projects.count) projects from the list?", isPresented: $confirmsRemoveAll,
-      message: "Their folders and catalogs stay on disk, and Git and the other apps keep them.",
-      systemImage: "minus.circle", confirm: "Remove All"
-    ) {
-      withAnimation(.kit) { model.removeAllProjects(localization: localization) }
-    }
-  }
-
-  private func projectRow(_ row: SidebarProjectRow) -> some View {
-    ProjectRow(row: row)
-      .kitContextMenu {
-        if let root = row.rootURL {
-          Button("Open in \(ProjectOpener.appName)", systemImage: "arrow.up.forward.app") { ProjectOpener.open(root) }
-          Button("Show in \(KitDesktop.fileManagerName)", systemImage: "folder") { KitDesktop.reveal([root]) }
-          VaultOtherPlacesMenu(root: root)
-          Divider()
-          if installs.canInstall(root), let name = installs.appName(root) {
-            switch installs.phase(for: root) {
-            case .queued, .installing:
-              Button("Cancel Install", systemImage: "xmark.circle") { installs.cancel(root) }
-            default:
-              Button("Install \(name) on This Mac", systemImage: "arrow.down.app") { installs.install(root) }
-            }
-            if let log = installs.logURL(root) {
-              Button("Show Install Log", systemImage: "doc.text") { KitDesktop.open(log) }
-            }
-            Divider()
-          }
-        }
-        Button("Remove Project", systemImage: "trash", role: .destructive) {
-          model.removeProject(id: row.id, localization: localization)
-        }
+    .emptyState {
+      if model.projects.isEmpty {
+        dropHintRow
+      } else {
+        Text("No projects match “\(search)”.").kitFont(.callout).foregroundStyle(.kitSecondary)
       }
+    }
   }
 
-  /// A group of the Projects tree (it opens and closes on a click), or a project.
+  /// A project row's context menu, between Show in Finder and Remove from List.
   @ViewBuilder
-  private func projectsNode(_ node: ProjectGroupsLayout.Node) -> some View {
-    switch node.item {
-    case .group(let group, let projects):
-      ProjectGroupRow(
-        group: group, projects: projects, isOpen: !search.isEmpty || !collapsedGroups.contains(group.id),
-        holdsSelection: projects.contains { model.selection == .project($0.id) })
-      .kitContextMenu {
-        Button("Remove Group from List", systemImage: "minus.circle") {
-          withAnimation(.kit) { model.removeGroup(id: group.id, localization: localization) }
+  private func projectMenu(_ row: SidebarProjectRow) -> some View {
+    if let root = row.rootURL {
+      Button("Open in \(ProjectOpener.appName)", systemImage: "arrow.up.forward.app") { ProjectOpener.open(root) }
+      VaultOtherPlacesMenu(root: root)
+      if installs.canInstall(root), let name = installs.appName(root) {
+        Divider()
+        switch installs.phase(for: root) {
+        case .queued, .installing:
+          Button("Cancel Install", systemImage: "xmark.circle") { installs.cancel(root) }
+        default:
+          Button("Install \(name) on This Mac", systemImage: "arrow.down.app") { installs.install(root) }
+        }
+        if let log = installs.logURL(root) {
+          Button("Show Install Log", systemImage: "doc.text") { KitDesktop.open(log) }
         }
       }
-    case .project(let project):
-      projectRow(project)
+      Divider()
     }
-  }
-
-  /// "1 project · DemoApp": how many, and which one is open.
-  private var projectsMeta: [String] {
-    let count = model.projects.count
-    guard count > 0 else { return ["Drop a folder here"] }
-    var parts = ["\(count) project\(count == 1 ? "" : "s")"]
-    if case .project(let id) = model.selection, let row = model.projectRow(id: id) { parts.append(row.name) }
-    return parts
   }
 
   /// Empty Projects section: still a drop target, so the hint invites the
@@ -255,57 +233,52 @@ struct SidebarView: View {
   }
 }
 
-// MARK: - Project group row
+// MARK: - Project rows
 
-/// A group of projects (made in Git, shared through the vault): its folder, its name, and while closed how many
-/// strings wait for review in the projects inside it. A click opens or closes it; closed, it stands in for the open
-/// project inside it as the current row.
-private struct ProjectGroupRow: View {
-  let group: VaultProjectGroup
-  let projects: [SidebarProjectRow]
-  /// Open in the outline (which draws the chevron and opens it on a click), or during a search.
-  let isOpen: Bool
-  /// The open project is in it.
-  let holdsSelection: Bool
-  @AppStorage(SidebarPreferences.showReviewBadge) private var showsReviewBadge = true
+/// The open project's tools, in its section: the same tabs as the toolbar's, with the strings waiting for review on
+/// Localization.
+private struct ProjectTools: View {
+  let model: SidebarViewModel
+  let row: SidebarProjectRow
 
   var body: some View {
-    let needsReview = projects.reduce(0) { $0 + $1.needsReview }
-    SidebarRow(group.name, subtitle: group.note?.isEmpty == false ? group.note : nil) {
-      RowTile(systemImage: isOpen ? "folder.fill" : "folder", hue: StableHue.pick(group.name))
-    } trailing: {
-      if showsReviewBadge, !isOpen, needsReview > 0 {
-        Count(needsReview.formatted(.number.notation(.compactName)), .attention)
-          .kitHelp("Needs Review", meta: "\(needsReview) strings need review")
+    ForEach(DevTool.allCases) { tool in
+      SidebarRow(tool.title) {
+        RowTile(systemImage: tool.systemImage, hue: .blue)
+      } trailing: {
+        if tool == .localization { ReviewCount(row.needsReview) }
       }
+      .isCurrent(model.projectTool == tool)
+      .action { model.projectTool = tool }
     }
-    .isCurrent(holdsSelection && !isOpen)
-    .kitHelp(group.name, meta: projects.count == 1 ? "1 project" : "\(projects.count) projects", systemImage: "folder")
-    .accessibilityHint(isOpen ? "Collapses the group" : "Expands the group")
   }
 }
 
-// MARK: - Project row
-
-/// One project row: its app icon, its name, how many strings wait for review, and Install while the source is newer
-/// than the app on this Mac (then its place in the queue, or the install's step and progress, with Cancel).
-private struct ProjectRow: View {
-  let row: SidebarProjectRow
+/// How many strings wait for review (nothing at 0, or while Settings hides the badge).
+private struct ReviewCount: View {
+  let count: Int
   @AppStorage(SidebarPreferences.showReviewBadge) private var showsReviewBadge = true
+
+  init(_ count: Int) { self.count = count }
+
+  var body: some View {
+    if showsReviewBadge, count > 0 {
+      Count(count.formatted(.number.notation(.compactName)), .attention)
+        .kitHelp("Needs Review", meta: "\(count) strings need review")
+    }
+  }
+}
+
+/// A project row's trailing views: how many strings wait for review, and Install while the source is newer than the
+/// app on this Mac (then Cancel while it is queued or installing). The row's subtitle and bar say the install's step
+/// and progress.
+private struct ProjectTrailing: View {
+  let row: SidebarProjectRow
   private let installs = AppInstalls.shared
 
   var body: some View {
-    let install = installs.phase(for: row.rootURL)
-    SidebarRow(value: SidebarSelection.project(row.id), row.name, subtitle: Self.subtitle(install)) {
-      thumbnail
-    } trailing: {
-      if showsReviewBadge, row.needsReview > 0 {
-        Count(row.needsReview.formatted(.number.notation(.compactName)), .attention)
-          .kitHelp("Needs Review", meta: "\(row.needsReview) strings need review")
-      }
-      installButton(install)
-    }
-    .progress(Self.progress(install), status: .working)
+    ReviewCount(row.needsReview)
+    installButton(installs.phase(for: row.rootURL))
   }
 
   @ViewBuilder
@@ -368,16 +341,5 @@ private struct ProjectRow: View {
   static func progress(_ install: AppInstalls.Phase) -> Double? {
     guard case .installing(_, let progress) = install else { return nil }
     return progress?.fraction
-  }
-
-  @ViewBuilder
-  private var thumbnail: some View {
-    if let icon = row.vaultIcon.flatMap(Image.init(data:)) {
-      Avatar(name: row.name, image: icon, kind: .thing, size: 18)
-    } else if let icon = row.iconImage {
-      KitAppIcon(image: icon, size: 18)
-    } else {
-      RowTile(systemImage: "folder", hue: .blue)
-    }
   }
 }
