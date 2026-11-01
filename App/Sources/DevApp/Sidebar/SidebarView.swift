@@ -168,7 +168,7 @@ struct SidebarView: View {
     } menu: {
       EmptyView()
     }
-    .icon { layout.rows[$0.id]?.iconImage }
+    .icon { layout.rows[$0.id].flatMap(model.icon(of:)) }
     .trailing { project in
       if let row = layout.rows[project.id] { ProjectTrailing(row: row) }
     }

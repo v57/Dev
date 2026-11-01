@@ -393,7 +393,7 @@ struct ProjectOverviewView: View {
   /// The exported icon (trimmed to its shape and drawn square, an Icon Composer icon's whole canvas), else the
   /// project's thumbnail, clipped to the app icon's squircle inside Apple's grid margin.
   private func iconImage(size: CGFloat) -> some View {
-    KitAppIcon(image: facts.icon.preview.flatMap(Image.init(data:)) ?? row.iconImage, size: size * 0.82)
+    ProjectAppIcon(data: facts.icon.preview ?? model.icon(of: row), size: size * 0.82)
       .frame(width: size, height: size)
   }
 }
@@ -522,5 +522,19 @@ enum ProjectOpener {
       return
     }
     KitDesktop.open([url], withApp: bundleID)
+  }
+}
+
+/// A project's app icon from its PNG bytes, decoded off the main thread; a folder without one.
+struct ProjectAppIcon: View {
+  let data: Data?
+  let size: CGFloat
+
+  var body: some View {
+    if let data {
+      KitAppIcon(data: data, size: size)
+    } else {
+      KitAppIcon(image: Image(systemName: "folder"), size: size)
+    }
   }
 }

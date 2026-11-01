@@ -5,6 +5,7 @@
 //  Created by Dmitry on 09.09.26.
 //
 
+import CodeWorkspace
 import ComponentKit
 import SwiftUI
 import Foundation
@@ -84,8 +85,8 @@ struct SidebarProjectRow: Identifiable {
   let catalogURL: URL
   /// The project's AppIcon.appiconset, when it has one.
   let iconURL: URL?
-  let iconImage: Image?
-  /// The icon the vault keeps for the project (found anywhere in its folder), preferred to `iconImage`.
+  /// The icon the vault keeps for the project (found anywhere in its folder), preferred to the icon set's
+  /// (`SidebarViewModel.icon(of:)`).
   let vaultIcon: Data?
   /// Distinct translatable keys present in the project's reconciled records.
   let keyCount: Int
@@ -246,6 +247,31 @@ final class SidebarViewModel {
   func refresh() {
     rebuildRows()
     if countsAreStale { recount() }
+    makeIconThumbnails()
+  }
+
+  /// Thumbnails of the projects' icon sets by set folder, made off the main actor (`makeIconThumbnails`).
+  private(set) var iconThumbnails: [URL: Data] = [:]
+  @ObservationIgnored private var iconSetsLookedAt: Set<URL> = []
+
+  /// A row's icon as PNG bytes: the vault's, else a thumbnail of its icon set once made; nil without either.
+  func icon(of row: SidebarProjectRow) -> Data? {
+    row.vaultIcon ?? row.iconURL.flatMap { iconThumbnails[$0] }
+  }
+
+  /// Makes thumbnails of the icon sets not looked at yet, off the main actor: the sets' best PNGs are 1024 pixels.
+  private func makeIconThumbnails() {
+    let sets = Set(projects.compactMap(\.iconURL)).subtracting(iconSetsLookedAt)
+    guard !sets.isEmpty else { return }
+    iconSetsLookedAt.formUnion(sets)
+    Task {
+      let made = await Task.detached(priority: .utility) {
+        sets.reduce(into: [URL: Data]()) { made, set in
+          made[set] = Project.bestIconFile(in: set).flatMap { ProjectIcon.thumbnail(of: $0, pixels: 128) }
+        }
+      }.value
+      if !made.isEmpty { iconThumbnails.merge(made) { $1 } }
+    }
   }
 
   private func rebuildRows() {
@@ -271,7 +297,6 @@ final class SidebarViewModel {
           rootURL: project.rootURL,
           catalogURL: project.catalogURL,
           iconURL: project.iconURL,
-          iconImage: project.iconThumbnail,
           vaultIcon: project.rootURL.flatMap { icons[$0.standardizedFileURL.path] },
           keyCount: badge.keys,
           catalogExists: fm.fileExists(atPath: project.catalogURL.path),

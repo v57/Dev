@@ -53,46 +53,27 @@ nonisolated struct Project: Hashable, Sendable, Identifiable {
     return home.isEmpty ? name : home
   }
 
-  /// The project's app-icon bitmap: the best PNG inside `iconURL` when the
-  /// icon set exists on disk, else a folder placeholder symbol (catalog-file
-  /// projects and directory projects without Assets.xcassets yet). nil only
-  /// if even the symbol cannot be resolved.
-  var iconThumbnail: Image? {
-    if let image = Self.bestIconImage(in: iconURL) { return image }
-    return Image(systemName: "folder")
-  }
-
-  /// Loads the largest-representative PNG of an AppIcon.appiconset: this
-  /// app's exporter always writes a canonical 1024.png; Xcode-authored sets
-  /// use Contents.json + arbitrary filenames, so fall back to the biggest
-  /// PNG by file size.
-  private static func bestIconImage(in setURL: URL?) -> Image? {
+  /// The best PNG of an AppIcon.appiconset, for its thumbnail: this app's
+  /// exporter always writes a canonical 1024.png; Xcode-authored sets use
+  /// Contents.json + arbitrary filenames, so fall back to the biggest PNG by
+  /// file size. Reads the disk: call it off the main actor.
+  nonisolated static func bestIconFile(in setURL: URL?) -> URL? {
     guard let setURL else { return nil }
     let fm = FileManager.default
-    guard fm.fileExists(atPath: setURL.path),
-          let names = try? fm.contentsOfDirectory(atPath: setURL.path)
-    else { return nil }
+    guard let names = try? fm.contentsOfDirectory(atPath: setURL.path) else { return nil }
     for name in ["1024.png", "512.png", "256.png", "128.png"] where names.contains(name) {
-      if let image = image(at: setURL.appendingPathComponent(name)) {
-        return image
-      }
+      return setURL.appendingPathComponent(name)
     }
-    let pngs = names.filter { $0.lowercased().hasSuffix(".png") }
-    let largest = pngs
+    let largest = names
+      .filter { $0.lowercased().hasSuffix(".png") }
       .map { name -> (String, Int) in
         let size = (try? fm.attributesOfItem(
           atPath: setURL.appendingPathComponent(name).path))?[.size] as? Int ?? 0
         return (name, size)
       }
       .max { $0.1 < $1.1 }
-    guard let largest, largest.1 > 0,
-          let image = image(at: setURL.appendingPathComponent(largest.0))
-    else { return nil }
-    return image
-  }
-
-  private static func image(at url: URL) -> Image? {
-    (try? Data(contentsOf: url)).flatMap(Image.init(data:))
+    guard let largest, largest.1 > 0 else { return nil }
+    return setURL.appendingPathComponent(largest.0)
   }
 
   init(

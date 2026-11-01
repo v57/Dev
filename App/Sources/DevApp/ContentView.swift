@@ -229,7 +229,7 @@ struct ContentView: View {
   private var windowTitleView: some View {
     if case .project(let id) = model.selection, let row = model.projectRow(id: id) {
       RichHeader(Text(row.name), size: .title) {
-        KitAppIcon(image: row.iconImage, size: 28)
+        ProjectAppIcon(data: model.icon(of: row), size: 28)
       } meta: {
         Text(windowSubtitle).truncationMode(.middle)
       } accessory: {

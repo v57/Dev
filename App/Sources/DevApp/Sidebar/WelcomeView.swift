@@ -44,7 +44,7 @@ struct WelcomeView: View {
         RecentItem(
           row.name, subtitle: row.rootURL.map(Self.abbreviated), date: model.lastOpened(row.id).map(Self.day),
           status: row.needsReview > 0 ? "\(row.needsReview) to review" : nil, statusHue: .orange,
-          systemImage: "folder", image: Self.icon(row), id: "\(row.id)"
+          systemImage: "folder", imageData: model.icon(of: row), id: "\(row.id)"
         ) {
           model.selection = .project(row.id)
         }
@@ -53,7 +53,7 @@ struct WelcomeView: View {
       ForEach(otherProjects, id: \.id) { project in
         RecentItem(
           project.name, subtitle: project.localPath.map { Self.abbreviated(URL(fileURLWithPath: $0)) },
-          status: project.addedBy, systemImage: "folder", image: project.icon.flatMap(Image.init(data:)),
+          status: project.addedBy, systemImage: "folder", imageData: project.icon,
           id: project.id
         ) {
           Task {
@@ -90,14 +90,6 @@ struct WelcomeView: View {
     let query = search.trimmingCharacters(in: .whitespaces)
     return query.isEmpty || name.localizedCaseInsensitiveContains(query)
       || (path?.localizedCaseInsensitiveContains(query) ?? false)
-  }
-
-  private static func icon(_ row: SidebarProjectRow) -> Image? {
-    if let data = row.vaultIcon, let image = Image(data: data) { return image }
-    // The placeholder folder symbol isn't an icon: the item's own folder tile stands in.
-    guard row.iconURL.map({ FileManager.default.fileExists(atPath: $0.path) }) == true, let image = row.iconImage
-    else { return nil }
-    return image
   }
 
   private static func abbreviated(_ url: URL) -> String {
