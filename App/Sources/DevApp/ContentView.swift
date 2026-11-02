@@ -54,7 +54,7 @@ struct ContentView: View {
     NavigationSplitView {
       // The kit sidebar's own bottom bar has the toggle.
       SidebarView(model: model)
-        .navigationSplitViewColumnWidth(min: 220, ideal: 240, max: 360)
+        .kitSidebarColumn()
         .toolbar(removing: .sidebarToggle)
     } detail: {
       detailPane
