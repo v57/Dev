@@ -1,0 +1,13 @@
+Dev is a toolbox for people who make apps on the Mac. Open an Xcode project and it gets its own tabs:
+
+- Localization: translate your string catalog with the model you choose, using your own key.
+- App Icon: an Icon Composer icon from flat sources, one background and one glyph color.
+- Screenshots: framed App Store pictures with translated captions.
+- Workflows: builds and releases on this Mac or its virtual machines, with no server.
+- Store Text: the name, description and release notes of every store, kept as text files in your project.
+
+Tools without a project: Storage (a disk cleaner and app uninstaller), Virtual Machines (UTM), and Localization Servers.
+
+Agents can reach it through `Dev --mcp`, with permissions you set.
+
+Needs macOS 15 or later on Apple silicon. MIT license.

@@ -1,0 +1,10 @@
+{
+  "baseLocale" : "en-US",
+  "bundleID" : "dev.v57.dev",
+  "destinations" : [
+    "github"
+  ],
+  "locales" : [
+
+  ]
+}

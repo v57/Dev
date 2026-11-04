@@ -1,0 +1,7 @@
+macos
+xcode
+localization
+app-icons
+app-store-screenshots
+release-automation
+mcp
