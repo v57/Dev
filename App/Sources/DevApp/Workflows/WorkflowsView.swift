@@ -562,13 +562,17 @@ struct WorkflowsView: View {
             KitPicker("Runs On", selection: binding(workflow, index, \.runner), segments: runners(for: step))
           }
           if step.kind == .command {
-            FormRow("Command", systemImage: "apple.terminal", hue: .green, field: TextField(
-              "Command",
-              text: Binding(
-                get: { step.command ?? "" },
-                set: { value in update(workflow) { $0.steps[index].command = value } }),
-              axis: .vertical
-            ).kitFont(.mono))
+            // A script: Return starts a new line, and no smart quotes.
+            FormRow("Command", systemImage: "apple.terminal", hue: .green) { EmptyView() }
+              .detail {
+                KitLineEditor(
+                  text: Binding(
+                    // The store's value, not this body's copy: the editor reads it back between keys, before a new body.
+                    get: { store.workflows(for: root).first { $0.id == workflow.id }?.steps[safe: index]?.command ?? "" },
+                    set: { value in update(workflow) { $0.steps[index].command = value } }),
+                  placeholder: "swift test")
+                .accessibilityLabel("Command")
+              }
           } else {
             FormRow("Command", systemImage: "apple.terminal", hue: .green, field: Text(step.commandLine)
               .kitFont(.mono)
