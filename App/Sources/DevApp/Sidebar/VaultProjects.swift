@@ -67,6 +67,7 @@ import VaultKit
       model.refresh()
       publish(model.projects.compactMap(\.rootURL))
       await follow()
+      StoreVaultSync.syncAll(roots: model.projects.compactMap(\.rootURL))
     }
   }
 
@@ -103,11 +104,16 @@ import VaultKit
   /// The account a project folder belongs to, whose GitHub sign-in its releases use: this window's account when
   /// its vault has the folder, else an account whose vault has it, else Personal (which lists the rest).
   func account(of root: URL) -> String {
+    vault(of: root)?.accountID ?? VaultAccount.personal.id
+  }
+
+  /// The vault holding the project at `root`, this account's first; nil when none does.
+  func vault(of root: URL) -> Vault? {
     let path = root.standardizedFileURL.path
     func has(_ vault: Vault?) -> Bool { vault?.localProjects.contains { $0.localPath == path } == true }
-    if has(vault) { return vault.accountID }
+    if has(vault) { return vault }
     let vaults = Vaults.shared
-    return vaults.accounts.first { has(vaults.vault(for: $0)) }?.id ?? VaultAccount.personal.id
+    return vaults.accounts.lazy.compactMap { vaults.vault(for: $0) }.first { has($0) }
   }
 
   /// Whether Dev leaves out the projects that aren't Xcode projects (on unless turned off in Settings).

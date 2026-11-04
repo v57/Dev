@@ -143,7 +143,14 @@ A limit a service doesn't document is an estimate: going over warns but doesn't 
 keeps out of git. Ready (the chip above the editor, or `ready: true` over MCP) moves a field, in every locale, into the
 repository; publishing or importing does the same, since that text is public anyway. Review notes and messages to
 testers never leave `private/`. A file in `private/` wins over the same path outside it. The tool warns when git already
-tracks a file in there. Private files exist only on this Mac: nothing syncs or backs them up. Credentials never go in any
+tracks a file in there. Private files stay out of git but not out of reach: they're mirrored in the vault (`StoreVaultMirror`, a `storeText` record per
+file, sealed like every record, its id derived with the vault's key), so they reach the reader's other devices and survive
+this one. The files stay the working copy. A pass runs when the tab opens, soon after any change while it's open, and at
+launch, and it compares each file, its record and the text they last agreed on (`private/.vault-state.json`, per checkout):
+one side changed, the other follows; both changed, the text merges by line and a clash keeps both between conflict markers;
+an edit beats a delete. A file is removed only when the vault says its record was deleted, so a wiped vault gets its text back. A
+project that isn't in a vault keeps them on this device only, and the tab says so. `Dev --mcp` writes files only; the app carries
+them to the vault at its next pass. Credentials never go in any
 of it: release.env names key files (`ASC_KEY_PATH`, `GOOGLE_PLAY_KEY_PATH`), the keychain holds the Microsoft client
 secret, and the GitHub sign-in is the app's. Demo passwords for reviewers go in App Store Connect's review fields.
 

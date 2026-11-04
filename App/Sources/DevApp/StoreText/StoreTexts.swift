@@ -60,7 +60,8 @@ nonisolated struct StoreTextError: LocalizedError {
 ///
 /// A public repository shows everything it holds, so a text starts as a draft in `private/` and moves out when the
 /// reader marks it ready, or when it's published and public anyway. Review notes and tester messages always stay there.
-/// A file in `private/` wins over the same path outside it. Credentials never come near these files.
+/// A file in `private/` wins over the same path outside it, and the folder is mirrored encrypted in the vault
+/// (`StoreVaultMirror`). Credentials never come near these files.
 nonisolated struct StoreTexts: Sendable {
   let root: URL
   /// `store.json`'s base locale, read once: a text's path depends on it.
@@ -281,7 +282,7 @@ nonisolated struct StoreTexts: Sendable {
   }
 
   /// Removes folders the last file of a text left empty, up to the store's own.
-  private func prune(_ start: URL) {
+  func prune(_ start: URL) {
     var current = start.standardizedFileURL
     let stops = [folder.standardizedFileURL.path, privateFolder.standardizedFileURL.path]
     while !stops.contains(current.path), current.path.hasPrefix(folder.standardizedFileURL.path) {

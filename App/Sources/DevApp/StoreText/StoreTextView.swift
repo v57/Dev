@@ -7,6 +7,7 @@ import ComponentKit
 import Foundation
 import PlatformBroadcast
 import SwiftUI
+import VaultKit
 
 /// The Store Text tab: everything a store or release page says, written once and reused. Left, the fields; middle, the
 /// text being edited (the base text, a destination's override, or a locale's); right, how long it is at every
@@ -45,6 +46,9 @@ struct StoreTextView: View {
   @State private var privateCount = 0
   @State private var trackedPrivate: [String] = []
   @State private var observer: Broadcast.Observation?
+  @State private var vaultStatus: StoreVaultSync.Status = .unknown
+  @State private var vaultObserver: VaultChangeObserver?
+  @State private var vaultTask: Task<Void, Never>?
 
   @State private var showsSetup = false
   @State private var showsNewVersion = false
@@ -92,12 +96,19 @@ struct StoreTextView: View {
           reload()
         }
       }
+      // Another device's text arrived, or this device's other windows wrote.
+      vaultObserver = VaultChangeObserver { Task { @MainActor in scheduleVaultSync() } }
     }
     .onDisappear {
       flush()
       observer?.cancel()
       observer = nil
+      vaultObserver = nil
+      vaultTask?.cancel()
       translateTask?.cancel()
+      // What was just typed reaches the vault even though the tab closed.
+      let root = root
+      Task { _ = await StoreVaultSync.sync(root: root) }
     }
     .kitSheet(isPresented: $showsSetup, onDismiss: { reload() }) {
       StoreSetupSheet(root: root)
@@ -342,7 +353,7 @@ struct StoreTextView: View {
         FormCard("Out of Git") {
           GroupRow(
             privateCount == 1 ? "1 private text" : "\(privateCount) private texts",
-            help: "Drafts, review notes and messages to testers live in .dev/store/private/, which .dev/store/.gitignore keeps out of commits. They're on this Mac only.")
+            help: "Drafts, review notes and messages to testers live in .dev/store/private/, which .dev/store/.gitignore keeps out of commits. \(vaultNote)")
           if !trackedPrivate.isEmpty {
             FormRow(
               "\(trackedPrivate.count) already in git",
@@ -434,6 +445,40 @@ struct StoreTextView: View {
     locale = settings.baseLocale
     if LaunchOptions.isScreenshotMode, LaunchOptions.open == "storeSetup" { showsSetup = true }
     reload()
+    await syncVault()
+  }
+
+  private var vaultNote: String {
+    switch vaultStatus {
+    case .unknown, .kept: "They're also encrypted in your vault, for your other devices."
+    case .notInVault: "This project isn't in your vault, so they're only on this device."
+    case .failed(let message): "They're only on this device for now: the vault said \(message)"
+    }
+  }
+
+  /// Soon after a change, so typing doesn't make a pass per pause.
+  private func scheduleVaultSync() {
+    vaultTask?.cancel()
+    vaultTask = Task {
+      try? await Task.sleep(for: .milliseconds(1500))
+      guard !Task.isCancelled else { return }
+      await syncVault()
+    }
+  }
+
+  /// One pass of the mirror. What's typed is saved first and goes with it; text that arrived replaces the open text
+  /// unless more was typed during the pass, which then merges in the next one.
+  private func syncVault() async {
+    flush()
+    let typed = buffer
+    let status = await StoreVaultSync.sync(root: root)
+    vaultStatus = status
+    guard case .kept(let report) = status, report.changedFiles else { return }
+    if buffer == typed { bufferAddress = nil }
+    if report.conflicts > 0 {
+      notice = "Two devices changed the same text. Both versions are in it, between conflict markers: pick one and remove the markers."
+    }
+    reload()
   }
 
   /// The tool's picture of the disk, read off the main thread; the open text only when it isn't being typed.
@@ -465,6 +510,7 @@ struct StoreTextView: View {
       self.privateCount = count
       self.trackedPrivate = await opened.trackedPrivateFiles()
     }
+    scheduleVaultSync()
   }
 
   /// A selection changed: save what was open, then read what's open now.
