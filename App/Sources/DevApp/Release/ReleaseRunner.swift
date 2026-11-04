@@ -13,6 +13,8 @@ import Observation
 /// One step of `release.sh`, in the order the script runs them.
 nonisolated enum ReleaseStep: String, CaseIterable, Identifiable, Sendable {
   case check, build, test, screenshots, archive, direct, bundle, github, appstore, googleplay, msstore
+  /// Asked for by name only: `all` doesn't include it.
+  case bump
 
   var id: String { rawValue }
 
@@ -29,6 +31,7 @@ nonisolated enum ReleaseStep: String, CaseIterable, Identifiable, Sendable {
     case .appstore: return "App Store Connect"
     case .googleplay: return "Google Play"
     case .msstore: return "Microsoft Store"
+    case .bump: return "Version Bump"
     }
   }
 
@@ -45,6 +48,7 @@ nonisolated enum ReleaseStep: String, CaseIterable, Identifiable, Sendable {
     case .appstore: return "Uploads the archive"
     case .googleplay: return "Uploads the Android build"
     case .msstore: return "Submits the Windows build"
+    case .bump: return "Sets the project's version and drafts its changelog from git log"
     }
   }
 
@@ -63,7 +67,7 @@ nonisolated enum ReleaseStep: String, CaseIterable, Identifiable, Sendable {
 
   /// Steps that build or ship one platform; the others (the result archive, the GitHub release) take every
   /// platform's files in the run.
-  var takesPlatform: Bool { self != .bundle && self != .github }
+  var takesPlatform: Bool { self != .bundle && self != .github && self != .bump }
 }
 
 // MARK: - ReleasePlatform
