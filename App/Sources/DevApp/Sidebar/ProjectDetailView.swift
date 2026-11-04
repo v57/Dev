@@ -24,6 +24,7 @@ import SwiftUI
 ///  - App Icon: CreateIconView exports into the project's root directory.
 ///  - Screenshots: capture, frame and review the App Store pictures.
 ///  - Workflows: the project's CI.
+///  - Store Text: what its store and release pages say.
 struct ProjectDetailView: View {
   let model: SidebarViewModel
   let row: SidebarProjectRow
@@ -74,6 +75,13 @@ struct ProjectDetailView: View {
           WorkflowsView(root: root, projectName: row.name)
         } else {
           noFolder("Drop the project's folder on the sidebar to run its workflows.")
+        }
+      case .storeText:
+        if let root = row.rootURL {
+          StoreTextView(root: root, projectName: row.name)
+            .id(root)
+        } else {
+          noFolder("Drop the project's folder on the sidebar to keep its store text.")
         }
       }
     }

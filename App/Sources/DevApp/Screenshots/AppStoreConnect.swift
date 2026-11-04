@@ -10,18 +10,27 @@ import SwiftUI
 
 // MARK: - API
 
-/// The slice of the App Store Connect API the screenshot upload needs, signed
-/// with the API key release.env already names (ASC_KEY_ID, ASC_ISSUER_ID,
-/// ASC_KEY_PATH): find the app and its editable version, then replace each
-/// locale's screenshots of one display type.
+/// The slice of the App Store Connect API Dev needs, signed with the API key
+/// release.env already names (ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_PATH): find the
+/// app and its editable version, replace each locale's screenshots of one display
+/// type (below), and read and write its text (`StoreAppStoreConnect.swift`).
 nonisolated struct AppStoreConnectAPI: Sendable {
   let keyID: String
   let issuerID: String
   let privateKey: P256.Signing.PrivateKey
+  /// How requests go out: URLSession, or a stub in tests.
+  var send: StoreHTTP.Send = StoreHTTP.live
 
   struct Failure: LocalizedError {
     let message: String
     var errorDescription: String? { message }
+  }
+
+  init(keyID: String, issuerID: String, privateKey: P256.Signing.PrivateKey, send: @escaping StoreHTTP.Send) {
+    self.keyID = keyID
+    self.issuerID = issuerID
+    self.privateKey = privateKey
+    self.send = send
   }
 
   init(config: ReleaseConfig) throws {
@@ -76,8 +85,7 @@ nonisolated struct AppStoreConnectAPI: Sendable {
       request.setValue("application/json", forHTTPHeaderField: "Content-Type")
       request.httpBody = try JSONSerialization.data(withJSONObject: body)
     }
-    let (data, response) = try await URLSession.shared.data(for: request)
-    let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+    let (data, status) = try await send(request)
     let json = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
     guard (200..<300).contains(status) else {
       let detail = ((json["errors"] as? [[String: Any]])?.first?["detail"] as? String) ?? "HTTP \(status)"

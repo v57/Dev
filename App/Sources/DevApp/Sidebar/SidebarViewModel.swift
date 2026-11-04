@@ -24,6 +24,8 @@ nonisolated enum DevTool: String, Hashable, CaseIterable, Identifiable, Sendable
   case screenshots
   /// The project's CI: workflows built from release.sh's steps and the VMs.
   case workflows
+  /// Everything a store or release page says, kept as files in `.dev/store/`.
+  case storeText
 
   var id: String { rawValue }
 
@@ -34,6 +36,7 @@ nonisolated enum DevTool: String, Hashable, CaseIterable, Identifiable, Sendable
     case .icon: return "App Icon"
     case .screenshots: return "Screenshots"
     case .workflows: return "Workflows"
+    case .storeText: return "Store Text"
     }
   }
 
@@ -44,6 +47,7 @@ nonisolated enum DevTool: String, Hashable, CaseIterable, Identifiable, Sendable
     case .icon: return "app.badge"
     case .screenshots: return "photo.on.rectangle"
     case .workflows: return "shippingbox"
+    case .storeText: return "text.quote"
     }
   }
 }

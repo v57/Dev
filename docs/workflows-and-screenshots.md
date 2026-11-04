@@ -1,7 +1,7 @@
-# Workflows, Screenshots and the MCP server
+# Workflows, Screenshots, Store Text and the MCP server
 
-Dev's CI and App Store screenshots live in two files at a project's root, so the app, an agent and a text editor
-all edit the same thing.
+Dev's CI, App Store screenshots and store text live in files at a project's root, so the app, an agent and a text
+editor all edit the same thing.
 
 ## Workflows — `.dev/workflows/<id>.json`
 
@@ -111,6 +111,67 @@ of the framed platform into `.build/screenshots/framed/` and shows each scene's 
   means an individual key (the token signs as `sub: user`). Use for Notarization saves the same key as the
   `NOTARY_PROFILE` notarytool profile.
 
+## Store Text — `.dev/store/`
+
+Everything a store or release page says, written once and reused. It works with no network and no accounts; the tool
+is the project's Store Text tab. One text file per text, so a diff shows the sentence that changed:
+
+```
+.dev/store/
+  store.json                       baseLocale, locales, destinations, bundleID
+  .gitignore                       /private/
+  en-US/name.txt                   the base text
+  en-US/description.txt
+  en-US/description.appstore.txt   the override for one destination (appstore, github, googleplay, msstore)
+  en-US/keywords.txt               one per line
+  en-US/versions/1.2.0/changelog.txt
+  en-US/versions/1.2.0/changelog.github.txt
+  de-DE/description.txt            the text in another locale
+  translations.json                what each translation was made from (hashes)
+  private/...                      the same layout, never committed
+```
+
+Fields (the file names): `name`, `subtitle`, `description`, `keywords`, `promotional-text`, `url-support`,
+`url-marketing`, `url-privacy`, `category`, `copyright`, `review-notes`, and per version `changelog` and `testers`.
+
+What a destination shows, most specific first: this locale's override, this locale's text, the base language's
+override, the base text. Each field's length is counted live against each destination's limit, in the units that
+destination counts (App Store keywords are bytes, commas included; GitHub topics and Microsoft search terms are items).
+A limit a service doesn't document is an estimate: going over warns but doesn't stop a publish.
+
+**Private until ready.** These repositories are public, so new text is a draft in `private/`, which `.dev/store/.gitignore`
+keeps out of git. Ready (the chip above the editor, or `ready: true` over MCP) moves a field, in every locale, into the
+repository; publishing or importing does the same, since that text is public anyway. Review notes and messages to
+testers never leave `private/`. A file in `private/` wins over the same path outside it. The tool warns when git already
+tracks a file in there. Private files exist only on this Mac: nothing syncs or backs them up. Credentials never go in any
+of it: release.env names key files (`ASC_KEY_PATH`, `GOOGLE_PLAY_KEY_PATH`), the keychain holds the Microsoft client
+secret, and the GitHub sign-in is the app's. Demo passwords for reviewers go in App Store Connect's review fields.
+
+**Translate** fills the other locales with the model in Settings, only when pressed. It fills what's missing or
+outdated (the source changed since) and never touches text written by hand: editing a translation makes it yours.
+
+**Import** reads a service once and lists what it would write; nothing changes until you press Import. A field that's
+empty here becomes the base text, and text that differs becomes that destination's override, so the base text and the
+other destinations keep theirs. **Publish** reads what's live, lists each difference, and sends only after a confirmation.
+A field empty here is left alone there, English never goes into a listing that lacks its translation, and a documented
+limit stops it. What each sends:
+
+| Service | Reads and writes | Needs | Publish stops at |
+|---|---|---|---|
+| App Store Connect | name, subtitle, privacy URL; description, keywords, promotional text, What's New, support and marketing URLs; category, copyright, review notes; TestFlight's What to Test | API key in release.env, bundle ID | the text: nothing is submitted for review |
+| GitHub | repository description, homepage, topics; a release's notes (drafts included) | `GITHUB_REPO`, the GitHub sign-in | the text; the release itself comes from `release.sh github` |
+| Google Play | title, short and full description, website; release notes on the production track, tester notes on `GOOGLE_PLAY_TRACK` | `GOOGLE_PLAY_KEY_PATH` (needs `openssl` to sign), `GOOGLE_PLAY_PACKAGE` or the bundle ID | a committed edit, which refuses while a review is pending |
+| Microsoft Store | product name, short description, description, search terms, copyright, What's New, certification notes | `MS_STORE_APP_ID`, `MS_STORE_TENANT_ID`, `MS_STORE_CLIENT_ID`, the client secret | a saved draft submission: you commit it in Partner Center |
+
+Fields a service's API can't set (Play's privacy policy and category, Microsoft's URLs and category) are counted and
+offered to copy. A live App Store version only takes its promotional text.
+
+**Release steps.** `release.sh github` takes its notes from the version's `changelog.github.txt`, else `changelog.txt`
+(drafts first), else GitHub's generated notes. `release.sh --version X bump` (a step of its own, never part of `all`) sets
+`MARKETING_VERSION` in the Xcode project and, when the version has no changelog, drafts one from the commits since the
+last tag. New Version… in the tab starts from the same draft to edit there. Windows, Linux and Android builds take the
+version from `--version` on each run, so bump has nothing else to change for them.
+
 ## MCP server
 
 `Dev.app/Contents/MacOS/Dev --mcp` speaks MCP over stdin/stdout:
@@ -120,10 +181,15 @@ claude mcp add dev -- /Applications/Dev.app/Contents/MacOS/Dev --mcp
 ```
 
 Tools: `list_projects`, `get_screenshot_framing`, `set_screenshot_framing`, `render_screenshots`,
-`list_screenshots`, `list_workflows`, `set_workflow`, `delete_workflow`, `run_workflow`, `get_runs`.
+`list_screenshots`, `list_workflows`, `set_workflow`, `delete_workflow`, `run_workflow`, `get_runs`, `get_store_text`,
+`set_store_text`, `set_store_settings`, `draft_store_changelog`.
 
 - `set_screenshot_framing` takes `framing` (the section, replacing it) and `captions` (`{scene id: key or null}`);
   it never changes the scenes' arguments. A project without `.dev/screenshots.json` has nothing to frame.
+
+- `get_store_text` answers every field per destination and locale, with where it came from and its length against the
+  limit. `set_store_text` writes one text (`field`, `text`, optional `destination`, `locale`, `version`, `ready`) and
+  answers the same counts. Import, Publish and Translate stay the reader's, in the app: agents reach no store.
 
 - Files are read and written by the MCP process itself; `run_workflow` and every "Ask First" permission are asked of
   the open app over distributed notifications (`AgentBridge`), which shows the reader an alert.

@@ -175,7 +175,7 @@ struct ContentView: View {
             selection: $model.projectTool,
             segments: DevTool.allCases.map { KitSegment($0.title, value: $0) }
           )
-          .kitHelp("Project Tools", shortcut: "⌘1–⌘5", meta: "Switch between this project's tools")
+          .kitHelp("Project Tools", shortcut: "⌘1–⌘6", meta: "Switch between this project's tools")
         }
       }
       // One Translate button for the project whose Localization pane is showing:
@@ -200,7 +200,7 @@ struct ContentView: View {
         }
       }
     }
-    // ⌘1–⌘5 switch the tabs of the open project.
+    // ⌘1–⌘6 switch the tabs of the open project.
     .background {
       if model.hasSelectedProject {
         ForEach(Array(DevTool.allCases.enumerated()), id: \.element) { index, tool in

@@ -32,7 +32,8 @@ nonisolated struct ReleaseConfig: Equatable, Sendable {
   static let platformFields: [String] = [
     "PACKAGE_PATH", "SWIFTUI_PATH", "WINDOWS_PRODUCT", "WINDOWS_HOST", "LINUX_PRODUCT", "LINUX_HOST", "LINUX_STATIC",
     "LINUX_JOBS", "ANDROID_PRODUCT", "ANDROID_KEYSTORE", "ANDROID_KEY_ALIAS", "ANDROID_KEYCHAIN_ITEM",
-    "GOOGLE_PLAY", "GOOGLE_PLAY_TRACK", "GOOGLE_PLAY_KEY_PATH", "MS_STORE", "MS_STORE_APP_ID",
+    "GOOGLE_PLAY", "GOOGLE_PLAY_TRACK", "GOOGLE_PLAY_KEY_PATH", "GOOGLE_PLAY_PACKAGE", "MS_STORE", "MS_STORE_APP_ID",
+    "MS_STORE_TENANT_ID", "MS_STORE_CLIENT_ID",
   ]
 
   /// An empty value and a missing key mean the same to the script, so only

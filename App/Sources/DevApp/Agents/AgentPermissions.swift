@@ -22,9 +22,9 @@ nonisolated enum AgentPermissions {
   }
 
   enum Action: String, CaseIterable, Identifiable, Sendable {
-    /// Read projects, screenshot framing, workflows, screenshots and runs.
+    /// Read projects, screenshot framing, workflows, screenshots, store text and runs.
     case read
-    /// Change screenshot framing and workflows, render screenshots.
+    /// Change screenshot framing, workflows and store text, render screenshots.
     case edit
     /// Start workflow runs.
     case run
@@ -35,8 +35,8 @@ nonisolated enum AgentPermissions {
 
     var title: String {
       switch self {
-      case .read: "Read projects, runs and screenshots"
-      case .edit: "Change screenshot framing and workflows"
+      case .read: "Read projects, runs, screenshots and store text"
+      case .edit: "Change screenshot framing, workflows and store text"
       case .run: "Start workflow runs"
       case .publish: "Sign, notarize, upload and publish"
       }
