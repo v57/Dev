@@ -138,7 +138,9 @@ struct RunArtifacts: View {
     }
     .kitContextMenu {
       KitOpenWithRow([
-        .defaultApp(file.url),
+        .defaultApp(
+          opening: file.url,
+          preview: "Opens \(file.name) in \(KitDesktop.defaultApp(for: file.url)?.name ?? "the app the system opens it with")."),
         .fileManager(
           revealing: [file.url],
           preview: "Shows \(file.name) in its folder in \(KitDesktop.fileManagerName)."),

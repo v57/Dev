@@ -466,7 +466,9 @@ struct ScreenshotThumbnail: View {
     .kitContextMenu {
       let file = shot.final ?? shot.captured
       KitOpenWithRow([
-        .defaultApp(file),
+        .defaultApp(
+          opening: file,
+          preview: "Opens \(file.lastPathComponent) in \(KitDesktop.defaultApp(for: file)?.name ?? "the app the system opens it with")."),
         .fileManager(
           revealing: [file],
           preview: "Selects \(file.lastPathComponent) in its folder in \(KitDesktop.fileManagerName)."),
@@ -548,16 +550,6 @@ enum ProjectOpener {
       return
     }
     KitDesktop.open([url], withApp: bundleID)
-  }
-}
-
-extension KitOpenApp {
-  /// The app the system opens `file` with, for an Open With row ("Open with Default App").
-  @MainActor static func defaultApp(_ file: URL) -> KitOpenApp {
-    KitOpenApp(
-      "Default App", icon: KitDesktop.icon(forFile: file.path), words: "Open with Default App",
-      preview: "Opens \(file.lastPathComponent) in the app the system opens it with.", id: "default"
-    ) { KitDesktop.open(file) }
   }
 }
 
