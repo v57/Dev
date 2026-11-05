@@ -18,6 +18,7 @@ struct SettingsView: View {
       SettingsPane("General", systemImage: "gearshape", id: "general") { GeneralSettingsView() }
       SettingsPane("Translation", systemImage: "globe", hue: .blue, id: "translation") { TranslationSettingsView() }
       SettingsPane("Agents", systemImage: "powerplug", id: "agents") { AgentsSettingsView() }
+      SettingsPane("Privacy", systemImage: "hand.raised", hue: .blue, id: "privacy") { VaultICloudCard() }
       SettingsPane("Accounts", systemImage: "person.2", hue: .indigo, id: "accounts") { VaultAccountsSettings() }
       #if os(macOS)
         // Your devices, and your iPhone and iPad sign in to this Mac over SSH: which of them can, and the other keys.
