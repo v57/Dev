@@ -177,6 +177,8 @@ struct SidebarView: View {
     .groupTrailing { _, projects in
       ReviewCount(projects.compactMap { layout.rows[$0.id]?.needsReview }.reduce(0, +))
     }
+    // Vault's section adds Finder and Terminal to Dev's apps, in one Open With row at the top.
+    .openWith(first: true) { project in layout.rows[project.id]?.rootURL.map(ProjectOpener.openApps) ?? [] }
     .rowMenu { project in
       if let row = layout.rows[project.id] { projectMenu(row) }
     }
@@ -204,11 +206,10 @@ struct SidebarView: View {
     }
   }
 
-  /// A project row's context menu, between Show in Finder and Remove from List.
+  /// A project row's context menu, between the Open With row and Copy Path.
   @ViewBuilder
   private func projectMenu(_ row: SidebarProjectRow) -> some View {
     if let root = row.rootURL {
-      KitOpenWithRow(ProjectOpener.openApps(root))
       VaultOtherPlacesMenu(root: root)
       if installs.canInstall(root), let name = installs.appName(root) {
         Divider()
