@@ -137,12 +137,17 @@ struct RunArtifacts: View {
       .buttonStyle(.kitPlain)
     }
     .kitContextMenu {
-      Button("Open", systemImage: "arrow.up.forward.app") { KitDesktop.open(file.url) }
-      Button("Show in Finder", systemImage: "folder") { KitDesktop.reveal([file.url]) }
+      KitOpenWithRow([
+        .defaultApp(file.url),
+        .fileManager(
+          revealing: [file.url],
+          preview: "Shows \(file.name) in its folder in \(KitDesktop.fileManagerName)."),
+      ])
       Button("Copy Path", systemImage: "doc.on.doc") { KitPasteboard.copy(file.path) }
       if WorkflowStore.canDelete(file, of: run), isFinished {
         Divider()
         Button("Move to Trash", systemImage: "trash", role: .destructive) { deleting = file }
+          .kitMenuPreview("Moves \(file.name) to the Trash and takes it off this run's files. It asks first.")
       }
     }
   }

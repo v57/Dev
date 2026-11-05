@@ -702,6 +702,8 @@ private struct RowInspector: View {
       .kitContextMenu {
         if state == .reviewed {
           Button("Needs Review") { store.setCellState(row.key, language: language, .needs_review) }
+            .kitMenuPreview(
+              "Marks the \(Locale.current.localizedString(forIdentifier: language) ?? language) translation of this string as needing review again.")
         }
       }
       Group {
@@ -937,6 +939,7 @@ private struct RowContextMenu: View {
         } label: {
           Label("Reviewed", systemImage: "checkmark.circle")
         }
+        .kitMenuPreview("Marks every translation of this string as reviewed by you. Empty ones stay as they are.")
       }
       if !row.isFullyNeedsReview {
         Button {

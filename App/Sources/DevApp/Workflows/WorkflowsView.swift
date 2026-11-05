@@ -268,10 +268,15 @@ struct WorkflowsView: View {
   @ViewBuilder
   private func runMenu(_ run: WorkflowRun) -> some View {
     if let output = run.output, FileManager.default.fileExists(atPath: output) {
-      Button("Show in Finder", systemImage: "folder") { KitDesktop.reveal([URL(fileURLWithPath: output)]) }
+      KitOpenWithRow([
+        .fileManager(
+          revealing: [URL(fileURLWithPath: output)],
+          preview: "Shows this run's folder in \(KitDesktop.fileManagerName).")
+      ])
     }
     if run.state != .running {
       Button("Delete Run…", systemImage: "trash", role: .destructive) { deletingRun = run }
+        .kitMenuPreview("Moves this run's folder and its files to the Trash and takes the run off the history. It asks first.")
     }
   }
 

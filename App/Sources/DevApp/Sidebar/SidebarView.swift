@@ -208,13 +208,17 @@ struct SidebarView: View {
   @ViewBuilder
   private func projectMenu(_ row: SidebarProjectRow) -> some View {
     if let root = row.rootURL {
-      Button("Open in \(ProjectOpener.appName)", systemImage: "arrow.up.forward.app") { ProjectOpener.open(root) }
+      KitOpenWithRow(ProjectOpener.openApps(root))
       VaultOtherPlacesMenu(root: root)
       if installs.canInstall(root), let name = installs.appName(root) {
         Divider()
         switch installs.phase(for: root) {
-        case .queued, .installing:
+        case .queued:
           Button("Cancel Install", systemImage: "xmark.circle") { installs.cancel(root) }
+            .kitMenuPreview("Takes \(name) out of the install queue before it starts.")
+        case .installing:
+          Button("Cancel Install", systemImage: "xmark.circle") { installs.cancel(root) }
+            .kitMenuPreview("Stops installing \(name) on this Mac.")
         default:
           Button("Install \(name) on This Mac", systemImage: "arrow.down.app") { installs.install(root) }
         }

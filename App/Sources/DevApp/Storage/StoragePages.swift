@@ -349,7 +349,12 @@ struct StorageFileRow: View {
     .padding(.leading, nested ? 28 : 0)
     .opacity(item.isLocked ? 0.6 : 1)
     .kitContextMenu {
-      Button("Show in Finder", systemImage: "folder") { store.reveal(item) }
+      KitOpenWithRow([
+        KitOpenApp(
+          KitDesktop.fileManagerName, icon: KitDesktop.fileManagerIcon,
+          words: "Show in \(KitDesktop.fileManagerName)", id: "kit.files"
+        ) { store.reveal(item) }
+      ])
       Button("Copy Path", systemImage: "doc.on.doc") {
         KitPasteboard.copy(item.primaryPath)
       }

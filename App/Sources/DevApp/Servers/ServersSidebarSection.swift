@@ -62,6 +62,7 @@ struct ServersSidebarSection: View {
           ServerSidebarRow(row: row, status: store.statuses[row.id] ?? .unknown)
             .kitContextMenu {
               Button("Check Now", systemImage: "arrow.clockwise") { Task { await store.check(id: row.id) } }
+                .kitMenuPreview("Contacts \(row.name) now to see whether it's online.")
               Button("Edit…", systemImage: "pencil") { onEdit(.edit(row.id)) }
               Divider()
               Button("Remove", systemImage: "trash", role: .destructive) { pendingRemoval = row }

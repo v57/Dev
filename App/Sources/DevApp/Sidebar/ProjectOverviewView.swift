@@ -464,9 +464,13 @@ struct ScreenshotThumbnail: View {
       .kitFont(.caption)
     }
     .kitContextMenu {
-      Button("Show in \(KitDesktop.fileManagerName)", systemImage: "folder") {
-        KitDesktop.reveal([shot.final ?? shot.captured])
-      }
+      let file = shot.final ?? shot.captured
+      KitOpenWithRow([
+        .defaultApp(file),
+        .fileManager(
+          revealing: [file],
+          preview: "Selects \(file.lastPathComponent) in its folder in \(KitDesktop.fileManagerName)."),
+      ])
     }
   }
 }
@@ -508,12 +512,34 @@ enum ProjectOpener {
     case .code:
       openWith(bundleID: "dev.v57.code", url: root)
     case .xcode:
-      let names = (try? FileManager.default.contentsOfDirectory(atPath: root.path)) ?? []
-      let file = names.first { $0.hasSuffix(".xcworkspace") }
-        ?? names.first { $0.hasSuffix(".xcodeproj") }
-        ?? (names.contains("Package.swift") ? "Package.swift" : nil)
-      openWith(bundleID: "com.apple.dt.Xcode", url: file.map { root.appendingPathComponent($0) } ?? root)
+      openWith(bundleID: "com.apple.dt.Xcode", url: xcodeFile(root))
     }
+  }
+
+  /// The project's .xcworkspace, else .xcodeproj, else Package.swift, else the folder.
+  private static func xcodeFile(_ root: URL) -> URL {
+    let names = (try? FileManager.default.contentsOfDirectory(atPath: root.path)) ?? []
+    let file = names.first { $0.hasSuffix(".xcworkspace") }
+      ?? names.first { $0.hasSuffix(".xcodeproj") }
+      ?? (names.contains("Package.swift") ? "Package.swift" : nil)
+    return file.map { root.appendingPathComponent($0) } ?? root
+  }
+
+  /// A project's Open With row: Xcode, Code, the file manager, Terminal, with the app picked in
+  /// Settings ▸ General first, so clicking the row's words opens the project where it did before.
+  /// Apps that aren't installed drop out.
+  @MainActor static func openApps(_ root: URL) -> [KitOpenApp?] {
+    let name = root.lastPathComponent
+    let apps: [(Target?, KitOpenApp?)] = [
+      (.xcode, DevCapabilities.xcode
+        ? .app("com.apple.dt.Xcode", name: "Xcode", opening: [xcodeFile(root)], preview: "Opens \(name) in Xcode.")
+        : nil),
+      (.code, .app("dev.v57.code", name: "Code", opening: [root], preview: "Opens \(name) in Code.")),
+      (.finder, .fileManager(revealing: [root], preview: "Shows the \(name) folder in \(KitDesktop.fileManagerName).")),
+      (nil, .terminal(at: root, preview: "Opens Terminal in the \(name) folder.")),
+    ]
+    let picked = target
+    return apps.filter { $0.0 == picked }.map(\.1) + apps.filter { $0.0 != picked }.map(\.1)
   }
 
   private static func openWith(bundleID: String, url: URL) {
@@ -522,6 +548,16 @@ enum ProjectOpener {
       return
     }
     KitDesktop.open([url], withApp: bundleID)
+  }
+}
+
+extension KitOpenApp {
+  /// The app the system opens `file` with, for an Open With row ("Open with Default App").
+  @MainActor static func defaultApp(_ file: URL) -> KitOpenApp {
+    KitOpenApp(
+      "Default App", icon: KitDesktop.icon(forFile: file.path), words: "Open with Default App",
+      preview: "Opens \(file.lastPathComponent) in the app the system opens it with.", id: "default"
+    ) { KitDesktop.open(file) }
   }
 }
 
