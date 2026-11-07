@@ -720,6 +720,9 @@ enum Translation {
       key: String, records: [TranslationRecord], catalog: StringCatalog, languages: [String]
     ) -> LocalizationKey {
       let translatable = catalog.entry(for: key)?.shouldTranslate != false
+      // A key the code no longer has (`extractionState: stale`) keeps its values and is nobody's work: translating it
+      // pays for a string no build shows.
+      let inScope = translatable && catalog.entry(for: key)?.extractionState != "stale"
       let byLanguage = Dictionary(grouping: records, by: \.language)
       var targets: [LocalizationString] = []
       for language in languages {
@@ -734,7 +737,7 @@ enum Translation {
         // An ignored key is out of scope for every stage and keeps its value (2.1): the
         // status is what a scan and `Run.writable` read, so a record written before the flag
         // was set cannot be translated over.
-        if !translatable { slot.status = .ignore }
+        if !inScope { slot.status = .ignore }
         targets.append(slot)
       }
       return LocalizationKey(
