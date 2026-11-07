@@ -58,6 +58,7 @@ struct SidebarView: View {
       KitSection("Tools", meta: storage.sidebarStatus, systemImage: "wrench.and.screwdriver", hue: .orange) {
         StorageSidebarRow()
         VMsSidebarRow()
+        LocalizationsSidebarRow()
       }
       .kitSticky(bottom: .title)
       ServersSidebarSection(

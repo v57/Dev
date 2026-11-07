@@ -810,6 +810,16 @@ extension Translation {
       return workspaces[project]
     }
 
+    /// Drops the workspace of one catalog, and its project from the registry, unless a run of it is in flight: the
+    /// next `focus` builds it again. A workspace's languages are the ones its project had when it was built, so the
+    /// Translations tool calls this after adding languages to a source.
+    func forget(catalogURL: URL) {
+      guard let name = projects[catalogURL.path], let workspace = workspaces[name], !workspace.runner.isRunning
+      else { return }
+      workspaces[name] = nil
+      global?.unloadProject(id: name)
+    }
+
     /// The pane hands over the app's own store, TOGETHER WITH the catalog it is showing: the
     /// instance the browser displays and Save writes (5.8), and the file whose editing session it
     /// is. Called every time a bound pane appears, so a window reopened after another one closed

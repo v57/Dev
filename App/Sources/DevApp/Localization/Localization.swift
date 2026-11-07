@@ -409,8 +409,10 @@ final class LocalizationStore {
   /// The store a window-independent prompt (quit) should ask, or nil.
   static var active: LocalizationStore? { retained }
 
-  init() {
-    Self.retained = self
+  /// `registersAsActive: false` for a store no window shows (the Translations tool's runs open a source's catalog in
+  /// one of their own and save it themselves): the quit prompt keeps asking the window's store.
+  init(registersAsActive: Bool = true) {
+    if registersAsActive { Self.retained = self }
     recordObservation = TranslationData.shared.observeRecords { [weak self] project, slots in
       self?.recordsChanged(project: project, slots: slots)
     }

@@ -258,6 +258,7 @@ struct ContentView: View {
     case .tool(.icon): "app.badge"
     case .storage: "internaldrive"
     case .vms: "desktopcomputer"
+    case .translations: "globe"
     case .server: "server.rack"
     default: "hammer"
     }
@@ -270,6 +271,7 @@ struct ContentView: View {
     case .tool(.icon): return "App Icon"
     case .storage: return "Storage"
     case .vms: return "Virtual Machines"
+    case .translations: return "Translations"
     case .server(let id): return servers.connection(id: id)?.name ?? "Localization Server"
     default: return "Dev"
     }
@@ -295,6 +297,7 @@ struct ContentView: View {
     switch value(after: "-DevOpen") {
     case "storage", "storageClean": model.selection = .storage
     case "vms": model.selection = .vms
+    case "translations": model.selection = .translations
     case "welcome": model.selection = nil
     default: if let demoProject { model.selection = .project(demoProject) }
     }
@@ -385,6 +388,8 @@ struct ContentView: View {
       }
     case .server(let id):
       ServerDetailView(serverID: id, store: servers)
+    case .translations:
+      LocalizationsView()
     case .storage:
       if DevCapabilities.storageCleaner {
         StorageView()

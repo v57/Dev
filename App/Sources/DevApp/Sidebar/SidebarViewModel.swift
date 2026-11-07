@@ -68,6 +68,8 @@ nonisolated enum SidebarSelection: Hashable, Sendable {
   case storage
   /// The VMs tool: UTM virtual machines, and Run on VM.
   case vms
+  /// The Translations tool: every app's strings in the translations repository (`v57/Localizations`).
+  case translations
 }
 
 /// What the sidebar's one alert is about. A single value rather than one
@@ -280,7 +282,10 @@ final class SidebarViewModel {
 
   private func rebuildRows() {
     let kept = keptProjects
-    let fetched = TranslationData.shared.projects.filter { !kept.contains($0.id) }
+    // A source catalog of the translations repository belongs to the Translations tool, not the projects list.
+    let fetched = TranslationData.shared.projects.filter {
+      !kept.contains($0.id) && !LocalizationsRepo.isSourceCatalog($0.catalogURL)
+    }
     let fm = FileManager.default
     // Only Xcode projects: the vault knows the others' kinds and Dev leaves them to the other apps.
     let hidden = vaultProjects.hiddenRoots()
