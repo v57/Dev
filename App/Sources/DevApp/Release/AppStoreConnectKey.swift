@@ -108,10 +108,7 @@ struct AppStoreConnectKeyFields: View {
   /// Rows of a `FormCard`: the key file, its ID and issuer, the check with Apple and, in Release Settings, saving it
   /// as the notary profile.
   var body: some View {
-    GroupRow(
-      "Key file",
-      help: importError ?? (config["ASC_KEY_PATH"].isEmpty ? "None" : (config["ASC_KEY_PATH"] as NSString).lastPathComponent)
-    ) {
+    GroupRow("Key file", help: keyFileLine) {
       Button("Choose…") { choosing = true }
         .buttonStyle(.kit)
         .fileImporter(isPresented: $choosing, allowedContentTypes: [UTType(filenameExtension: "p8") ?? .data]) {
@@ -140,13 +137,20 @@ struct AppStoreConnectKeyFields: View {
   }
 
   /// A check's state as a row's line.
-  private func line(_ status: AppStoreConnectKey.Status) -> String? {
+  private func line(_ status: AppStoreConnectKey.Status) -> LocalizedStringKey? {
     switch status {
     case .idle: nil
     case .checking: "Checking with Apple…"
-    case .valid(let text): text
-    case .failed(let message): message
+    case .valid(let text): "\(text)"
+    case .failed(let message): "\(message)"
     }
+  }
+
+  /// The key file row's line: the import's error, else the file's name.
+  private var keyFileLine: LocalizedStringKey {
+    if let importError { return "\(importError)" }
+    let path = config["ASC_KEY_PATH"]
+    return path.isEmpty ? "None" : "\((path as NSString).lastPathComponent)"
   }
 
   private func field(_ title: String, _ key: String, _ prompt: String) -> some View {

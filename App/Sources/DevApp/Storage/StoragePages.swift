@@ -72,13 +72,13 @@ struct StorageView: View {
     .kitNotice(
       store.report.map(Self.reportTitle) ?? "",
       isPresented: Binding(get: { store.report != nil }, set: { if !$0 { store.report = nil } }),
-      message: store.report.map(Self.reportMessage), systemImage: "trash",
+      message: store.report.map { "\(Self.reportMessage($0))" }, systemImage: "trash",
       hue: store.report?.failures.isEmpty == false ? .orange : .green,
       buttons: reportButtons)
     .kitNotice(
       "Couldn't scan system folders",
       isPresented: Binding(get: { store.systemScanError != nil }, set: { if !$0 { store.systemScanError = nil } }),
-      message: store.systemScanError)
+      message: store.systemScanError.map { "\($0)" })
     .task {
       if LaunchOptions.isScreenshotMode, LaunchOptions.open == "storageClean" { isConfirming = true }
     }
@@ -119,19 +119,24 @@ struct StorageView: View {
     return buttons
   }
 
-  nonisolated static func reportTitle(_ report: StorageCleanReport) -> String {
+  nonisolated static func reportTitle(_ report: StorageCleanReport) -> LocalizedStringKey {
     report.cleanedIDs.isEmpty ? "Nothing was cleaned" : "\(report.cleanedBytes.byteString) freed"
   }
 
   nonisolated static func reportMessage(_ report: StorageCleanReport) -> String {
     var lines: [String] = []
     if report.trashedBytes > 0 {
-      lines.append("\(report.trashedBytes.byteString) is in the Trash — empty it to free the space. Your tools rebuild what they need on their next run.")
+      lines.append(
+        String(
+          localized: """
+            \(report.trashedBytes.byteString) is in the Trash — empty it to free the space. \
+            Your tools rebuild what they need on their next run.
+            """))
     }
     if !report.failures.isEmpty {
-      lines.append("Not cleaned:")
+      lines.append(String(localized: "Not cleaned:"))
       lines += report.failures.prefix(8).map { "• \($0.title): \($0.message)" }
-      if report.failures.count > 8 { lines.append("…and \(report.failures.count - 8) more") }
+      if report.failures.count > 8 { lines.append(String(localized: "…and \(report.failures.count - 8) more")) }
     }
     return lines.joined(separator: "\n")
   }
@@ -259,7 +264,7 @@ private struct StorageActionButton: View {
   @Environment(StorageStore.self) private var store
 
   /// "Uninstall" when every pick is an app or a language version, else "Clean".
-  private func label(_ items: [StorageItem]) -> String {
+  private func label(_ items: [StorageItem]) -> LocalizedStringKey {
     guard !items.isEmpty else { return "Clean" }
     let uninstalls = items.allSatisfy { item in
       item.category == .applications || StorageLanguages.classify(item)?.isVersion == true
@@ -279,7 +284,7 @@ private struct StorageActionButton: View {
       .buttonStyle(KitRoundButtonStyle(prominent: true, size: 72))
       .disabled(none || store.isBusy)
       .keyboardShortcut(.return, modifiers: .command)
-      .kitHelp(label, shortcut: "⌘↩", meta: none ? "Tick what to remove" : store.selectedBytes.byteString)
+      .kitHelp(label, shortcut: "⌘↩", meta: none ? "Tick what to remove" : "\(store.selectedBytes.byteString)")
       VStack(alignment: .leading, spacing: 1) {
         Text(none ? "Nothing picked" : store.selectedBytes.byteString)
           .kitFont(.title3).fontWeight(.bold).monospacedDigit()
@@ -515,7 +520,7 @@ private struct ScratchPicker: View {
           .lineLimit(1)
       }
       Spacer(minLength: 8)
-      KitMenuButton(store.scratchPick?.title ?? "Pick") {
+      KitMenuButton(store.scratchPick.map { "\($0.title)" } ?? "Pick") {
         KitMenuOptions(
           selection: Binding(get: { store.scratchPick }, set: { if let pick = $0 { store.pickScratch(pick) } }),
           segments: StorageStore.ScratchPick.allCases.map { KitSegment($0.title, value: Optional($0)) })

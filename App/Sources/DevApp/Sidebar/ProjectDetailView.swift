@@ -97,7 +97,7 @@ struct ProjectDetailView: View {
     }
   }
 
-  private func noFolder(_ message: String) -> some View {
+  private func noFolder(_ message: LocalizedStringKey) -> some View {
     EmptyState(systemImage: "folder.badge.questionmark", title: "No Project Folder", message: message).kitPane()
   }
 

@@ -152,7 +152,7 @@ struct ScreenshotsView: View {
           if library.targets.count > 1 {
             KitPicker(
               "Device", selection: Binding(get: { device }, set: { target = $0 }),
-              options: library.targets.map { ($0, $0) })
+              options: library.targets.map { ("\($0)", $0) })
           }
           Spacer()
           KitSegmented(selection: $showsFinal, options: [("Captured", false), ("Framed", true)])
@@ -194,7 +194,7 @@ struct ScreenshotsView: View {
     } else {
       EmptyState(
         systemImage: "photo.on.rectangle", title: "No Screenshot Scenes",
-        message: library?.configError
+        message: library?.configError.map { "\($0)" }
           ?? "Describe the app's screens in .dev/screenshots.json: each scene is the launch arguments that open it. Dev captures them, frames them for the App Store and uploads them."
       ) {
         Button("Show Project in \(KitDesktop.fileManagerName)") { KitDesktop.reveal([root]) }

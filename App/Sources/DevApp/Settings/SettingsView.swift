@@ -42,7 +42,8 @@ struct GeneralSettingsView: View {
   var body: some View {
     FormCard {
       FormRow("Open projects in", systemImage: "arrow.up.forward.app", hue: .blue) {
-        KitPicker("Open projects in", selection: $openIn, options: ProjectOpener.targets.map { ($0.title, $0.rawValue) })
+        KitPicker(
+          "Open projects in", selection: $openIn, options: ProjectOpener.targets.map { ("\($0.title)", $0.rawValue) })
       }
       FormRow("Show strings to review in the sidebar", systemImage: "text.badge.checkmark", hue: .orange) {
         Toggle("Show strings to review in the sidebar", isOn: $showsReviewBadge)
@@ -75,10 +76,11 @@ struct AdvancedSettingsView: View {
         footer: "Translations a database already holds are used before a model is asked."
       ) {
         FormRow(
-          db.fileURL?.lastPathComponent ?? "None",
-          help: db.fileURL.map {
-            $0.deletingLastPathComponent().path(percentEncoded: false)
+          db.fileURL.map { "\($0.lastPathComponent)" } ?? "None",
+          help: db.fileURL.map { url -> LocalizedStringKey in
+            let folder = url.deletingLastPathComponent().path(percentEncoded: false)
               .replacingOccurrences(of: NSHomeDirectory(), with: "~")
+            return "\(folder)"
           },
           systemImage: "cylinder.split.1x2", hue: db.isImported ? .green : .gray
         ) {
@@ -116,7 +118,7 @@ struct TranslationSettingsView: View {
     @Bindable var model = model
     VStack(alignment: .leading, spacing: 18) {
       FormCard {
-        FormRow("Provider", help: model.preset?.note, systemImage: "globe", hue: .blue) {
+        FormRow("Provider", help: model.preset?.note.map { "\($0)" }, systemImage: "globe", hue: .blue) {
           KitPicker("Provider", selection: $model.providerID, sections: providerSections)
         }
         if let preset = model.preset {
@@ -138,7 +140,7 @@ struct TranslationSettingsView: View {
         modelSection(preset)
         FormCard {
           FormRow(
-            "Test", help: model.testResult?.message ?? model.problem, systemImage: "bolt", hue: .gray,
+            "Test", help: (model.testResult?.message ?? model.problem).map { "\($0)" }, systemImage: "bolt", hue: .gray,
             status: model.isTesting ? .working : model.testResult.map { $0.succeeded ? .done : .failed } ?? .idle
           ) {
             Button("Test") { Task { await model.test() } }
@@ -152,7 +154,7 @@ struct TranslationSettingsView: View {
       FormCard {
         FormRow(
           "Keys you already use for other tools can be imported from the environment or from Hermes.",
-          help: model.importStatus, systemImage: "key", hue: .orange
+          help: model.importStatus.map { "\($0)" }, systemImage: "key", hue: .orange
         ) {
           Button("Import Keys…") { model.findImportableKeys() }.buttonStyle(.kit)
         }
@@ -190,7 +192,7 @@ struct TranslationSettingsView: View {
     }
   }
 
-  private var keyStateText: String {
+  private var keyStateText: LocalizedStringKey {
     switch model.keyState {
     case .stored: "Saved in your keychain"
     case .environment(let name): "Read from $\(name)"
@@ -200,17 +202,28 @@ struct TranslationSettingsView: View {
   }
 
   /// "Choose…" on its own, then the presets under their groups (Recommended, Popular, …).
-  private var providerSections: [(String, [KitSegment<String>])] {
+  private var providerSections: [(LocalizedStringKey, [KitSegment<String>])] {
     [("", [KitSegment("Choose…", value: "")])]
       + ProviderPreset.Group.allCases.map { group in
-        (group.rawValue, ProviderPreset.all.filter { $0.group == group }.map { KitSegment($0.name, value: $0.id) })
+        (title(group), ProviderPreset.all.filter { $0.group == group }.map { KitSegment($0.name, value: $0.id) })
       }
+  }
+
+  /// A group's section title (its raw value), as a key.
+  private func title(_ group: ProviderPreset.Group) -> LocalizedStringKey {
+    switch group {
+    case .recommended: "Recommended"
+    case .popular: "Popular"
+    case .more: "More Providers"
+    case .local: "On This Mac"
+    case .custom: "Custom"
+    }
   }
 
   @ViewBuilder
   private func modelSection(_ preset: ProviderPreset) -> some View {
     FormCard("Model") {
-      FormRow("Model", systemImage: "cpu", hue: .purple, error: model.fetchError,
+      FormRow("Model", systemImage: "cpu", hue: .purple, error: model.fetchError.map { "\($0)" },
               field: HStack {
         TextField("Model", text: $model.model, prompt: Text("model id"))
         if !model.availableModels.isEmpty {
@@ -281,7 +294,7 @@ private struct ImportKeysSheet: View {
     ) {
       FormCard {
         ForEach(model.importCandidates) { candidate in
-          FormRow(candidate.providerName, help: "from \(candidate.source)", systemImage: "key", hue: .orange)
+          FormRow("\(candidate.providerName)", help: "from \(candidate.source)", systemImage: "key", hue: .orange)
         }
       }
     } footer: {

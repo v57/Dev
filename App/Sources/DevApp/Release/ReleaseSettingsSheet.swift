@@ -31,7 +31,7 @@ struct ReleaseSettingsSheet: View {
             "Platform",
             selection: Binding(
               get: { config["PLATFORM"].isEmpty ? "macos" : config["PLATFORM"] }, set: { config["PLATFORM"] = $0 }),
-            options: ReleasePlatform.allCases.map { ($0.title, $0.rawValue) })
+            options: ReleasePlatform.allCases.map { ("\($0.title)", $0.rawValue) })
         }
         field("Team ID", "TEAM_ID", "ABCDE12345")
       }
@@ -137,12 +137,12 @@ struct ReleaseSettingsSheet: View {
   }
 
   /// The notary profile's check, as the row's line.
-  private var notaryLine: String? {
+  private var notaryLine: LocalizedStringKey? {
     switch notary {
     case .idle: nil
     case .checking: "Checking with Apple…"
-    case .valid(let text): text
-    case .failed(let text): text
+    case .valid(let text): "\(text)"
+    case .failed(let text): "\(text)"
     }
   }
 

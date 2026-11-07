@@ -163,11 +163,14 @@ struct AgentsSettingsView: View {
 
   private var lastSeen: Date? { UserDefaults.standard.object(forKey: AgentPermissions.lastSeenKey) as? Date }
 
-  private var status: String {
+  private var status: LocalizedStringKey {
     guard enabled else { return "Off" }
     guard let lastSeen else { return "Ready · no agent has connected yet" }
-    let client = UserDefaults.standard.string(forKey: AgentPermissions.lastClientKey) ?? "An agent"
-    return "Ready · \(client) used Dev \(lastSeen.formatted(.relative(presentation: .named)))"
+    let when = lastSeen.formatted(.relative(presentation: .named))
+    guard let client = UserDefaults.standard.string(forKey: AgentPermissions.lastClientKey) else {
+      return "Ready · An agent used Dev \(when)"
+    }
+    return "Ready · \(client) used Dev \(when)"
   }
 
   private var statusHue: Hue {

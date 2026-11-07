@@ -124,7 +124,7 @@ struct ServerFormView: View {
     "empty: use \(ServerKeychain.sharedKeyName)"
   }
 
-  private var keyHelp: String {
+  private var keyHelp: LocalizedStringKey {
     editing == nil
       ? "Leave empty to use the shared \(ServerKeychain.sharedKeyName); a typed key is stored in the login keychain."
       : "Leave untouched to keep this server's stored key; type a new one to replace it, or clear it to fall back to \(ServerKeychain.sharedKeyName)."

@@ -136,14 +136,14 @@ struct ServerRunBar: View {
     !run.isRunning && row.base != nil && row.keySource != .missing
   }
 
-  private var translateHelp: String {
+  private var translateHelp: LocalizedStringKey {
     if run.isRunning { return "A run is in progress — stop it first" }
     if row.base == nil { return "The endpoint is not a usable http(s) URL — edit this server" }
     if row.keySource == .missing { return "No key: add one to this server, or set \(ServerKeychain.sharedKeyName)" }
     return "Run learn, then translate every sentence this server is missing in \(locale), then the row pass. Values are written back as machine values."
   }
 
-  private var skipLearningHelp: String {
+  private var skipLearningHelp: LocalizedStringKey {
     if run.isRunning { return "A run is in progress — stop it first" }
     return "\(Translation.Run.skipLearningHelp) — here it skips folding this server's verified values in first."
   }

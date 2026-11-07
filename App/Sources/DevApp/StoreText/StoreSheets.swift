@@ -42,7 +42,7 @@ struct StoreSyncSheet: View {
   private var accountID: String { VaultProjects.shared.account(of: root) }
   private var missing: String? { StoreCredentials.missing(destination, config: config, accountID: accountID) }
 
-  private var meta: String {
+  private var meta: LocalizedStringKey {
     switch mode {
     case .importing:
       "Reads what \(destination.title) has now, once. Text that differs from your base text becomes this destination's override. Nothing changes until you press Import."
@@ -53,12 +53,12 @@ struct StoreSyncSheet: View {
 
   var body: some View {
     KitSheet(
-      title: "\(mode.title) · \(destination.title)", meta: meta,
+      title: mode == .importing ? "Import · \(destination.title)" : "Publish · \(destination.title)", meta: meta,
       systemImage: mode == .importing ? "square.and.arrow.down" : "paperplane", width: 620
     ) {
       FormCard {
-        GroupRow("Service", help: live?.summary) {
-          KitPicker("Service", selection: $destination, options: destinations.map { ($0.title, $0) })
+        GroupRow("Service", help: live.map { "\($0.summary)" }) {
+          KitPicker("Service", selection: $destination, options: destinations.map { ("\($0.title)", $0) })
         }
         if let version, mode == .publishing {
           GroupRow("Version", help: "The changelog and message to testers of this version") {
@@ -66,7 +66,7 @@ struct StoreSyncSheet: View {
           }
         }
         if let missing {
-          FormRow(missing, help: "Store Text ▸ Setup holds the keys.", systemImage: "key", hue: .orange)
+          FormRow("\(missing)", help: "Store Text ▸ Setup holds the keys.", systemImage: "key", hue: .orange)
         }
       }
       if live != nil {
@@ -126,7 +126,7 @@ struct StoreSyncSheet: View {
     }
   }
 
-  private var confirmationMessage: String {
+  private var confirmationMessage: LocalizedStringKey {
     switch destination {
     case .appStore: "This changes the text in App Store Connect. It doesn't submit anything for review."
     case .github: "This changes the repository page and release notes on GitHub, where anyone can read them."
@@ -166,7 +166,7 @@ struct StoreSyncSheet: View {
     if !plan.overLimit.isEmpty {
       FormCard("Over the limit") {
         ForEach(plan.overLimit, id: \.self) { line in
-          FormRow(line, help: "Shorten it to publish.", systemImage: "exclamationmark.triangle", hue: .red)
+          FormRow("\(line)", help: "Shorten it to publish.", systemImage: "exclamationmark.triangle", hue: .red)
         }
       }
       .controlSize(.small)
@@ -195,7 +195,7 @@ struct StoreSyncSheet: View {
       FormCard("Not sent") {
         ForEach(plan.skipped, id: \.self) { GroupRow($0) }
         ForEach(plan.manual) { slot in
-          GroupRow(slot.title, help: "\(destination.title)'s API can't set this: copy it across.") {
+          GroupRow("\(slot.title)", help: "\(destination.title)'s API can't set this: copy it across.") {
             KitCopyButton(value: texts.resolved(slot.field, destination: destination, version: version).text)
           }
         }
@@ -431,7 +431,7 @@ struct StoreSetupSheet: View {
     FormCard("Google Play") {
       GroupRow(
         "Service account key",
-        help: (config?["GOOGLE_PLAY_KEY_PATH"] ?? "").isEmpty ? "None" : (config?["GOOGLE_PLAY_KEY_PATH"] ?? "")
+        help: (config?["GOOGLE_PLAY_KEY_PATH"] ?? "").isEmpty ? "None" : "\(config?["GOOGLE_PLAY_KEY_PATH"] ?? "")"
       ) {
         Button("Choose…") { choosingPlayKey = true }
           .buttonStyle(.kit)

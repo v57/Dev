@@ -28,7 +28,7 @@ struct ClearTranslationStoreSection: View {
       help: context.localization == nil
         ? "Open the main window to clear the store."
         : "Clearing deletes the edit journal, context documents, translation memory and saved run positions for every project. Your project list and every .xcstrings file stay.",
-      systemImage: "brain", hue: .purple, error: blocker
+      systemImage: "brain", hue: .purple, error: blocker.map { "\($0)" }
     ) {
       Button("Clear…", role: .destructive) { prompt = .confirm }
         .buttonStyle(.kit)
@@ -78,7 +78,7 @@ enum StoreClearPrompt: Equatable {
   case confirm
   case result(StoreClearOutcome)
 
-  var title: String {
+  var title: LocalizedStringKey {
     switch self {
     case .confirm: "Clear the translation store?"
     case .result(.cleared): "Translation store cleared"
@@ -88,7 +88,7 @@ enum StoreClearPrompt: Equatable {
     }
   }
 
-  var message: String {
+  var message: LocalizedStringKey {
     switch self {
     case .confirm:
       """
@@ -110,10 +110,12 @@ enum StoreClearPrompt: Equatable {
     case .result(.cleared(let counts)):
       "Removed \(counts.summary). Every project and every .xcstrings is still here."
     case .result(.alreadyEmpty):
-      "There was nothing to delete: the store held no slot records, journal rows, "
-        + "context documents, memory entries or run cursors. That is not an error."
+      """
+      There was nothing to delete: the store held no slot records, journal rows, \
+      context documents, memory entries or run cursors. That is not an error.
+      """
     case .result(.refused(let reason)), .result(.failed(let reason)):
-      reason
+      "\(reason)"
     }
   }
 }

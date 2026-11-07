@@ -560,10 +560,10 @@ struct WorkflowsView: View {
                 selection: Binding(
                   get: { step.platform ?? "" },
                   set: { value in update(workflow) { $0.steps[index].platform = value.isEmpty ? nil : value } }),
-                options: [("Default", "")] + ReleasePlatform.allCases.map { ($0.title, $0.rawValue) })
+                options: [("Default", "")] + ReleasePlatform.allCases.map { ("\($0.title)", $0.rawValue) })
             }
           }
-          FormRow("Runs On", help: step.runnerTitle, systemImage: "laptopcomputer", hue: .gray) {
+          FormRow("Runs On", help: "\(step.runnerTitle)", systemImage: "laptopcomputer", hue: .gray) {
             KitPicker("Runs On", selection: binding(workflow, index, \.runner), segments: runners(for: step))
           }
           if step.kind == .command {

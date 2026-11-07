@@ -23,7 +23,9 @@ struct LocalizationsSidebarRow: View {
         Text(activity).foregroundStyle(.kitSecondary).lineLimit(1)
       }
     }
-    .kitHelp("Translations", meta: store.activity ?? "Every app's strings in the translations repository", systemImage: "globe")
+    .kitHelp(
+      "Translations", meta: store.activity.map { "\($0)" } ?? "Every app's strings in the translations repository",
+      systemImage: "globe")
     #if DEBUG
       .task { await store.listenForDebugCommands(shell: shell) }
     #endif
@@ -82,14 +84,15 @@ struct LocalizationsView: View {
     }
     .kitNotice(
       "Translations", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.dismissError() } }),
-      message: store.error)
+      message: store.error.map { "\($0)" })
     .task { store.refreshProgress() }
   }
 
   private var sourceList: some View {
     KitList(selection: $selected) {
-      SidebarRow(value: "", "Overview", subtitle: store.activity ?? store.summary, systemImage: "square.grid.2x2",
-        status: store.isBusy ? .working() : .idle)
+      SidebarRow(
+        value: "", "Overview", subtitle: (store.activity ?? store.summary).map { "\($0)" },
+        systemImage: "square.grid.2x2", status: store.isBusy ? .working() : .idle)
       ForEach(store.sourceNames, id: \.self) { name in
         let source = store.source(name)
         let progress = store.progress[name]
@@ -124,7 +127,7 @@ private struct LocalizationsOverview: View {
     ScrollView {
       VStack(spacing: KitMetrics.gutter) {
         FormCard("Repository", footer: "Translations only: Dev writes each catalog, Scripts/build compiles them and the commits are per source. Nothing is pushed.") {
-          FormRow("Folder", help: store.repoURL?.path ?? "", systemImage: "folder") {
+          FormRow("Folder", help: store.repoURL.map { "\($0.path)" } ?? "", systemImage: "folder") {
             Button("Choose…") { store.chooseRepo() }
           }
           FormRow("Status", help: status, systemImage: "info.circle", status: store.isBusy ? .working() : .idle)
@@ -143,7 +146,10 @@ private struct LocalizationsOverview: View {
           }
         }
         FormCard("Languages", footer: "Every source is translated into these. Apps bundle a few and download the rest from the repository.") {
-          FormRow("\(store.languages.count) languages", help: store.languages.joined(separator: ", "), systemImage: "globe") {
+          FormRow(
+            "\(store.languages.count) languages", help: "\(store.languages.joined(separator: ", "))",
+            systemImage: "globe"
+          ) {
             Button("Edit…") { addingLanguages = true }
           }
         }
@@ -166,8 +172,10 @@ private struct LocalizationsOverview: View {
     .kitPane()
   }
 
-  private var status: String {
-    store.activity.map { "\($0)…" } ?? store.summary ?? "\(store.sourceNames.count) sources"
+  private var status: LocalizedStringKey {
+    if let activity = store.activity { return "\(activity)…" }
+    if let summary = store.summary { return "\(summary)" }
+    return "\(store.sourceNames.count) sources"
   }
 
   private func appHelp(_ app: LocalizationsApp) -> String {
@@ -200,7 +208,7 @@ private struct LocalizationsSourcePage: View {
             help: progress.stale > 0 ? "\(progress.stale) stale (no longer in the code; kept, not translated)" : nil,
             systemImage: "text.quote")
           if let catalog {
-            FormRow("Catalog", help: catalog.path, systemImage: "doc.text") {
+            FormRow("Catalog", help: "\(catalog.path)", systemImage: "doc.text") {
               HStack(spacing: 8) {
                 Button("Open in Xcode") { KitDesktop.open([catalog], withApp: "com.apple.dt.Xcode") }
                 Button("Show in Finder") { KitDesktop.reveal([catalog]) }
@@ -218,8 +226,10 @@ private struct LocalizationsSourcePage: View {
             let done = progress.translated[code] ?? 0
             let review = progress.needsReview[code] ?? 0
             FormRow(
-              Locale.current.localizedString(forIdentifier: code) ?? code,
-              help: "\(code) · \(done) of \(progress.keys)" + (review > 0 ? " · \(review) to review" : ""),
+              "\(Locale.current.localizedString(forIdentifier: code) ?? code)",
+              help: review > 0
+                ? "\(code) · \(done) of \(progress.keys) · \(review) to review"
+                : "\(code) · \(done) of \(progress.keys)",
               systemImage: "globe", hue: done >= progress.keys && progress.keys > 0 ? .green : .accent
             ) {
               MicroBar(value: progress.fraction(code), hue: done >= progress.keys ? .green : .accent, width: 120)
@@ -232,13 +242,13 @@ private struct LocalizationsSourcePage: View {
     .kitPane()
   }
 
-  private var translateHelp: String {
-    if let problem = ModelSettings.problem { return problem }
+  private var translateHelp: LocalizedStringKey {
+    if let problem = ModelSettings.problem { return "\(problem)" }
     if store.activity == "Translating \(name)" { return "Translating…" }
     return "Into \(store.languages.count) languages with the Localization tab's pipeline; the catalog is saved when the run ends"
   }
 
-  private func kindHelp(_ source: LocalizationsSource?) -> String {
+  private func kindHelp(_ source: LocalizationsSource?) -> LocalizedStringKey {
     guard let source else { return "The repository has its catalog, but no included app's scan makes it" }
     let repo = URL(fileURLWithPath: source.repo).lastPathComponent
     switch source.kind {

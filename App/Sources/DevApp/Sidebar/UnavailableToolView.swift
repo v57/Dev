@@ -13,7 +13,7 @@ struct UnavailableToolView: View {
   /// The tool's name, for accessibility (the window's title already shows it).
   let title: String
   let systemImage: String
-  let reason: String
+  let reason: LocalizedStringKey
 
   var body: some View {
     EmptyState(

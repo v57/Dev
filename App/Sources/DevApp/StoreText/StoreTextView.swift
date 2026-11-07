@@ -127,7 +127,8 @@ struct StoreTextView: View {
       }
     }
     .kitNotice(
-      "Store Text", isPresented: Binding(get: { notice != nil }, set: { if !$0 { notice = nil } }), message: notice)
+      "Store Text", isPresented: Binding(get: { notice != nil }, set: { if !$0 { notice = nil } }),
+      message: notice.map { "\($0)" })
   }
 
   // MARK: - Fields
@@ -145,7 +146,9 @@ struct StoreTextView: View {
       }
       KitSection("Version", meta: version ?? "None yet", systemImage: "number", hue: .orange) {
         if !versions.isEmpty {
-          KitPicker("Version", selection: Binding(get: { version ?? "" }, set: { version = $0 }), options: versions.map { ($0, $0) })
+          KitPicker(
+            "Version", selection: Binding(get: { version ?? "" }, set: { version = $0 }),
+            options: versions.map { ("\($0)", $0) })
             .padding(.horizontal, 8)
             .padding(.bottom, 4)
         }
@@ -213,7 +216,7 @@ struct StoreTextView: View {
       stateChip
       Spacer()
       if settings.allLocales.count > 1, field.isLocalized {
-        KitPicker("Language", selection: $locale, options: settings.allLocales.map { (Self.localeTitle($0), $0) })
+        KitPicker("Language", selection: $locale, options: settings.allLocales.map { ("\(Self.localeTitle($0))", $0) })
           .kitPickerMaxWidth(180)
       }
     }
@@ -382,20 +385,27 @@ struct StoreTextView: View {
     let count = text.isEmpty ? nil : row.slot.limit?.count(StoreTexts.normalized(text, field: row.slot.field), field: row.slot.field)
     let hue: Hue = count?.isOver == true ? (row.slot.isEstimate ? .orange : .red) : .accent
     var notes: [String] = []
-    if let count { notes.append(count.text) } else if row.slot.limit == nil, !text.isEmpty { notes.append("\(text.count) characters") }
-    if let long = count?.longItem { notes.append("\"\(long)\" is too long") }
+    if let count {
+      notes.append(count.text)
+    } else if row.slot.limit == nil, !text.isEmpty {
+      notes.append(String(localized: "\(text.count) characters"))
+    }
+    if let long = count?.longItem { notes.append(String(localized: "\"\(long)\" is too long")) }
     switch row.resolved.origin {
-    case .override: notes.append("its own text")
-    case .locale: notes.append("this language's text")
-    case .baseOverride: notes.append("its own text, not translated")
-    case .base: notes.append(row.locale == settings.baseLocale ? "base text" : "base text, not translated")
-    case .missing: notes.append("empty")
+    case .override: notes.append(String(localized: "its own text"))
+    case .locale: notes.append(String(localized: "this language's text"))
+    case .baseOverride: notes.append(String(localized: "its own text, not translated"))
+    case .base:
+      notes.append(
+        row.locale == settings.baseLocale
+          ? String(localized: "base text") : String(localized: "base text, not translated"))
+    case .missing: notes.append(String(localized: "empty"))
     }
     if let hint = row.slot.hint { notes.append(hint) }
-    if !row.slot.isSent { notes.append("set by hand on the service") }
+    if !row.slot.isSent { notes.append(String(localized: "set by hand on the service")) }
     return GroupRow(
       "\(row.destination.shortTitle): \(row.slot.title)",
-      help: notes.joined(separator: " · ")
+      help: "\(notes.joined(separator: " · "))"
     ) {
       HStack(spacing: 8) {
         if let count { MicroBar(value: min(count.fraction, 1), hue: hue) }

@@ -195,7 +195,7 @@ struct ContentView: View {
               .help(translation.skipLearningHelp(catalogURL))  // .help: inside a kit menu
               .kitMenuPreview("Translates without first learning from what you changed by hand.")
             }
-            .kitHelp("Translate", meta: translation.startHelp(catalogURL), systemImage: "play.fill")
+            .kitHelp("Translate", meta: "\(translation.startHelp(catalogURL))", systemImage: "play.fill")
           }
           .disabled(!translation.canStart(catalogURL))
         }

@@ -76,8 +76,8 @@ nonisolated enum SidebarSelection: Hashable, Sendable {
 /// optional per case, because a view presents one alert at a time.
 struct SidebarAlert: Identifiable {
   let id = UUID()
-  let title: String
-  let message: String
+  let title: LocalizedStringKey
+  let message: LocalizedStringKey
 }
 
 // MARK: - Row value

@@ -256,7 +256,7 @@ struct VMsSidebarRow: View {
 
   private var running: Int { store.machines.filter(\.status.isRunning).count }
 
-  private var status: String {
+  private var status: LocalizedStringKey {
     if VMStore.utmctl == nil { return "UTM is not installed" }
     if store.machines.isEmpty { return "No virtual machines" }
     return running == 0 ? "\(store.machines.count) stopped" : "\(running) running"

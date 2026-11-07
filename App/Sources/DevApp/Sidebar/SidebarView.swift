@@ -126,7 +126,7 @@ struct SidebarView: View {
     }
     // An install reached a running copy of its app: quitting it is the user's call.
     .kitConfirmation(
-      installs.question ?? "",
+      installs.question.map { "\($0)" } ?? "",
       isPresented: Binding(get: { installs.question != nil }, set: { if !$0, installs.question != nil { installs.answer(false) } }),
       message: "The app quits as if you chose Quit, then the new build replaces it and opens in the background.",
       systemImage: "arrow.down.app", confirm: "Quit and Install", role: nil
