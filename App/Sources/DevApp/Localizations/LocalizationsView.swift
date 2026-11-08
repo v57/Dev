@@ -150,6 +150,15 @@ private struct LocalizationsOverview: View {
               .disabled(store.isBusy)
           }
         }
+        FormCard("Shipped Translations", footer: "Other apps' translations (Dev's imported translation database): a run fills every empty string it has an exact match for before asking the model, marked imported.") {
+          FormRow(
+            store.importedDatabase?.lastPathComponent ?? "None",
+            help: store.importedDatabase?.path ?? "", systemImage: "externaldrive"
+          ) {
+            Button("Import…") { store.importDatabase() }
+              .disabled(store.isBusy)
+          }
+        }
         FormCard("Languages", footer: "Every source is translated into these. Apps bundle a few and download the rest from the repository.") {
           FormRow(
             "\(store.languages.count) languages", help: "\(store.languages.joined(separator: ", "))",
@@ -195,6 +204,14 @@ private struct LocalizationsOverview: View {
 
 private struct LocalizationsSourcePage: View {
   let name: String
+
+  /// What the model is told: the `About:` lines, as a translation writes them into the source's project rules.
+  private func aboutHelp(_ source: LocalizationsSource?) -> String {
+    let lines = store.about(name).map { String($0.dropFirst(LocalizationsStore.aboutPrefix.count)) }
+    return lines.isEmpty
+      ? String(localized: "What this is, in a phrase: the model is told, so it translates for this app.")
+      : lines.joined(separator: "\n")
+  }
   @Environment(Translation.Shell.self) private var shell
   private var store: LocalizationsStore { .shared }
 
@@ -220,6 +237,11 @@ private struct LocalizationsSourcePage: View {
               }
             }
           }
+          FormRow(
+            "About", help: aboutHelp(source), systemImage: "text.bubble", hue: .gray,
+            field: TextField(
+              "About", text: Binding(get: { store.description(of: name) }, set: { store.setDescription($0, of: name) }),
+              prompt: Text(source?.kind == .kit ? "the shared controls of the apps" : "a code editor for Mac")))
           FormRow("Translate", help: translateHelp, systemImage: "play.fill") {
             Button("Translate") { store.translate([name], shell: shell) }
               .buttonStyle(.kitPrimary)

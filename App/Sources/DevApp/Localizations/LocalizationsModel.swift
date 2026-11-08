@@ -343,6 +343,31 @@ nonisolated struct LocalizationsPlan: Sendable {
   }
 }
 
+// MARK: - What a source is
+
+/// What the model is told about a source, as `About:` lines of its translation project's rules: an app's own
+/// description, or for a kit its description and the apps that show its strings, each with theirs. A source with
+/// nothing to say gets no lines.
+nonisolated enum LocalizationsAbout {
+  static let prefix = "About: "
+
+  static func lines(for source: String, in plan: LocalizationsPlan, descriptions: [String: String]) -> [String] {
+    let own = descriptions[source] ?? ""
+    guard let kit = plan.sources.first(where: { $0.name == source }), kit.kind == .kit else {
+      return own.isEmpty ? [] : ["\(prefix)You are translating \(source), \(own)."]
+    }
+    var lines = [
+      "\(prefix)You are translating \(source)" + (own.isEmpty ? "" : ", \(own)")
+        + ". Its strings appear inside these apps, so keep them fitting for all of them:"
+    ]
+    for app in kit.usedBy {
+      let text = descriptions[app] ?? ""
+      lines.append("\(prefix)- \(app)" + (text.isEmpty ? "" : ": \(text)"))
+    }
+    return lines
+  }
+}
+
 // MARK: - Merge
 
 /// What a merge did to a catalog.

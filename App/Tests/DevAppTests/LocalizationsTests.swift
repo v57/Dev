@@ -115,6 +115,30 @@ import Testing
     #expect(plan.lookup["Hub"] == ["Hub", "ComponentKit"])
   }
 
+  @Test func theModelIsToldWhatASourceIs() {
+    let apps = [
+      LocalizationsApp(name: "Code", folder: "/v57/Code", container: "", scheme: "Code"),
+      LocalizationsApp(name: "Git", folder: "/v57/Git", container: "", scheme: "Git"),
+    ]
+    let kit = ModuleStrings(module: "ComponentKit", repo: "/v57/Component", keys: ["Close": []])
+    let scans = [
+      "Code": AppScan(
+        app: "Code", date: .now, modules: [ModuleStrings(module: "CodeApp", repo: "/v57/Code", keys: ["Run": []]), kit]),
+      "Git": AppScan(
+        app: "Git", date: .now, modules: [ModuleStrings(module: "GitApp", repo: "/v57/Git", keys: ["Push": []]), kit]),
+    ]
+    let plan = LocalizationsPlan(apps: apps, scans: scans, kitsFolder: "/v57")
+    let descriptions = ["Code": "a code editor", "ComponentKit": "the shared controls"]
+    #expect(LocalizationsAbout.lines(for: "Code", in: plan, descriptions: descriptions)
+      == ["About: You are translating Code, a code editor."])
+    #expect(LocalizationsAbout.lines(for: "Git", in: plan, descriptions: descriptions).isEmpty)
+    #expect(LocalizationsAbout.lines(for: "ComponentKit", in: plan, descriptions: descriptions) == [
+      "About: You are translating ComponentKit, the shared controls. Its strings appear inside these apps, so keep them fitting for all of them:",
+      "About: - Code: a code editor",
+      "About: - Git",
+    ])
+  }
+
   @Test func anAppIsFoundByItsLocalWorkspace() throws {
     let folder = FileManager.default.temporaryDirectory
       .appendingPathComponent("LocalizationsTests-\(UUID().uuidString)/hub-app", isDirectory: true)

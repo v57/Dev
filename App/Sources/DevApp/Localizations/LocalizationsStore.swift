@@ -25,6 +25,9 @@ nonisolated struct LocalizationsState: Codable, Sendable {
   var scans: [String: AppScan] = [:]
   /// Source -> what changed since its last commit, for the commit message.
   var notes: [String: [String]] = [:]
+  /// Source -> what it is, in a phrase ("a folder-based code editor for Mac, iPhone and iPad"): the model is told,
+  /// so it translates for that app. Optional so a state file from before it still reads.
+  var descriptions: [String: String]?
 
   /// The languages apps bundle by default (Ideas/Localization.md), English aside.
   static let defaultLanguages = ["de", "fr", "es", "ja", "zh-Hans", "pt-BR", "ko", "it", "ru"]
@@ -202,6 +205,7 @@ final class LocalizationsStore {
     self.state = state
     plan = LocalizationsPlan(apps: state.apps, scans: state.scans, kitsFolder: Self.kitsFolder(state.repo))
     refreshApps()
+    ImportedTranslationDB.shared.restoreIfNeeded()
   }
 
   var repoURL: URL? { state.repo.map { URL(fileURLWithPath: $0, isDirectory: true) } }
@@ -277,6 +281,44 @@ final class LocalizationsStore {
     state.apps.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     replan()
     persist()
+  }
+
+  // MARK: - what each source is
+
+  static var aboutPrefix: String { LocalizationsAbout.prefix }
+
+  func description(of source: String) -> String { state.descriptions?[source] ?? "" }
+
+  func setDescription(_ text: String, of source: String) {
+    let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    var descriptions = state.descriptions ?? [:]
+    descriptions[source] = text.isEmpty ? nil : text
+    state.descriptions = descriptions
+    persist()
+  }
+
+  /// What the model is told about a source (`LocalizationsAbout`).
+  func about(_ source: String) -> [String] {
+    LocalizationsAbout.lines(for: source, in: plan, descriptions: state.descriptions ?? [:])
+  }
+
+  // MARK: - shipped translations
+
+  /// Dev's imported translation database (other apps' shipped translations, `language/source/target/app`): a run fills
+  /// every empty slot it has an exact match for before any model call, marked imported.
+  var importedDatabase: URL? { ImportedTranslationDB.shared.fileURL }
+
+  func importDatabase(_ url: URL? = nil) {
+    Task {
+      if let url {
+        do { try await ImportedTranslationDB.shared.setImported(url) } catch {
+          self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+      } else {
+        await ImportedTranslationDB.shared.importViaPanel()
+        if let message = ImportedTranslationDB.shared.errorMessage { self.error = message }
+      }
+    }
   }
 
   func setIncluded(_ app: String, _ included: Bool) {
@@ -461,6 +503,8 @@ final class LocalizationsStore {
     }
     let languages = state.languages
     guard !sources.isEmpty, !languages.isEmpty else { return }
+    // The shipped translations (Dev's imported translation database) fill what they can before any model call.
+    ImportedTranslationDB.shared.restoreIfNeeded()
     start(String(localized: "Translating")) { [self] in
       var done = 0
       for name in sources {
@@ -470,7 +514,8 @@ final class LocalizationsStore {
         self.translator = translator
         do {
           let outcome = try await translator.translate(
-            catalog: LocalizationsRepo.catalog(name, in: repoURL), source: name, languages: languages)
+            catalog: LocalizationsRepo.catalog(name, in: repoURL), source: name, languages: languages,
+            about: about(name))
           say("\(name): \(outcome)")
           if outcome.changed { note(name, "translated into \(languages.joined(separator: ", "))") }
           done += 1
@@ -554,7 +599,7 @@ final class LocalizationsStore {
   #if DEBUG
     /// Debug builds take commands without a click: post the distributed notification `dev.v57.dev.localizations`
     /// with `scan [app…]`, `translate [source…]`, `build`, `cancel`, `include <app> yes|no`, `addapp <folder>`,
-    /// `languages <code…>` or
+    /// `describe <source> <phrase…>`, `importdb <file>`, `languages <code…>` or
     /// `dump` (the state, plan and progress to /tmp/dev-localizations.txt).
     func listenForDebugCommands(shell: Translation.Shell) async {
       for await note in Broadcast.messages(named: "dev.v57.dev.localizations") {
@@ -568,6 +613,8 @@ final class LocalizationsStore {
         case "cancel": cancel()
         case "include": if rest.count == 2 { setIncluded(rest[0], rest[1] == "yes") }
         case "addapp": if !rest.isEmpty { addApp(at: URL(fileURLWithPath: rest.joined(separator: " "))) }
+        case "describe": if let source = rest.first { setDescription(rest.dropFirst().joined(separator: " "), of: source) }
+        case "importdb": if !rest.isEmpty { importDatabase(URL(fileURLWithPath: rest.joined(separator: " "))) }
         case "languages":
           state.languages = rest
           persist()
@@ -593,6 +640,10 @@ final class LocalizationsStore {
           + "catalog=\(progress?.keys ?? 0) stale=\(progress?.stale ?? 0) usedBy=\(source?.usedBy.joined(separator: ",") ?? "-") "
           + languages)
       }
+      lines.append(
+        "imported: \(ImportedTranslationDB.shared.fileURL?.path ?? "-") "
+          + "importError=\(ImportedTranslationDB.shared.errorMessage ?? "-")")
+      for name in sourceNames { lines += about(name).map { "about \(name): \($0)" } }
       lines.append("log:")
       lines += log.suffix(60)
       try? lines.joined(separator: "\n").write(toFile: "/tmp/dev-localizations.txt", atomically: true, encoding: .utf8)
@@ -659,7 +710,9 @@ final class LocalizationsTranslator {
     workspace?.pause()
   }
 
-  func translate(catalog url: URL, source: String, languages: [String]) async throws -> Outcome {
+  /// `about`: what the source is, for the model (`LocalizationsStore.about`), kept as the `About:` lines of the
+  /// source's project rules.
+  func translate(catalog url: URL, source: String, languages: [String], about: [String] = []) async throws -> Outcome {
     let data = TranslationData.shared
     await data.start()
     // The source's own translation project, named so it reads apart from the app project of the same name.
@@ -687,6 +740,9 @@ final class LocalizationsTranslator {
     }
     self.workspace = workspace
     workspace.closeOverlay()
+    // Written before the run, so its prompts carry them. A changed line marks the source's translations stale, like any
+    // project rule.
+    workspace.project.context.replaceLines(prefixed: LocalizationsStore.aboutPrefix, with: about)
     try await workspace.run(.vertical)
     let run = workspace.runner.runs[.vertical]
     await workspace.save()

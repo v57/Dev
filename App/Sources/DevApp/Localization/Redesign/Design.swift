@@ -208,6 +208,18 @@ enum Translation {
       // document (another fold, a compression, Save) persists them.
       try? save()
     }
+    /// Puts `lines` first in place of every line that starts with `prefix`, leaving the other lines as they are: what a
+    /// tool keeps in a project document (the Translations tool's `About:` lines, which say what the app is) next to the
+    /// rules a human wrote. One real change at most, published like any other write; the same lines again change nothing.
+    func replaceLines(prefixed prefix: String, with lines: [String]) {
+      let kept = Self.lines(in: context).filter { !$0.hasPrefix(prefix) }
+      let body = (lines + kept).joined(separator: "\n")
+      guard body != context else { return }
+      context = body
+      version += 1
+      hasDocument = true
+      try? save()
+    }
     var isOverLimit: Bool { context.count > limit }
     /// The fallback, not the budget keeper: drops the OLDEST lines until the body
     /// fits. This is why document order is append-only.
