@@ -73,8 +73,8 @@ struct VMsView: View {
   }
 
   private func statusText(_ vm: VirtualMachine) -> String {
-    if store.pending.contains(vm.id) { return "working…" }
-    if vm.status.isRunning, let address = store.addresses[vm.id] { return "running · \(address)" }
+    if store.pending.contains(vm.id) { return String(localized: "working…") }
+    if vm.status.isRunning, let address = store.addresses[vm.id] { return String(localized: "running · \(address)") }
     return vm.status.rawValue
   }
 }

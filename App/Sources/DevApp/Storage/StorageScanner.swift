@@ -30,7 +30,7 @@ nonisolated enum StorageScanner {
   ) -> AsyncStream<StorageScanEvent> {
     AsyncStream { continuation in
       let task = Task.detached(priority: .utility) {
-        continuation.yield(.phase("Reading tool locations…"))
+        continuation.yield(.phase(String(localized: "Reading tool locations…")))
         var discovery = StorageDiscovery()
         discovery.fullDiskAccess = fullDiskAccess
         discovery.addSwift()
@@ -48,18 +48,18 @@ nonisolated enum StorageScanner {
         guard !Task.isCancelled else { return continuation.finish() }
 
         let walkRoots = roots ?? discovery.defaultWalkRoots
-        continuation.yield(.phase("Walking your folders…"))
+        continuation.yield(.phase(String(localized: "Walking your folders…")))
         discovery.walk(roots: walkRoots)
         guard !Task.isCancelled else { return continuation.finish() }
 
-        continuation.yield(.phase("Reading apps…"))
+        continuation.yield(.phase(String(localized: "Reading apps…")))
         discovery.addApps(excludingBundle: runningBundle)
         if fullDiskAccess { discovery.addContainers() }
         discovery.addOther()
 
         let pending = assigningExclusions(discovery.items)
         continuation.yield(.discovered(pending.count))
-        continuation.yield(.phase("Measuring…"))
+        continuation.yield(.phase(String(localized: "Measuring…")))
 
         var measured: [StorageItem] = []
         let ledger = SharedBlockLedger()
@@ -319,11 +319,10 @@ nonisolated enum StorageCleaner {
 
   private static func hint(_ message: String, item: StorageItem) -> String {
     if message.contains("not permitted"), item.primaryPath.hasSuffix(".app") {
-      return "macOS refused to move the app. Allow Dev in System Settings › Privacy & Security › "
-        + "App Management, then try again."
+      return String(localized: "macOS refused to move the app. Allow Dev in System Settings › Privacy & Security › App Management, then try again.")
     }
     if message.contains("not permitted") {
-      return message + " — macOS protects this location (Full Disk Access or SIP)."
+      return String(localized: "\(message) — macOS protects this location (Full Disk Access or SIP).")
     }
     return message
   }

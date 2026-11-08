@@ -84,16 +84,16 @@ struct RunArtifacts: View {
   }
 
   private var exportTitle: String {
-    guard isExporting else { return "Export…" }
+    guard isExporting else { return String(localized: "Export…") }
     if let progress = store.exportProgress[run.id] {
-      return "Preparing \(min(progress.done + 1, progress.total)) of \(progress.total)…"
+      return String(localized: "Preparing \(min(progress.done + 1, progress.total)) of \(progress.total)…")
     }
-    return isCopying ? "Copying…" : "Exporting…"
+    return isCopying ? String(localized: "Copying…") : String(localized: "Exporting…")
   }
 
   private var exportHelp: String {
-    if let progress = store.exportProgress[run.id] { return "Adding \(progress.file)" }
-    return "Saves the result archive: every platform's files and a manifest, as one folder (or the run's zip)"
+    if let progress = store.exportProgress[run.id] { return String(localized: "Adding \(progress.file)") }
+    return String(localized: "Saves the result archive: every platform's files and a manifest, as one folder (or the run's zip)")
   }
 
   /// The files by platform in release order, the result archive and its manifest last.
@@ -103,7 +103,7 @@ struct RunArtifacts: View {
       return files.isEmpty ? nil : (platform.title, files)
     }
     let all = run.files.filter { ReleasePlatform(rawValue: $0.platform) == nil }
-    if !all.isEmpty { groups.append(("Result archive", all)) }
+    if !all.isEmpty { groups.append((String(localized: "Result archive"), all)) }
     return groups
   }
 
@@ -117,7 +117,7 @@ struct RunArtifacts: View {
       .opacity(exists ? 1 : 0.5)
     } trailing: {
       HStack(spacing: 4) {
-        Text(exists ? (file.size?.byteString ?? "") : "Missing")
+        Text(exists ? (file.size?.byteString ?? "") : String(localized: "Missing"))
           .kitFont(.caption)
           .monospacedDigit()
           .foregroundStyle(.kitSecondary)
@@ -156,12 +156,12 @@ struct RunArtifacts: View {
 
   static func kindTitle(_ kind: String) -> String {
     switch kind {
-    case "archive": return "Archive"
-    case "package": return "Download"
-    case "bundle": return "Result archive"
-    case "manifest": return "Manifest"
-    case "tests": return "Test results"
-    case "screenshots": return "Screenshots"
+    case "archive": return String(localized: "Archive")
+    case "package": return String(localized: "Download")
+    case "bundle": return String(localized: "Result archive")
+    case "manifest": return String(localized: "Manifest")
+    case "tests": return String(localized: "Test results")
+    case "screenshots": return String(localized: "Screenshots")
     default: return kind.capitalized
     }
   }
@@ -183,7 +183,7 @@ struct RunArtifacts: View {
     defer { isExporting = false }
     guard let bundle = await store.makeBundle(for: run.id, in: root),
           let target = await KitDesktop.chooseSaveLocation(
-            title: "Export Result Archive", prompt: "Export", name: bundle.name)
+            title: String(localized: "Export Result Archive"), prompt: String(localized: "Export"), name: bundle.name)
     else { return }
     let source = bundle.url
     isCopying = true

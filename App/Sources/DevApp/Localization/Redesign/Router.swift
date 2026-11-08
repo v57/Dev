@@ -62,7 +62,7 @@ extension Translation {
     }
 
     /// The configured model's display name, for the status bar and the notes.
-    var modelName: String { RoutedModel.current?.name ?? "The model" }
+    var modelName: String { RoutedModel.current?.name ?? String(localized: "The model") }
 
     /// Per-request budget; a long batch reply can take minutes to write.
     static let requestTimeout: TimeInterval = 180
@@ -231,7 +231,7 @@ extension Translation {
           guard let model = RoutedModel.current, model.isUsable else {
             continuation.finish(
               throwing: BackendError.notConfigured(
-                ModelSettings.problem ?? "No translation model is configured."))
+                ModelSettings.problem ?? String(localized: "No translation model is configured.")))
             return
           }
           var arrived = false

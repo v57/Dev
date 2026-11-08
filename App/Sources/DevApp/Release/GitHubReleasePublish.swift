@@ -107,8 +107,8 @@ nonisolated struct GitHubReleaseRequest: Decodable, Equatable, Sendable {
 
   /// One line for the confirmation and the log.
   var summary: String {
-    "\(tag) on \(repository), \(files.count) file\(files.count == 1 ? "" : "s")"
-      + (files.contains { $0.sign == true } ? ", Windows and Linux files signed" : "")
+    String(localized: "\(tag) on \(repository), \(files.count) file\(files.count == 1 ? "" : "s")")
+      + (files.contains { $0.sign == true } ? String(localized: ", Windows and Linux files signed") : "")
   }
 }
 

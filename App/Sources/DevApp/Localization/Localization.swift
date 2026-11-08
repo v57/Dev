@@ -26,12 +26,12 @@ nonisolated enum RowFilter: String, CaseIterable, Identifiable, Sendable {
 
   var title: String {
     switch self {
-    case .all: return "All"
-    case .needsReview: return "Needs review"
-    case .missing: return "Missing"
-    case .translated: return "Translated"
-    case .new: return "New"
-    case .tooWide: return "Too wide"
+    case .all: return String(localized: "All")
+    case .needsReview: return String(localized: "Needs review")
+    case .missing: return String(localized: "Missing")
+    case .translated: return String(localized: "Translated")
+    case .new: return String(localized: "New")
+    case .tooWide: return String(localized: "Too wide")
     }
   }
 
@@ -603,7 +603,7 @@ final class LocalizationStore {
 
   var sourceLanguageTitle: String {
     guard let catalog else { return "" }
-    return "\(catalog.sourceLanguage) (source)"
+    return String(localized: "\(catalog.sourceLanguage) (source)")
   }
 
   var totalKeyCount: Int { catalog?.strings.count ?? 0 }
@@ -991,9 +991,9 @@ final class LocalizationStore {
     guard let catalog else { return key }
     let text = catalog.sourcePluralDisplay(for: key, category: category)
     if languageHasMatchingSourceForm(category: category) {
-      return "Source \(category): \(text)"
+      return String(localized: "Source \(category): \(text)")
     }
-    return "Source (other): \(text)"
+    return String(localized: "Source (other): \(text)")
   }
 
   /// True when the source language carries the same plural category (so the
@@ -1106,7 +1106,7 @@ final class LocalizationStore {
   /// silently dropping the edit.
   private func writeThrough(text: String, key: String, language: String) {
     guard let catalog, let project else {
-      saveError = "No catalog open"
+      saveError = String(localized: "No catalog open")
       return
     }
     let sourceText = catalog.sourceDisplay(for: key)
@@ -1178,7 +1178,7 @@ final class LocalizationStore {
 
   /// Alert title for the current error.
   var errorTitle: String {
-    saveError != nil ? "Couldn't save catalog" : "Couldn't open catalog"
+    saveError != nil ? String(localized: "Couldn't save catalog") : String(localized: "Couldn't open catalog")
   }
 
   /// Alert message for the current error (save error wins, then the load error).
@@ -1226,16 +1226,16 @@ final class LocalizationStore {
 
   /// Alert title while a leave request waits on the prompt.
   var unsavedChangesTitle: String {
-    "Save changes to \(unsavedCatalogName)?"
+    String(localized: "Save changes to \(unsavedCatalogName)?")
   }
 
   /// Alert body: what the pending leave would do with the unsaved edits.
   var unsavedChangesMessage: String {
     switch pendingLeave {
     case .reload:
-      return "Reloading discards the edits this window has not written to the catalog yet."
+      return String(localized: "Reloading discards the edits this window has not written to the catalog yet.")
     case .open, .openPanel:
-      return "Opening another catalog discards the edits this window has not written to the catalog yet."
+      return String(localized: "Opening another catalog discards the edits this window has not written to the catalog yet.")
     case nil:
       return ""
     }
@@ -1243,7 +1243,7 @@ final class LocalizationStore {
 
   /// The file the unsaved edits belong to, for prompt text.
   var unsavedCatalogName: String {
-    (project?.catalogURL ?? catalogURL)?.lastPathComponent ?? "the catalog"
+    (project?.catalogURL ?? catalogURL)?.lastPathComponent ?? String(localized: "the catalog")
   }
 
   /// Raises the unsaved-changes alert for a leave request.
@@ -1328,7 +1328,7 @@ final class LocalizationStore {
   func generateCatalog(at url: URL, root: URL?) async -> Bool {
     guard !FileManager.default.fileExists(atPath: url.path) else { return false }
     guard !hasUnsavedChanges else {
-      saveError = "The open catalog has edits its file does not have yet. Save or discard them, then generate this catalog."
+      saveError = String(localized: "The open catalog has edits its file does not have yet. Save or discard them, then generate this catalog.")
       return false
     }
     let folder = (root ?? url.deletingLastPathComponent()).standardizedFileURL
@@ -1387,7 +1387,7 @@ final class LocalizationStore {
     Task {
       guard
         let url = await KitDesktop.chooseFiles(
-          message: "Choose an .xcstrings catalog", contentTypes: UTType(filenameExtension: "xcstrings").map { [$0] } ?? []
+          message: String(localized: "Choose an .xcstrings catalog"), contentTypes: UTType(filenameExtension: "xcstrings").map { [$0] } ?? []
         ).first
       else { return }
       // Unguarded: the prompt (if any) was answered before the panel appeared,
@@ -1736,7 +1736,7 @@ final class LocalizationStore {
   /// Title of the versions alert: the load found slots the file and the app's records
   /// fill with different values.
   var versionsPromptTitle: String {
-    "Which version should load?"
+    String(localized: "Which version should load?")
   }
 
   /// Body of the versions alert: how many slots are in play, a few of them by name, what a person
@@ -1750,23 +1750,23 @@ final class LocalizationStore {
   var versionsPromptMessage: String {
     let count = pendingDifferenceCount
     let named = pendingDifferences.prefix(3)
-    var text = "One side is a value a person confirmed and the two disagree, for "
-      + "\(count) \(count == 1 ? "slot" : "slots") — "
-      + named.map(\.label).joined(separator: ", ")
-    if count > named.count { text += " (and \(count - named.count) more)" }
+    let names = named.map(\.label).joined(separator: ", ")
+    var text = String(
+      localized: "One side is a value a person confirmed and the two disagree, for \(count) \(count == 1 ? "slot" : "slots") — \(names)")
+    if count > named.count { text += String(localized: " (and \(count - named.count) more)") }
     text += "."
-    text += "\n\nLoading the file's values replaces what the app holds for those slots; "
-      + "the replaced values stay in the row's edit history."
-    text += "\n\nKeeping the app's records leaves the file's values out of the app — the row "
-      + "still holds the app's value, and saving that row writes it back over the file's."
+    text += "\n\n" + String(
+      localized: "Loading the file's values replaces what the app holds for those slots; the replaced values stay in the row's edit history.")
+    text += "\n\n" + String(
+      localized: "Keeping the app's records leaves the file's values out of the app — the row still holds the app's value, and saving that row writes it back over the file's.")
     // The shape work is NOT part of the question — the reviewed value's shape wins either way (see
     // `LocalizationStore.land`) — so the alert only reports it.
     let shapes = heldLoad?.shapeConflicts.count ?? 0
     if shapes > 0 {
-      text += "\n\n\(shapes) of them also changed shape (plural vs single): the shape follows "
-        + "the value a person confirmed."
+      text += "\n\n" + String(
+        localized: "\(shapes) of them also changed shape (plural vs single): the shape follows the value a person confirmed.")
     }
-    if heldLoad?.purpose == .open { text += " Cancelling leaves the catalog closed." }
+    if heldLoad?.purpose == .open { text += " " + String(localized: "Cancelling leaves the catalog closed.") }
     return text
   }
 

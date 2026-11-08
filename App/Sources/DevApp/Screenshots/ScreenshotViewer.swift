@@ -195,11 +195,11 @@ private struct ScreenshotViewerView: View {
   }
 
   private func detail(_ shot: ScreenshotLibrary.Shot) -> String {
-    var parts = ["\(viewer.index + 1) of \(viewer.slots.count)"]
+    var parts = [String(localized: "\(viewer.index + 1) of \(viewer.slots.count)")]
     parts.append(Locale.current.localizedString(forIdentifier: shot.locale) ?? shot.locale)
     parts.append(shot.target)
     if shot.appearance != (viewer.dark ? .dark : .light) {
-      parts.append(viewer.dark ? "no dark capture" : "no light capture")
+      parts.append(viewer.dark ? String(localized: "no dark capture") : String(localized: "no light capture"))
     }
     return parts.joined(separator: " · ")
   }

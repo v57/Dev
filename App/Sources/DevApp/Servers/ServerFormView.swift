@@ -104,10 +104,10 @@ struct ServerFormView: View {
   /// optional because the shared one is the default.
   private var problem: String? {
     if name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-      return "the server needs a name"
+      return String(localized: "the server needs a name")
     }
     guard parsedEndpoint != nil else {
-      return "the endpoint must be an http(s) URL, e.g. http://127.0.0.1:8080/"
+      return String(localized: "the endpoint must be an http(s) URL, e.g. http://127.0.0.1:8080/")
     }
     return nil
   }
@@ -121,7 +121,7 @@ struct ServerFormView: View {
   }
 
   private var sharedKeyHint: String {
-    "empty: use \(ServerKeychain.sharedKeyName)"
+    String(localized: "empty: use \(ServerKeychain.sharedKeyName)")
   }
 
   private var keyHelp: LocalizedStringKey {

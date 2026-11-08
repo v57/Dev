@@ -39,9 +39,9 @@ struct ServersSidebarSection: View {
   /// "2 servers · 1 online", or "None connected".
   private var meta: [String] {
     let count = store.servers.count
-    guard count > 0 else { return ["None connected"] }
+    guard count > 0 else { return [String(localized: "None connected")] }
     let online = store.servers.filter { store.statuses[$0.id]?.isOnline == true }.count
-    return ["\(count) server\(count == 1 ? "" : "s")", "\(online) online"]
+    return [String(localized: "\(count) server\(count == 1 ? "" : "s")"), String(localized: "\(online) online")]
   }
 
   var body: some View {

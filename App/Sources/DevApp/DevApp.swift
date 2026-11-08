@@ -125,8 +125,8 @@ enum AppLifecycle {
     guard let store = LocalizationStore.active, store.hasUnsavedChanges else { return true }
     let answer = DevDesktop.ask(
       title: store.unsavedChangesTitle,
-      message: "The edits in this window are not written to \(store.unsavedCatalogName) yet. Nothing saves on its own.",
-      buttons: ["Save", "Discard", "Cancel"])
+      message: String(localized: "The edits in this window are not written to \(store.unsavedCatalogName) yet. Nothing saves on its own."),
+      buttons: [String(localized: "Save"), String(localized: "Discard"), String(localized: "Cancel")])
     switch answer {
     case 0:
       // A failed write surfaces its own alert and keeps the app open.

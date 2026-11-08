@@ -14,9 +14,9 @@ nonisolated enum AgentPermissions {
     var id: String { rawValue }
     var title: String {
       switch self {
-      case .allow: "Allow"
-      case .ask: "Ask First"
-      case .never: "Never"
+      case .allow: String(localized: "Allow")
+      case .ask: String(localized: "Ask First")
+      case .never: String(localized: "Never")
       }
     }
   }
@@ -35,10 +35,10 @@ nonisolated enum AgentPermissions {
 
     var title: String {
       switch self {
-      case .read: "Read projects, runs, screenshots and store text"
-      case .edit: "Change screenshot framing, workflows and store text"
-      case .run: "Start workflow runs"
-      case .publish: "Sign, notarize, upload and publish"
+      case .read: String(localized: "Read projects, runs, screenshots and store text")
+      case .edit: String(localized: "Change screenshot framing, workflows and store text")
+      case .run: String(localized: "Start workflow runs")
+      case .publish: String(localized: "Sign, notarize, upload and publish")
       }
     }
 

@@ -43,7 +43,7 @@ extension Translation {
       // failure the last run ended on), and the shell is where it can be shown whether
       // the overlay is open or closed.
       .kitNotice(
-        "Translation",
+        String(localized: "Translation"),
         isPresented: Binding(get: { workspace.error != nil }, set: { if !$0 { workspace.error = nil } }),
         message: workspace.error)
     }
@@ -313,14 +313,14 @@ extension Translation {
             .disabled(!workspace.canStart)
             .kitHelp(
               "Retry Failed Batches",
-              meta: "Re-ask exactly the batches this run gave up on — the column pass and the row pass. "
-                + "No scan and no re-cut: they go out as they stand.",
+              meta:
+                "Re-ask exactly the batches this run gave up on — the column pass and the row pass. No scan and no re-cut: they go out as they stand.",
               systemImage: "arrow.clockwise")
           }
           Button("Start") { Task { try? await workspace.start() } }
             .buttonStyle(.kitPrimary)
             .disabled(!workspace.canStartRun)
-            .kitHelp("Start", meta: workspace.museNote ?? "Runs prepare, prelearn, learn, translate and the row pass")
+            .kitHelp(String(localized: "Start"), meta: workspace.museNote ?? String(localized: "Runs prepare, prelearn, learn, translate and the row pass"))
           // The SECOND way in, immediately after Start (reader, 2026-09-14: "Place it right after
           // start button with `forward.fill` icon"): the same run with the two learning steps left
           // out. Icon-only, because Start is the button that needs a word — this one differs from
@@ -331,7 +331,7 @@ extension Translation {
           }
           .buttonStyle(.kitIcon)
           .disabled(!workspace.canStartRun)
-          .kitHelp("Start Without Learning", meta: workspace.museNote ?? Run.skipLearningHelp, systemImage: "forward.fill")
+          .kitHelp(String(localized: "Start Without Learning"), meta: workspace.museNote ?? Run.skipLearningHelp, systemImage: "forward.fill")
         }
       }
     }
@@ -349,15 +349,15 @@ extension Translation {
     /// can read instead of a sentence only a window can produce.
     static func tally(_ run: Run) -> String {
       var parts = [
-        "\(run.tally.batchesDone)/\(run.tally.batches) batches",
-        "\(run.tally.itemsDone)/\(run.tally.items) strings",
+        String(localized: "\(run.tally.batchesDone)/\(run.tally.batches) batches"),
+        String(localized: "\(run.tally.itemsDone)/\(run.tally.items) strings"),
         run.tally.sends == run.tally.requests
-          ? "\(run.tally.requests) requests"
-          : "\(run.tally.sends) requests (\(run.tally.requests) answered)",
-        "cache \(run.tally.cachedShare.formatted(.percent.precision(.fractionLength(0))))",
+          ? String(localized: "\(run.tally.requests) requests")
+          : String(localized: "\(run.tally.sends) requests (\(run.tally.requests) answered)"),
+        String(localized: "cache \(run.tally.cachedShare.formatted(.percent.precision(.fractionLength(0))))"),
       ]
       if let reask = run.reasking {
-        parts.insert("attempt \(reask.attempt) of \(Limits.retries + 1) on \(reask.id)", at: 3)
+        parts.insert(String(localized: "attempt \(reask.attempt) of \(Limits.retries + 1) on \(reask.id)"), at: 3)
       }
       let models = run.tally.byModel
         .sorted { $0.key < $1.key }
@@ -419,7 +419,7 @@ extension Translation {
       // has nothing on screen to report from, and the bar is the one surface that
       // outlives a closed overlay (8.1).
       .kitNotice(
-        "Translation",
+        String(localized: "Translation"),
         isPresented: Binding(get: { workspace.error != nil }, set: { if !$0 { workspace.error = nil } }),
         message: workspace.error)
     }
@@ -928,7 +928,7 @@ extension Translation {
     /// The Start button's help: why it is not available, or what it runs. A run in flight
     /// is the nearer reason of the two — the button is offering a WAIT, not a broken app.
     func startHelp(_ catalogURL: URL) -> String {
-      help(catalogURL, saying: "Run prepare, prelearn, learn, translate, then the row pass (8.1)")
+      help(catalogURL, saying: String(localized: "Run prepare, prelearn, learn, translate, then the row pass (8.1)"))
     }
 
     /// The skip-learning button's help — the same shape, saying what THIS button does. The
@@ -942,9 +942,9 @@ extension Translation {
     /// or the sentence the caller supplies for what it would run.
     private func help(_ catalogURL: URL, saying sentence: String) -> String {
       guard let workspace = workspace(for: catalogURL) else {
-        return "The redesign's run starts once this project's catalog is open"
+        return String(localized: "The redesign's run starts once this project's catalog is open")
       }
-      if workspace.status.isRunning { return "A run is in flight — pause or cancel it on its pages" }
+      if workspace.status.isRunning { return String(localized: "A run is in flight — pause or cancel it on its pages") }
       if let note = workspace.museNote { return note }
       return sentence
     }
@@ -1005,12 +1005,12 @@ private extension Translation.Run.State {
   /// The word the overlay's header shows for a run's state.
   var title: String {
     switch self {
-    case .idle: "Ready"
-    case .scanning: "Scanning"
-    case .running: "Running"
-    case .paused: "Paused"
-    case .cancelled: "Cancelled"
-    case .finished: "Finished"
+    case .idle: String(localized: "Ready")
+    case .scanning: String(localized: "Scanning")
+    case .running: String(localized: "Running")
+    case .paused: String(localized: "Paused")
+    case .cancelled: String(localized: "Cancelled")
+    case .finished: String(localized: "Finished")
     }
   }
 }

@@ -24,7 +24,7 @@ struct LocalizationsSidebarRow: View {
       }
     }
     .kitHelp(
-      "Translations", meta: store.activity.map { "\($0)" } ?? "Every app's strings in the translations repository",
+      String(localized: "Translations"), meta: store.activity.map { "\($0)" } ?? String(localized: "Every app's strings in the translations repository"),
       systemImage: "globe")
     #if DEBUG
       .task { await store.listenForDebugCommands(shell: shell) }
@@ -91,7 +91,7 @@ struct LocalizationsView: View {
   private var sourceList: some View {
     KitList(selection: $selected) {
       SidebarRow(
-        value: "", "Overview", subtitle: (store.activity ?? store.summary).map { "\($0)" },
+        value: "", String(localized: "Overview"), subtitle: (store.activity ?? store.summary).map { "\($0)" },
         systemImage: "square.grid.2x2", status: store.isBusy ? .working() : .idle)
       ForEach(store.sourceNames, id: \.self) { name in
         let source = store.source(name)
@@ -100,7 +100,7 @@ struct LocalizationsView: View {
           value: name, name, subtitle: subtitle(source, progress),
           systemImage: source?.kind == .app ? "app" : "shippingbox",
           hue: source == nil ? .gray : nil,
-          status: store.activity == "Translating \(name)" ? .working() : .idle,
+          status: store.activity == String(localized: "Translating \(name)") ? .working() : .idle,
           progress: progress.map { progress in
             let languages = store.languages
             return languages.isEmpty ? 0 : languages.map(progress.fraction).reduce(0, +) / Double(languages.count)
@@ -111,9 +111,10 @@ struct LocalizationsView: View {
   }
 
   private func subtitle(_ source: LocalizationsSource?, _ progress: SourceProgress?) -> String {
-    guard let source else { return "No scanned app uses it" }
+    guard let source else { return String(localized: "No scanned app uses it") }
     let keys = progress?.keys ?? source.keys.count
-    return "\(keys) keys · " + (source.kind == .kit ? source.usedBy.joined(separator: ", ") : "app")
+    let users = source.kind == .kit ? source.usedBy.joined(separator: ", ") : String(localized: "app")
+    return String(localized: "\(keys) keys · \(users)")
   }
 }
 
@@ -179,10 +180,10 @@ private struct LocalizationsOverview: View {
   }
 
   private func appHelp(_ app: LocalizationsApp) -> String {
-    guard let scan = store.state.scans[app.name] else { return "Not scanned yet" }
+    guard let scan = store.state.scans[app.name] else { return String(localized: "Not scanned yet") }
     let sources = store.plan.lookup[app.name] ?? []
-    return "Scanned \(scan.date.formatted(date: .abbreviated, time: .shortened)) · "
-      + (sources.isEmpty ? "no strings" : sources.joined(separator: " → "))
+    let strings = sources.isEmpty ? String(localized: "no strings") : sources.joined(separator: " → ")
+    return String(localized: "Scanned \(scan.date.formatted(date: .abbreviated, time: .shortened)) · \(strings)")
   }
 }
 
@@ -244,7 +245,7 @@ private struct LocalizationsSourcePage: View {
 
   private var translateHelp: LocalizedStringKey {
     if let problem = ModelSettings.problem { return "\(problem)" }
-    if store.activity == "Translating \(name)" { return "Translating…" }
+    if store.activity == String(localized: "Translating \(name)") { return "Translating…" }
     return "Into \(store.languages.count) languages with the Localization tab's pipeline; the catalog is saved when the run ends"
   }
 

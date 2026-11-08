@@ -213,7 +213,7 @@ private struct StorageNav: View {
 
   private func trailing(_ category: StorageCategory) -> String? {
     let items = store.items(in: category)
-    if category == .applications { return items.isEmpty ? nil : "\(items.count) apps" }
+    if category == .applications { return items.isEmpty ? nil : String(localized: "\(items.count) apps") }
     let picked = items.filter(store.isSelected).reduce(0) { $0 + $1.bytes }
     return picked > 0 ? picked.byteString : store.bytes(in: category).byteString
   }
@@ -286,7 +286,7 @@ private struct StorageActionButton: View {
       .keyboardShortcut(.return, modifiers: .command)
       .kitHelp(label, shortcut: "⌘↩", meta: none ? "Tick what to remove" : "\(store.selectedBytes.byteString)")
       VStack(alignment: .leading, spacing: 1) {
-        Text(none ? "Nothing picked" : store.selectedBytes.byteString)
+        Text(none ? String(localized: "Nothing picked") : store.selectedBytes.byteString)
           .kitFont(.title3).fontWeight(.bold).monospacedDigit()
         Text(none ? "Tick what to remove" : "\(items.count) items from every category")
           .kitFont(.caption)
@@ -391,8 +391,8 @@ private struct SmartScanPage: View {
           MeterBar(segments: segments, total: Double(store.volumeTotal))
             .padding(.top, 6)
           MetaLine(
-            ["\(used.byteString) used of \(store.volumeTotal.byteString)"]
-              + (store.lastScan.map { ["Scanned \($0.kitFormatted(.ago))"] } ?? []))
+            [String(localized: "\(used.byteString) used of \(store.volumeTotal.byteString)")]
+              + (store.lastScan.map { [String(localized: "Scanned \($0.kitFormatted(.ago))")] } ?? []))
         }
         VStack(spacing: 0) {
           ForEach(Array(sections.enumerated()), id: \.element) { index, section in
@@ -407,15 +407,15 @@ private struct SmartScanPage: View {
         HStack(alignment: .top, spacing: 12) {
           if !unusedApps.isEmpty {
             tip(
-              "\(unusedApps.count) apps unused for months · \(unusedApps.reduce(0) { $0 + $1.bytes }.byteString)",
-              unusedApps.prefix(4).map(\.title).joined(separator: ", "), symbol: "app.badge", button: "Uninstaller"
+              String(localized: "\(unusedApps.count) apps unused for months · \(unusedApps.reduce(0) { $0 + $1.bytes }.byteString)"),
+              unusedApps.prefix(4).map(\.title).joined(separator: ", "), symbol: "app.badge", button: String(localized: "Uninstaller")
             ) { page = .category(.applications) }
           }
           if !unusedVersions.isEmpty {
             tip(
-              "\(unusedVersions.count) language versions no project uses · \(unusedVersions.reduce(0) { $0 + $1.bytes }.byteString)",
+              String(localized: "\(unusedVersions.count) language versions no project uses · \(unusedVersions.reduce(0) { $0 + $1.bytes }.byteString)"),
               unusedVersions.prefix(4).map(\.title).joined(separator: ", "), symbol: "chevron.left.forwardslash.chevron.right",
-              button: "Languages"
+              button: String(localized: "Languages")
             ) { page = .languages }
           }
         }
@@ -520,7 +520,7 @@ private struct ScratchPicker: View {
           .lineLimit(1)
       }
       Spacer(minLength: 8)
-      KitMenuButton(store.scratchPick.map { "\($0.title)" } ?? "Pick") {
+      KitMenuButton(store.scratchPick.map { "\($0.title)" } ?? String(localized: "Pick")) {
         KitMenuOptions(
           selection: Binding(get: { store.scratchPick }, set: { if let pick = $0 { store.pickScratch(pick) } }),
           segments: StorageStore.ScratchPick.allCases.map { KitSegment($0.title, value: Optional($0)) })
@@ -612,7 +612,7 @@ private struct GroupsPage: View {
               .foregroundStyle(.kitSecondary)
           }
           Spacer(minLength: 4)
-          Text(picked > 0 && picked < group.bytes ? "\(picked.byteString) of \(group.bytes.byteString)" : group.bytes.byteString)
+          Text(picked > 0 && picked < group.bytes ? String(localized: "\(picked.byteString) of \(group.bytes.byteString)") : group.bytes.byteString)
             .kitFont(.callout).fontWeight(.semibold).monospacedDigit()
             .foregroundStyle(picked > 0 ? .kitLabel : .kitSecondary)
         }
@@ -685,13 +685,13 @@ private struct GroupsPage: View {
   private func about(_ safety: StorageSafety) -> String {
     switch safety {
     case .lossless:
-      return "Copies of the same files. They become clones that share one copy's space and stay where they are, so nothing is removed and Smart Scan picks them."
+      return String(localized: "Copies of the same files. They become clones that share one copy's space and stay where they are, so nothing is removed and Smart Scan picks them.")
     case .cache:
-      return "Files kept to work faster. The tool that owns them fills them again on its own, so Smart Scan picks them."
+      return String(localized: "Files kept to work faster. The tool that owns them fills them again on its own, so Smart Scan picks them.")
     case .rebuildable:
-      return "Build output and downloads your tools make again the next time they are needed, which takes a little longer once."
+      return String(localized: "Build output and downloads your tools make again the next time they are needed, which takes a little longer once.")
     case .data:
-      return "Your own data: nothing brings it back on its own, so Dev never picks it. Look before you tick."
+      return String(localized: "Your own data: nothing brings it back on its own, so Dev never picks it. Look before you tick.")
     }
   }
 }
@@ -733,7 +733,7 @@ private struct ModelCard: View {
 /// came from, when it was last opened.
 nonisolated struct AppInfo: Sendable {
   var version: String?
-  var source = "Downloaded"
+  var source = String(localized: "Downloaded")
   var lastUsed: Date?
   var isDeveloperTool = false
 
@@ -744,11 +744,11 @@ nonisolated struct AppInfo: Sendable {
   }
 
   var lastUsedText: String {
-    guard let lastUsed else { return "Never opened" }
+    guard let lastUsed else { return String(localized: "Never opened") }
     let days = Date().timeIntervalSince(lastUsed) / 86_400
-    if days < 1 { return "Opened today" }
-    if days < 7 { return "Opened this week" }
-    return "Last opened \(lastUsed.formatted(.relative(presentation: .named)))"
+    if days < 1 { return String(localized: "Opened today") }
+    if days < 7 { return String(localized: "Opened this week") }
+    return String(localized: "Last opened \(lastUsed.formatted(.relative(presentation: .named)))")
   }
 
   static func read(_ bundlePath: String) -> AppInfo {
@@ -759,7 +759,7 @@ nonisolated struct AppInfo: Sendable {
     if FileManager.default.fileExists(atPath: bundlePath + "/Contents/_MASReceipt") {
       info.source = "App Store"
     } else if isHomebrewCask(bundlePath) {
-      info.source = "Homebrew cask"
+      info.source = String(localized: "Homebrew cask")
     }
     if let date = DevDesktop.lastUsed(bundlePath) {
       info.lastUsed = date
@@ -899,7 +899,7 @@ private struct AppDetail: View {
           KitAppIcon(image: KitDesktop.icon(forFile: app.primaryPath), size: 72, isShaped: true)
           VStack(alignment: .leading, spacing: 4) {
             Text(app.title).kitFont(.title1).fontWeight(.bold)
-            Text(["Version \(info.version ?? "—")", info.source].joined(separator: " · "))
+            Text([String(localized: "Version \(info.version ?? "—")"), info.source].joined(separator: " · "))
               .foregroundStyle(.kitSecondary)
             Text(info.lastUsedText)
               .fontWeight(.medium)
@@ -978,9 +978,12 @@ private struct AppDetail: View {
     for path in app.paths {
       sums[Self.kind(of: path, app: app).part, default: 0] += store.pathSize(path) ?? 0
     }
-    let order: [(String, Hue)] = [("App", .blue), ("Data", .purple), ("Caches", .green), ("Other", .gray)]
-    return order.compactMap { name, hue in
-      guard let bytes = sums[name], bytes > 0 else { return nil }
+    let order: [(String, String, Hue)] = [
+      ("App", String(localized: "App"), .blue), ("Data", String(localized: "Data"), .purple),
+      ("Caches", String(localized: "Caches"), .green), ("Other", String(localized: "Other"), .gray),
+    ]
+    return order.compactMap { part, name, hue in
+      guard let bytes = sums[part], bytes > 0 else { return nil }
       return MeterSegment(name, value: Double(bytes), hue: hue, valueText: bytes.byteString)
     }
   }
@@ -1121,7 +1124,7 @@ private struct LanguageDetail: View {
         }
         Text("Versions a project of yours pins are marked with that project. Removing a version also removes the packages installed into it.")
           .foregroundStyle(.kitSecondary)
-        header("Versions", language.versions)
+        header(String(localized: "Versions"), language.versions)
         VStack(spacing: 0) {
           ForEach(language.versions) { version in
             versionRow(version)
@@ -1129,7 +1132,7 @@ private struct LanguageDetail: View {
           }
         }
         .kitSurface(.card)
-        header("Caches and Downloaded Packages", language.caches)
+        header(String(localized: "Caches and Downloaded Packages"), language.caches)
         Text("Safe whether you keep the language or not: they download or build again when a project needs them.")
           .kitFont(.callout)
           .foregroundStyle(.kitSecondary)
@@ -1165,7 +1168,7 @@ private struct LanguageDetail: View {
       .frame(width: 220, alignment: .leading)
       HStack(spacing: 4) {
         if users.isEmpty {
-          Text(version.lockReason ?? "No project uses it")
+          Text(version.lockReason ?? String(localized: "No project uses it"))
             .kitFont(.caption)
             .foregroundStyle(version.isLocked ? Hue.accent.text : Hue.orange.text)
         }
@@ -1251,7 +1254,7 @@ private struct MachinesPage: View {
         Text("Docker").fontWeight(.semibold)
       }
       Divider()
-      actionRow(item, title: "Prune images and build cache", detail: item.detail ?? "")
+      actionRow(item, title: String(localized: "Prune images and build cache"), detail: item.detail ?? "")
     }
     .padding(16)
     .kitSurface(.card)
@@ -1280,7 +1283,7 @@ private struct MachinesPage: View {
       Divider()
       ForEach(actions) { action in
         if action.id == "docker:prune" {
-          actionRow(action, title: "Prune images and build cache", detail: action.detail ?? "")
+          actionRow(action, title: String(localized: "Prune images and build cache"), detail: action.detail ?? "")
         } else {
           actionRow(action, title: "Compact disk", detail: action.detail ?? "")
         }

@@ -101,7 +101,7 @@ final class VMStore {
 
   func refresh() async {
     guard let utmctl = Self.utmctl else {
-      error = "UTM is not installed (utmctl not found)."
+      error = String(localized: "UTM is not installed (utmctl not found).")
       machines = []
       return
     }

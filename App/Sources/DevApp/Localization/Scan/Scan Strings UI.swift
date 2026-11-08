@@ -17,8 +17,8 @@ struct ScanStringsView: View {
 
   var body: some View {
     KitSheet(
-      title: "Scan Strings",
-      meta: "Every Swift package and Xcode target under the scan root, merged into this catalog."
+      title: String(localized: "Scan Strings"),
+      meta: String(localized: "Every Swift package and Xcode target under the scan root, merged into this catalog.")
         + (store.scan.root.map { "\n" + $0.path } ?? ""),
       systemImage: "text.magnifyingglass", status: scanStatus, width: 800
     ) {
@@ -384,7 +384,7 @@ struct ScanStringsView: View {
 
   private var mergeLabel: String {
     let count = store.scan.plan?.addedCount ?? 0
-    return count == 0 ? "Merge" : "Merge \(count) New Key\(count == 1 ? "" : "s")"
+    return count == 0 ? String(localized: "Merge") : String(localized: "Merge \(count) New Key\(count == 1 ? "" : "s")")
   }
 
   private var mergeDisabled: Bool {

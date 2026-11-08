@@ -187,7 +187,7 @@ final class TranslationRouter {
       }
     }
     throw lastFailure ?? BackendError.notConfigured(
-      ModelSettings.problem ?? "The translation model is cooling down after a failure; try again in a few minutes.")
+      ModelSettings.problem ?? String(localized: "The translation model is cooling down after a failure; try again in a few minutes."))
   }
 
   // MARK: - shared plumbing

@@ -38,9 +38,9 @@ enum ServerStatus: Hashable {
 
   var short: String {
     switch self {
-    case .unknown: return "not checked"
-    case .checking: return "checking…"
-    case .online(let messages, let commented): return "\(messages) sentences, \(commented) commented"
+    case .unknown: return String(localized: "not checked")
+    case .checking: return String(localized: "checking…")
+    case .online(let messages, let commented): return String(localized: "\(messages) sentences, \(commented) commented")
     case .offline(let detail): return detail
     case .notConfigured(let detail): return detail
     }
@@ -160,13 +160,13 @@ final class ServerStore {
     guard let server = connection(id: id) else { return }
     statuses[id] = .checking
     guard let base = server.base else {
-      statuses[id] = .notConfigured("the endpoint is not a usable http(s) URL")
+      statuses[id] = .notConfigured(String(localized: "the endpoint is not a usable http(s) URL"))
       checkedAt[id] = Date()
       return
     }
     guard let key = server.resolvedKey else {
       statuses[id] = .notConfigured(
-        "no key: add one to this server, or set \(ServerKeychain.sharedKeyName)")
+        String(localized: "no key: add one to this server, or set \(ServerKeychain.sharedKeyName)"))
       checkedAt[id] = Date()
       return
     }

@@ -84,7 +84,7 @@ private struct ImportedDBInfoView: View {
   @ViewBuilder
   private func header(db: ImportedTranslationDB) -> some View {
     RichHeader(
-      db.isImported ? (db.fileURL?.lastPathComponent ?? "Translation DB") : "Translation DB",
+      db.isImported ? (db.fileURL?.lastPathComponent ?? String(localized: "Translation DB")) : String(localized: "Translation DB"),
       meta: db.isImported ? [metaLine(db: db)] : [],
       systemImage: "cylinder.split.1x2", hue: db.isImported ? .green : .gray,
       status: db.isScanning ? .working : .idle)
@@ -96,7 +96,7 @@ private struct ImportedDBInfoView: View {
       parts.append(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))
     }
     if !db.fileExists {
-      parts.append("file missing")
+      parts.append(String(localized: "file missing"))
     }
     if parts.isEmpty {
       parts.append(db.fileURL?.path ?? "")

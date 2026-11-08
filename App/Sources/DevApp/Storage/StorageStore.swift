@@ -191,7 +191,7 @@ final class StorageStore {
       guard item.category == .virtualMachines, item.group != "Free Space Inside Disks",
             item.id != "docker:prune" else { return }
       let name = (item.title as NSString).deletingPathExtension
-      item.lockReason = runnerNames.contains(name) ? "Workflows use it as a CI runner" : nil
+      item.lockReason = runnerNames.contains(name) ? String(localized: "Workflows use it as a CI runner") : nil
     }
     for index in userItems.indices { lock(&userItems[index]) }
     for index in systemItems.indices { lock(&systemItems[index]) }
@@ -233,10 +233,10 @@ final class StorageStore {
 
     var title: String {
       switch self {
-      case .none: "None"
-      case .month: "Untouched for a month"
-      case .week: "Untouched for a week"
-      case .all: "All"
+      case .none: String(localized: "None")
+      case .month: String(localized: "Untouched for a month")
+      case .week: String(localized: "Untouched for a week")
+      case .all: String(localized: "All")
       }
     }
 
@@ -335,7 +335,7 @@ final class StorageStore {
     userItems = []
     discoveredCount = 0
     measuredCount = 0
-    phase = .scanning("Starting…")
+    phase = .scanning(String(localized: "Starting…"))
     hasFullDiskAccess = FullDiskAccess.isGranted
     let stream = StorageScanner.scan(
       roots: nil, runningBundle: Bundle.main.bundlePath, fullDiskAccess: hasFullDiskAccess)
@@ -382,7 +382,7 @@ final class StorageStore {
     // The normal scan's counts mean nothing here; the phase text carries it.
     discoveredCount = 0
     measuredCount = 0
-    phase = .scanning("Waiting for your password…")
+    phase = .scanning(String(localized: "Waiting for your password…"))
     let known = userItems
     Task {
       do {
@@ -391,8 +391,8 @@ final class StorageStore {
           // nothing says when the password was typed, so the text names both.
           Task { @MainActor in
             guard case .scanning = self.phase else { return }
-            self.phase = .scanning(counted.map { "Measuring your home folder… \($0.byteString)" }
-              ?? "Waiting for the password and the root measurement…")
+            self.phase = .scanning(counted.map { String(localized: "Measuring your home folder… \($0.byteString)") }
+              ?? String(localized: "Waiting for the password and the root measurement…"))
           }
         }
         systemItems = found
@@ -497,7 +497,7 @@ final class StorageStore {
     Task {
       guard
         let url = await KitDesktop.chooseSaveLocation(
-          title: "Export Selection", name: "Storage selection \(Date().formatted(.iso8601.year().month().day())).md",
+          title: String(localized: "Export Selection"), name: "Storage selection \(Date().formatted(.iso8601.year().month().day())).md",
           directory: FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first)
       else { return }
       do {

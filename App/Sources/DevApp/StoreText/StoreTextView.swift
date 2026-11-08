@@ -144,7 +144,7 @@ struct StoreTextView: View {
       KitSection("Review", systemImage: "checkmark.seal", hue: .green) {
         fieldRow(.reviewNotes)
       }
-      KitSection("Version", meta: version ?? "None yet", systemImage: "number", hue: .orange) {
+      KitSection("Version", meta: version ?? String(localized: "None yet"), systemImage: "number", hue: .orange) {
         if !versions.isEmpty {
           KitPicker(
             "Version", selection: Binding(get: { version ?? "" }, set: { version = $0 }),
@@ -306,7 +306,7 @@ struct StoreTextView: View {
   private var prompt: String {
     switch field {
     case .category: "DEVELOPER_TOOLS"
-    case .copyright: "2026 Your Name"
+    case .copyright: String(localized: "2026 Your Name")
     case .supportURL, .marketingURL, .privacyURL: "https://"
     default: field.title
     }
@@ -460,9 +460,9 @@ struct StoreTextView: View {
 
   private var vaultNote: String {
     switch vaultStatus {
-    case .unknown, .kept: "They're also encrypted in your vault, for your other devices."
-    case .notInVault: "This project isn't in your vault, so they're only on this device."
-    case .failed(let message): "They're only on this device for now: the vault said \(message)"
+    case .unknown, .kept: String(localized: "They're also encrypted in your vault, for your other devices.")
+    case .notInVault: String(localized: "This project isn't in your vault, so they're only on this device.")
+    case .failed(let message): String(localized: "They're only on this device for now: the vault said \(message)")
     }
   }
 
@@ -486,7 +486,7 @@ struct StoreTextView: View {
     guard case .kept(let report) = status, report.changedFiles else { return }
     if buffer == typed { bufferAddress = nil }
     if report.conflicts > 0 {
-      notice = "Two devices changed the same text. Both versions are in it, between conflict markers: pick one and remove the markers."
+      notice = String(localized: "Two devices changed the same text. Both versions are in it, between conflict markers: pick one and remove the markers.")
     }
     reload()
   }

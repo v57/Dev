@@ -29,12 +29,12 @@ struct StoreClearCounts: Equatable {
   /// One line naming every table, in the order 7.5 lists them.
   var summary: String {
     [
-      "\(slots) slot record\(slots == 1 ? "" : "s")",
-      "\(journal) journal row\(journal == 1 ? "" : "s")",
-      "\(contextDocs) context document\(contextDocs == 1 ? "" : "s")",
-      "\(contextEdits) context edit\(contextEdits == 1 ? "" : "s")",
-      "\(memory) memory \(memory == 1 ? "entry" : "entries")",
-      "\(cursors) run cursor\(cursors == 1 ? "" : "s")",
+      String(localized: "\(slots) slot record\(slots == 1 ? "" : "s")"),
+      String(localized: "\(journal) journal row\(journal == 1 ? "" : "s")"),
+      String(localized: "\(contextDocs) context document\(contextDocs == 1 ? "" : "s")"),
+      String(localized: "\(contextEdits) context edit\(contextEdits == 1 ? "" : "s")"),
+      String(localized: "\(memory) memory \(memory == 1 ? "entry" : "entries")"),
+      String(localized: "\(cursors) run cursor\(cursors == 1 ? "" : "s")"),
     ].joined(separator: ", ")
   }
 }

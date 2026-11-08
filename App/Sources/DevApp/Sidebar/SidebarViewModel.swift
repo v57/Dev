@@ -31,12 +31,12 @@ nonisolated enum DevTool: String, Hashable, CaseIterable, Identifiable, Sendable
 
   var title: String {
     switch self {
-    case .overview: return "Overview"
-    case .localization: return "Localization"
-    case .icon: return "App Icon"
-    case .screenshots: return "Screenshots"
-    case .workflows: return "Workflows"
-    case .storeText: return "Store Text"
+    case .overview: return String(localized: "Overview")
+    case .localization: return String(localized: "Localization")
+    case .icon: return String(localized: "App Icon")
+    case .screenshots: return String(localized: "Screenshots")
+    case .workflows: return String(localized: "Workflows")
+    case .storeText: return String(localized: "Store Text")
     }
   }
 
@@ -548,7 +548,7 @@ final class SidebarViewModel {
   func addProjectsFromPanel() {
     Task {
       let urls = await KitDesktop.chooseFiles(
-        prompt: "Add", message: "Choose a project folder, a folder of repos, or a String Catalog.",
+        prompt: String(localized: "Add"), message: String(localized: "Choose a project folder, a folder of repos, or a String Catalog."),
         contentTypes: [.folder, .init(filenameExtension: "xcstrings") ?? .data], canChooseFolders: true,
         allowsMultipleSelection: true)
       guard !urls.isEmpty else { return }

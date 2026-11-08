@@ -902,11 +902,11 @@ extension Translation {
     private func caption(_ cacheable: Cacheable, at edge: Edge) -> String {
       switch edge {
       case .start:
-        "cacheable prefix ends here, with the system message: \(cacheable.characters) characters of what was sent are cacheable, the user message is not"
+        String(localized: "cacheable prefix ends here, with the system message: \(cacheable.characters) characters of what was sent are cacheable, the user message is not")
       case .cut:
-        "cacheable prefix ends here: \(cacheable.characters) characters of what was sent, system message included"
+        String(localized: "cacheable prefix ends here: \(cacheable.characters) characters of what was sent, system message included")
       case .end:
-        "cacheable prefix ends here: everything this request sent is cacheable (\(cacheable.characters) characters)"
+        String(localized: "cacheable prefix ends here: everything this request sent is cacheable (\(cacheable.characters) characters)")
       }
     }
 

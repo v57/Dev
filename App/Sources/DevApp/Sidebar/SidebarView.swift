@@ -51,7 +51,7 @@ struct SidebarView: View {
     @Bindable var model = model
     KitSidebar(selection: $model.selection, searchText: $search, searchPrompt: "Search Projects") {
       // The window's account (hidden while Personal is the only one).
-      VaultAccountPicker(meta: "\(model.projects.count) project\(model.projects.count == 1 ? "" : "s")")
+      VaultAccountPicker(meta: String(localized: "\(model.projects.count) project\(model.projects.count == 1 ? "" : "s")"))
       // A long Projects list keeps its title in view (the section does it), and the sections it pushes off wait as
       // titles at the bottom.
       projectsSection
@@ -128,8 +128,8 @@ struct SidebarView: View {
     .kitConfirmation(
       installs.question.map { "\($0)" } ?? "",
       isPresented: Binding(get: { installs.question != nil }, set: { if !$0, installs.question != nil { installs.answer(false) } }),
-      message: "The app quits as if you chose Quit, then the new build replaces it and opens in the background.",
-      systemImage: "arrow.down.app", confirm: "Quit and Install", role: nil
+      message: String(localized: "The app quits as if you chose Quit, then the new build replaces it and opens in the background."),
+      systemImage: "arrow.down.app", confirm: String(localized: "Quit and Install"), role: nil
     ) {
       installs.answer(true)
     }
@@ -237,14 +237,14 @@ struct SidebarView: View {
   /// "Remove Shell from the list?", "Remove 3 projects from the list?"
   private var removalTitle: String {
     guard let removal else { return "" }
-    return removal.count == 1 ? "Remove \(removal[0].name) from the list?" : "Remove \(removal.count) projects from the list?"
+    return removal.count == 1 ? String(localized: "Remove \(removal[0].name) from the list?") : String(localized: "Remove \(removal.count) projects from the list?")
   }
 
   private var removalMessage: String {
     guard let removal, removal.contains(where: { model.holdsRecords($0.id) }) else {
-      return "Their folders and catalogs stay on disk, and Git and the other apps keep them."
+      return String(localized: "Their folders and catalogs stay on disk, and Git and the other apps keep them.")
     }
-    return "Dev can keep which strings were reviewed, the notes, the width limits and the edit history, and bring them back when the folder is added again. The translations stay in the catalogs and the translation memory either way."
+    return String(localized: "Dev can keep which strings were reviewed, the notes, the width limits and the edit history, and bring them back when the folder is added again. The translations stay in the catalogs and the translation memory either way.")
   }
 
   /// Keep (the default) or delete what Dev holds; just Remove when it holds nothing.
@@ -357,21 +357,21 @@ private struct ProjectTrailing: View {
   static func subtitle(_ install: AppInstalls.Phase) -> String? {
     switch install {
     case .queued(let position):
-      return position == 1 ? "Queued · next" : "Queued · \(position.formatted(.number))\(ordinal(position))"
+      return position == 1 ? String(localized: "Queued · next") : String(localized: "Queued · \(position.formatted(.number))\(ordinal(position))")
     case .installing(let step, let progress):
       let verb =
         switch step {
-        case "Archive"?: "Building"
-        case "Quit"?: "Quitting"
-        case "Install"?: "Installing"
-        case "Open"?: "Opening"
-        default: "Preparing"
+        case "Archive"?: String(localized: "Building")
+        case "Quit"?: String(localized: "Quitting")
+        case "Install"?: String(localized: "Installing")
+        case "Open"?: String(localized: "Opening")
+        default: String(localized: "Preparing")
         }
       guard let remaining = progress?.remaining, remaining >= 1 else { return verb }
       let left = Duration.seconds(remaining).formatted(.units(allowed: [.hours, .minutes, .seconds], width: .abbreviated, maximumUnitCount: 1))
-      return "\(verb) · \(left) left"
+      return String(localized: "\(verb) · \(left) left")
     case .failed:
-      return "Install failed"
+      return String(localized: "Install failed")
     case .none, .current, .available:
       return nil
     }

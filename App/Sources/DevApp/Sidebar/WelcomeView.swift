@@ -99,8 +99,8 @@ struct WelcomeView: View {
   /// "Today", "Yesterday", or the date.
   private static func day(_ date: Date) -> String {
     let calendar = Calendar.current
-    if calendar.isDateInToday(date) { return "Today" }
-    if calendar.isDateInYesterday(date) { return "Yesterday" }
+    if calendar.isDateInToday(date) { return String(localized: "Today") }
+    if calendar.isDateInYesterday(date) { return String(localized: "Yesterday") }
     return date.formatted(date: .abbreviated, time: .omitted)
   }
 }

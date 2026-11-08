@@ -1531,11 +1531,11 @@ enum Translation {
     var id: String { rawValue }
     var title: String {
       switch self {
-      case .prepare: "Prepare"
-      case .prelearn: "Prelearn"
-      case .learn: "Learn"
-      case .vertical: "Translate"
-      case .horizontal: "Translate by row"
+      case .prepare: String(localized: "Prepare")
+      case .prelearn: String(localized: "Prelearn")
+      case .learn: String(localized: "Learn")
+      case .vertical: String(localized: "Translate")
+      case .horizontal: String(localized: "Translate by row")
       }
     }
   }

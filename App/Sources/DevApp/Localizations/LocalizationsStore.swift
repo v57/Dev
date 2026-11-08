@@ -223,10 +223,10 @@ final class LocalizationsStore {
   func chooseRepo() {
     Task {
       guard let url = await KitDesktop.chooseFolders(
-        prompt: "Choose", message: "Choose the translations repository (it holds Scripts/build and manifest.json)"
+        prompt: String(localized: "Choose"), message: String(localized: "Choose the translations repository (it holds Scripts/build and manifest.json)")
       ).first else { return }
       guard LocalizationsRepo.isRepo(url) else {
-        error = "\(url.lastPathComponent) has no Scripts/build and manifest.json: it isn't a translations repository."
+        error = String(localized: "\(url.lastPathComponent) has no Scripts/build and manifest.json: it isn't a translations repository.")
         return
       }
       state.repo = url.standardizedFileURL.path
@@ -335,10 +335,10 @@ final class LocalizationsStore {
   func scan(_ names: [String]? = nil) {
     let targets = state.apps.filter { names?.contains($0.name) ?? $0.included }
     guard let repoURL, !targets.isEmpty else { return }
-    start("Scanning") { [self] in
+    start(String(localized: "Scanning")) { [self] in
       for app in targets {
         guard !Task.isCancelled else { break }
-        activity = "Building \(app.name)"
+        activity = String(localized: "Building \(app.name)")
         if let scan = await build(app) {
           state.scans[app.name] = scan
           say("\(app.name): \(scan.modules.map { "\($0.module) \($0.keys.count)" }.joined(separator: ", "))")
@@ -347,7 +347,7 @@ final class LocalizationsStore {
         }
       }
       replan()
-      activity = "Writing catalogs"
+      activity = String(localized: "Writing catalogs")
       writeCatalogs(in: repoURL)
     }
   }
@@ -371,7 +371,7 @@ final class LocalizationsStore {
     ) { line in lines.add(line) }
     for line in lines.take() where line.contains("error:") && !line.contains("exit code 0 but produced no further output") { say("\(app.name): \(line)") }
     guard status == 0 else {
-      if !Task.isCancelled { error = "\(app.name) didn't build (xcodebuild exited with \(status)). The log has its errors." }
+      if !Task.isCancelled { error = String(localized: "\(app.name) didn't build (xcodebuild exited with \(status)). The log has its errors.") }
       return nil
     }
     let scheme = app
@@ -408,7 +408,7 @@ final class LocalizationsStore {
       }
       say("\(source.name): \(counts.total) keys (+\(counts.added), stale \(counts.staled))")
     }
-    summary = written == 0 ? "Every catalog is current" : "Wrote \(written) catalog\(written == 1 ? "" : "s")"
+    summary = written == 0 ? String(localized: "Every catalog is current") : String(localized: "Wrote \(written) catalog\(written == 1 ? "" : "s")")
   }
 
   // MARK: translate
@@ -426,11 +426,11 @@ final class LocalizationsStore {
     }
     let languages = state.languages
     guard !sources.isEmpty, !languages.isEmpty else { return }
-    start("Translating") { [self] in
+    start(String(localized: "Translating")) { [self] in
       var done = 0
       for name in sources {
         guard !Task.isCancelled else { break }
-        activity = "Translating \(name)"
+        activity = String(localized: "Translating \(name)")
         let translator = LocalizationsTranslator(shell: shell)
         self.translator = translator
         do {
@@ -446,7 +446,7 @@ final class LocalizationsStore {
         }
         refreshProgress()
       }
-      summary = "Translated \(done) of \(sources.count) source\(sources.count == 1 ? "" : "s")"
+      summary = String(localized: "Translated \(done) of \(sources.count) source\(sources.count == 1 ? "" : "s")")
     }
   }
 
@@ -456,7 +456,7 @@ final class LocalizationsStore {
   /// that changed, with `manifest.json` in the first: `<Source>: <what changed>`.
   func buildAndCommit() {
     guard let repoURL else { return }
-    start("Building") { [self] in
+    start(String(localized: "Building")) { [self] in
       let process = LocalizationsProcess()
       self.process = process
       let lines = LineSink()
@@ -465,10 +465,10 @@ final class LocalizationsStore {
       ) { line in lines.add(line) }
       lines.take().forEach(say)
       guard status == 0 else {
-        error = "Scripts/build failed (exit \(status))."
+        error = String(localized: "Scripts/build failed (exit \(status)).")
         return
       }
-      activity = "Committing"
+      activity = String(localized: "Committing")
       var commits = 0
       for source in LocalizationsRepo.sources(in: repoURL) {
         guard await hasChanges(source, in: repoURL) else { continue }
@@ -477,7 +477,7 @@ final class LocalizationsStore {
         guard await git(["add", "-A", "--"] + paths, in: repoURL) == 0,
           await git(["commit", "-q", "-m", message, "--"] + paths, in: repoURL) == 0
         else {
-          error = "Committing \(source) failed. The log has git's answer."
+          error = String(localized: "Committing \(source) failed. The log has git's answer.")
           return
         }
         say("committed: \(message)")
@@ -489,7 +489,7 @@ final class LocalizationsStore {
         _ = await git(["commit", "-q", "-m", "Rebuilt manifest.json", "--", "manifest.json"], in: repoURL)
         commits += 1
       }
-      summary = commits == 0 ? "Nothing to commit" : "Made \(commits) commit\(commits == 1 ? "" : "s")"
+      summary = commits == 0 ? String(localized: "Nothing to commit") : String(localized: "Made \(commits) commit\(commits == 1 ? "" : "s")")
     }
   }
 

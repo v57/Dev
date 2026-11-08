@@ -19,35 +19,35 @@ nonisolated enum ReleaseStep: String, CaseIterable, Identifiable, Sendable {
 
   var title: String {
     switch self {
-    case .check: return "Check"
-    case .build: return "Build"
-    case .test: return "Test"
-    case .screenshots: return "Screenshots"
-    case .archive: return "Archive"
-    case .direct: return "Sign & Notarize"
-    case .bundle: return "Result Archive"
-    case .github: return "GitHub Release"
+    case .check: return String(localized: "Check")
+    case .build: return String(localized: "Build")
+    case .test: return String(localized: "Test")
+    case .screenshots: return String(localized: "Screenshots")
+    case .archive: return String(localized: "Archive")
+    case .direct: return String(localized: "Sign & Notarize")
+    case .bundle: return String(localized: "Result Archive")
+    case .github: return String(localized: "GitHub Release")
     case .appstore: return "App Store Connect"
     case .googleplay: return "Google Play"
     case .msstore: return "Microsoft Store"
-    case .bump: return "Version Bump"
+    case .bump: return String(localized: "Version Bump")
     }
   }
 
   var detail: String {
     switch self {
-    case .check: return "Tools, certificate, notary profile, package pins, the build machine"
-    case .build: return "A release build"
-    case .test: return "The test scheme"
-    case .screenshots: return "The scenes in .dev/screenshots.json, or a UI test per locale"
-    case .archive: return "The release build, packaged: .xcarchive, .dmg, .zip, .tar.gz or .apk"
-    case .direct: return "Developer ID, notarized and stapled .zip and .dmg"
-    case .bundle: return "One zip of every platform's files, with a manifest"
-    case .github: return "A release with every platform's download files, Windows and Linux ones signed"
-    case .appstore: return "Uploads the archive"
-    case .googleplay: return "Uploads the Android build"
-    case .msstore: return "Submits the Windows build"
-    case .bump: return "Sets the project's version and drafts its changelog from git log"
+    case .check: return String(localized: "Tools, certificate, notary profile, package pins, the build machine")
+    case .build: return String(localized: "A release build")
+    case .test: return String(localized: "The test scheme")
+    case .screenshots: return String(localized: "The scenes in .dev/screenshots.json, or a UI test per locale")
+    case .archive: return String(localized: "The release build, packaged: .xcarchive, .dmg, .zip, .tar.gz or .apk")
+    case .direct: return String(localized: "Developer ID, notarized and stapled .zip and .dmg")
+    case .bundle: return String(localized: "One zip of every platform's files, with a manifest")
+    case .github: return String(localized: "A release with every platform's download files, Windows and Linux ones signed")
+    case .appstore: return String(localized: "Uploads the archive")
+    case .googleplay: return String(localized: "Uploads the Android build")
+    case .msstore: return String(localized: "Submits the Windows build")
+    case .bump: return String(localized: "Sets the project's version and drafts its changelog from git log")
     }
   }
 
@@ -55,11 +55,11 @@ nonisolated enum ReleaseStep: String, CaseIterable, Identifiable, Sendable {
   /// ask before they run.
   var publishes: String? {
     switch self {
-    case .direct: return "uploads the app to Apple's notary service"
-    case .github: return "creates a GitHub release with the download files"
-    case .appstore: return "uploads a build to App Store Connect"
-    case .googleplay: return "uploads a build to Google Play"
-    case .msstore: return "submits a build to the Microsoft Store"
+    case .direct: return String(localized: "uploads the app to Apple's notary service")
+    case .github: return String(localized: "creates a GitHub release with the download files")
+    case .appstore: return String(localized: "uploads a build to App Store Connect")
+    case .googleplay: return String(localized: "uploads a build to Google Play")
+    case .msstore: return String(localized: "submits a build to the Microsoft Store")
     default: return nil
     }
   }

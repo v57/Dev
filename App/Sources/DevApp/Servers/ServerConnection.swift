@@ -90,9 +90,9 @@ nonisolated struct ServerConnection: Hashable, Sendable, Identifiable {
 
     var label: String {
       switch self {
-      case .server: return "key: this server's own"
-      case .shared: return "key: \(ServerKeychain.sharedKeyName)"
-      case .missing: return "key: not configured"
+      case .server: return String(localized: "key: this server's own")
+      case .shared: return String(localized: "key: \(ServerKeychain.sharedKeyName)")
+      case .missing: return String(localized: "key: not configured")
       }
     }
   }

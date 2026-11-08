@@ -100,22 +100,22 @@ extension Translation {
       /// nothing — while the five-step plan's line stays exactly what it always was.
       var summary: String {
         guard let state else {
-          guard let checkpoint, checkpoint > 0 else { return "No run yet" }
-          return "No run in this session · last run reached batch \(checkpoint)"
+          guard let checkpoint, checkpoint > 0 else { return String(localized: "No run yet") }
+          return String(localized: "No run in this session · last run reached batch \(checkpoint)")
         }
         var line =
           switch state {
-          case .idle: "Ready"
-          case .scanning: "Scanning"
-          case .running: "Running"
-          case .paused: "Paused"
-          case .cancelled: "Cancelled"
-          case .finished: "Finished"
+          case .idle: String(localized: "Ready")
+          case .scanning: String(localized: "Scanning")
+          case .running: String(localized: "Running")
+          case .paused: String(localized: "Paused")
+          case .cancelled: String(localized: "Cancelled")
+          case .finished: String(localized: "Finished")
           }
-        if let mode, mode != .full { line += " · \(mode.title)" }
-        if let step { line += " · \(step.title)" }
-        if total > 0 { line += " · \(done)/\(total)" }
-        if failures > 0 { line += " · \(failures) failed" }
+        if let mode, mode != .full { line += String(localized: " · \(mode.title)") }
+        if let step { line += String(localized: " · \(step.title)") }
+        if total > 0 { line += String(localized: " · \(done)/\(total)") }
+        if failures > 0 { line += String(localized: " · \(failures) failed") }
         return line
       }
       init() {}
@@ -146,7 +146,7 @@ extension Translation {
     var museNote: String? {
       guard runner.router.isConfigured else { return Self.notConfigured }
       guard let until = runner.router.cooldownUntil else { return nil }
-      return "\(runner.router.modelName) is parked until \(until.formatted(date: .omitted, time: .shortened)); a run waits for it."
+      return String(localized: "\(runner.router.modelName) is parked until \(until.formatted(date: .omitted, time: .shortened)); a run waits for it.")
     }
 
     /// True when the one button can do anything at all: a model is configured.
@@ -161,7 +161,7 @@ extension Translation {
     var canStartRun: Bool { canStart && !status.isRunning }
 
     private static var notConfigured: String {
-      ModelSettings.problem ?? "No translation model is configured."
+      ModelSettings.problem ?? String(localized: "No translation model is configured.")
     }
 
     // MARK: - runs
@@ -839,7 +839,7 @@ extension Translation {
       }
       await publish()
       guard let app else {
-        error = "No catalog is open for this project, so there is nothing to save into."
+        error = String(localized: "No catalog is open for this project, so there is nothing to save into.")
         return
       }
       await app.save()

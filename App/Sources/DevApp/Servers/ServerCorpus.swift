@@ -281,25 +281,25 @@ final class ServerCorpus {
   /// that landed, so it must never read as a server-side search.
   var searchNote: String? {
     guard !isEmptyQuery else { return nil }
-    if let error { return "search stopped: \(error)" }
-    if isSearching { return "reading page after page — \(rows.count) lines in hand so far" }
+    if let error { return String(localized: "search stopped: \(error)") }
+    if isSearching { return String(localized: "reading page after page — \(rows.count) lines in hand so far") }
     if !more {
       return visibleRows.isEmpty
-        ? "no match in this server's \(rows.count) lines"
-        : "\(visibleRows.count) matching line\(visibleRows.count == 1 ? "" : "s") in the whole corpus (\(rows.count) lines)"
+        ? String(localized: "no match in this server's \(rows.count) lines")
+        : String(localized: "\(visibleRows.count) matching line\(visibleRows.count == 1 ? "" : "s") in the whole corpus (\(rows.count) lines)")
     }
     if visibleRows.isEmpty {
-      return "no match in the \(rows.count) lines read so far, and the server has more"
+      return String(localized: "no match in the \(rows.count) lines read so far, and the server has more")
     }
-    return "\(visibleRows.count) matching line\(visibleRows.count == 1 ? "" : "s") in the \(rows.count) lines read so far — the server has more, keep typing to read on"
+    return String(localized: "\(visibleRows.count) matching line\(visibleRows.count == 1 ? "" : "s") in the \(rows.count) lines read so far — the server has more, keep typing to read on")
   }
 
   /// The footer's own line: how much of the corpus is in hand.
   var footerLine: String {
-    let lines = "\(rows.count) line\(rows.count == 1 ? "" : "s")"
-    var parts = [isEmptyQuery ? lines : "\(visibleRows.count) of \(lines) shown"]
-    if pagesRead > 0 { parts.append("\(pagesRead) page\(pagesRead == 1 ? "" : "s")") }
-    parts.append(more ? "more on the server" : "the whole corpus is read")
+    let lines = String(localized: "\(rows.count) line\(rows.count == 1 ? "" : "s")")
+    var parts = [isEmptyQuery ? lines : String(localized: "\(visibleRows.count) of \(lines) shown")]
+    if pagesRead > 0 { parts.append(String(localized: "\(pagesRead) page\(pagesRead == 1 ? "" : "s")")) }
+    parts.append(more ? String(localized: "more on the server") : String(localized: "the whole corpus is read"))
     return parts.joined(separator: " · ")
   }
 
@@ -314,7 +314,7 @@ final class ServerCorpus {
     writing.insert(key)
     defer { writing.remove(key) }
     guard let client else {
-      notes[key] = "no server connection"
+      notes[key] = String(localized: "no server connection")
       return
     }
     do {
@@ -322,7 +322,7 @@ final class ServerCorpus {
         LocalizeValueEntry(source: row.source, locale: _locale, value: text, origin: "gold")
       ])
       guard result.written > 0 else {
-        notes[key] = "the server refused it: \(result.reason ?? "wrote nothing")"
+        notes[key] = String(localized: "the server refused it: \(result.reason ?? "wrote nothing")")
         return
       }
       rewrite(row.source) { held in
@@ -351,7 +351,7 @@ final class ServerCorpus {
     writing.insert(key)
     defer { writing.remove(key) }
     guard let client else {
-      notes[key] = "no server connection"
+      notes[key] = String(localized: "no server connection")
       return
     }
     do {

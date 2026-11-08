@@ -1078,8 +1078,8 @@ nonisolated enum Reconcile {
 
     var title: String {
       switch self {
-      case .project: return "Project rule (guides the translator)"
-      case .memo: return "Note only (stays in the app)"
+      case .project: return String(localized: "Project rule (guides the translator)")
+      case .memo: return String(localized: "Note only (stays in the app)")
       }
     }
   }

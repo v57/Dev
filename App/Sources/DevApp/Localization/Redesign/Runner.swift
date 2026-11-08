@@ -120,8 +120,8 @@ extension Translation {
       /// read as steps that did nothing, when they are absent by choice (8.1).
       var title: String {
         switch self {
-        case .full: "Full plan"
-        case .skipLearning: "Skip learning"
+        case .full: String(localized: "Full plan")
+        case .skipLearning: String(localized: "Skip learning")
         }
       }
     }
@@ -129,7 +129,7 @@ extension Translation {
     /// What the skip-learning Start says it does — ONE sentence, read by BOTH hosts that offer
     /// the button (the toolbar's and the pane's bar), so the two can never say different things.
     static let skipLearningHelp =
-      "Start without the learning steps: prepare, translate, then the row pass"
+      String(localized: "Start without the learning steps: prepare, translate, then the row pass")
 
     /// The ordered operations behind a run. Preparation is always first: scan the
     /// catalog, merge it into the in-memory catalog, load the session rows and
@@ -750,7 +750,7 @@ extension Translation {
           // The button checks this before a run starts (5.2), so meeting it here
           // means the credential went away: one failure, not one per batch.
           throw BackendError.notConfigured(
-            ModelSettings.problem ?? "No translation model is configured.")
+            ModelSettings.problem ?? String(localized: "No translation model is configured."))
         }
         try await runOperations(run)
         run.state = .finished

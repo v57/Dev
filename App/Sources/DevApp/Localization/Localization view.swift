@@ -114,7 +114,7 @@ struct LocalizationView: View {
     // the exact path and source language it will use.
     .kitConfirmation(
       generateTitle, isPresented: $isConfirmingGenerate, message: generateMessage, systemImage: "doc.badge.plus",
-      confirm: "Generate", role: nil
+      confirm: String(localized: "Generate"), role: nil
     ) {
       Task { await generate() }
     }
@@ -173,21 +173,22 @@ struct LocalizationView: View {
   /// The source language the generated catalog would be authored in — the
   /// project's own development region when it declares one.
   private var generateSourceLanguage: String {
-    generateLanguage ?? "the project's own"
+    generateLanguage ?? String(localized: "the project's own")
   }
 
   private var generateTitle: String {
-    "Create \(generateTarget?.lastPathComponent ?? "a catalog")?"
+    String(localized: "Create \(generateTarget?.lastPathComponent ?? "a catalog")?")
   }
 
   private var generateMessage: String {
     let path = generateTarget?.path ?? ""
-    return """
+    return String(
+      localized: """
     An empty String Catalog (\(generateSourceLanguage) source) is written to:
     \(path)
 
     The project's Swift packages and Xcode targets are then scanned for localizable strings, exactly like "Scan Strings" — you review the report and merge the keys it found. Nothing is overwritten: this is only offered while no catalog exists there.
-    """
+    """)
   }
 
   private func generate() async {
@@ -544,8 +545,8 @@ private struct AddLanguagesView: View {
 
   private var addTitle: String {
     selection.isEmpty
-      ? "Add Languages"
-      : "Add \(selection.count) Language\(selection.count == 1 ? "" : "s")"
+      ? String(localized: "Add Languages")
+      : String(localized: "Add \(selection.count) Language\(selection.count == 1 ? "" : "s")")
   }
 
   /// English name of a code, for the tooltip ("brx" alone says little).
@@ -630,7 +631,7 @@ private struct RowInspector: View {
 
   var body: some View {
     KitInspector(width: nil) {
-      InspectorHeader(row.sourceText, meta: ["Source", row.commentText], systemImage: "doc.text") {
+      InspectorHeader(row.sourceText, meta: [String(localized: "Source"), row.commentText], systemImage: "doc.text") {
         if row.key != row.sourceText { Chip(Text(row.key).monospaced(), style: .quiet) }
         if let width = row.maxWidth { Chip("Max \(width) chars") }
         if !row.isTranslatable { Chip("Not translated", hue: .gray) }
@@ -663,8 +664,8 @@ private struct RowInspector: View {
   private var translationsMeta: [String] {
     let languages = store.pickerLanguages
     let waiting = languages.filter { Self.state(of: cell(for: $0)) == .needsReview }.count
-    var parts = ["\(languages.count) language\(languages.count == 1 ? "" : "s")"]
-    if waiting > 0 { parts.append("\(waiting) need\(waiting == 1 ? "s" : "") review") }
+    var parts = [String(localized: "\(languages.count) language\(languages.count == 1 ? "" : "s")")]
+    if waiting > 0 { parts.append(String(localized: "\(waiting) need\(waiting == 1 ? "s" : "") review")) }
     return parts
   }
 
@@ -729,10 +730,10 @@ private struct RowInspector: View {
 
     var title: String {
       switch self {
-      case .reviewed: "Reviewed"
-      case .needsReview: "Needs Review"
-      case .machine: "Auto-reviewed"
-      case .missing: "Missing"
+      case .reviewed: String(localized: "Reviewed")
+      case .needsReview: String(localized: "Needs Review")
+      case .machine: String(localized: "Auto-reviewed")
+      case .missing: String(localized: "Missing")
       }
     }
 
@@ -814,7 +815,7 @@ private struct LongestCell: View {
     if row.longestLanguage.isEmpty {
       return row.longestText
     }
-    return "\(row.longestLanguage) · \(row.longestLength) chars\n\(row.longestText)"
+    return String(localized: "\(row.longestLanguage) · \(row.longestLength) chars\n\(row.longestText)")
   }
 }
 
@@ -1018,7 +1019,7 @@ private struct NoteEditorView: View {
   var body: some View {
     KitSheet(
       title: key,
-      meta: "A project rule is sent to the translator with every request for this project. A plain note is for you only.",
+      meta: String(localized: "A project rule is sent to the translator with every request for this project. A plain note is for you only."),
       systemImage: "text.bubble", hue: .yellow, width: 540
     ) {
       VStack(alignment: .leading, spacing: KitMetrics.gutter) {
@@ -1191,7 +1192,7 @@ private struct LanguageEditCell: View {
     if let record, let provenance = record.provenanceSummary {
       return provenance
     }
-    return liveText.isEmpty ? "Missing — click to add" : liveText
+    return liveText.isEmpty ? String(localized: "Missing — click to add") : liveText
   }
 
   private var hasOverride: Bool {
@@ -1243,11 +1244,11 @@ private struct PluralCellStatusAccessory: View {
     let lines = cell.pluralRecords
       .sorted { $0.key < $1.key }
       .map { category, record in
-        let state = record.state == .empty ? "empty" : record.state.displayName
+        let state = record.state == .empty ? String(localized: "empty") : record.state.displayName
         let editor = record.lastEditor.map { " — \($0)" } ?? ""
         return "\(category): \(state)\(editor)"
       }
-    return (["Plural forms"] + lines).joined(separator: "\n")
+    return ([String(localized: "Plural forms")] + lines).joined(separator: "\n")
   }
 }
 
@@ -1383,7 +1384,7 @@ private struct PluralFormRow: View {
     if let record = formRecord, let provenance = record.provenanceSummary {
       return "\(sourceReference)\n---\n\(provenance)"
     }
-    return liveText.isEmpty ? "Missing — click to add" : "\(sourceReference)\n---\n\(liveText)"
+    return liveText.isEmpty ? String(localized: "Missing — click to add") : "\(sourceReference)\n---\n\(liveText)"
   }
 
   private func commit() {
@@ -1446,9 +1447,9 @@ private struct PluralEditCell: View {
       } else {
         marker = value.isEmpty ? "·" : "?"
       }
-      return "\(marker) \(category): \(value.isEmpty ? "missing" : value)"
+      return "\(marker) \(category): \(value.isEmpty ? String(localized: "missing") : value)"
     }
-    return (["Plural forms — click to edit"] + lines).joined(separator: "\n")
+    return ([String(localized: "Plural forms — click to edit")] + lines).joined(separator: "\n")
   }
 }
 

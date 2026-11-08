@@ -37,10 +37,10 @@
     /// One line for a list: "Up to date", "3 of 5 scenes outdated".
     public var summary: String {
       let stale = scenes.filter { !$0.state.isCurrent }.count
-      if scenes.isEmpty { return "No scenes" }
-      if stale == 0 { return "Up to date" + (oldestBuild.map { " (build \($0))" } ?? "") }
-      if scenes.allSatisfy({ $0.state == .missing }) { return "Not captured yet" }
-      return "\(stale) of \(scenes.count) scenes need a new capture"
+      if scenes.isEmpty { return String(localized: "No scenes") }
+      if stale == 0 { return oldestBuild.map { String(localized: "Up to date (build \($0))") } ?? String(localized: "Up to date") }
+      if scenes.allSatisfy({ $0.state == .missing }) { return String(localized: "Not captured yet") }
+      return String(localized: "\(stale) of \(scenes.count) scenes need a new capture")
     }
 
     /// nil when the project has no `.dev/screenshots.json`.

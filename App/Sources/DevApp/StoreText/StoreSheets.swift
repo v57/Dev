@@ -16,7 +16,7 @@ import UniformTypeIdentifiers
 struct StoreSyncSheet: View {
   enum Mode: Equatable {
     case importing, publishing
-    var title: String { self == .importing ? "Import" : "Publish" }
+    var title: String { self == .importing ? String(localized: "Import") : String(localized: "Publish") }
   }
 
   let root: URL

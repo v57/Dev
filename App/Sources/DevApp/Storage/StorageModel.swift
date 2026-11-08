@@ -21,10 +21,10 @@ nonisolated enum StorageSection: String, CaseIterable, Identifiable, Codable, Se
 
   var title: String {
     switch self {
-    case .development: "Development"
+    case .development: String(localized: "Development")
     case .ai: "AI"
-    case .installed: "Applications"
-    case .other: "Other"
+    case .installed: String(localized: "Applications")
+    case .other: String(localized: "Other")
     case .ci: "CI"
     }
   }
@@ -104,69 +104,69 @@ nonisolated enum StorageCategory: String, CaseIterable, Identifiable, Codable, S
 
   var title: String {
     switch self {
-    case .xcode: "Xcode & Swift"
-    case .android: "Android & Gradle"
-    case .web: "Web & Browsers"
-    case .javascript: "Bun & Node"
+    case .xcode: String(localized: "Xcode & Swift")
+    case .android: String(localized: "Android & Gradle")
+    case .web: String(localized: "Web & Browsers")
+    case .javascript: String(localized: "Bun & Node")
     case .python: "Python"
-    case .languages: "Other Languages"
-    case .aiModels: "Models"
+    case .languages: String(localized: "Other Languages")
+    case .aiModels: String(localized: "Models")
     case .claude: "Claude"
     case .hermes: "Hermes"
     case .codex: "Codex"
     case .appleIntelligence: "Apple Intelligence"
-    case .aiTools: "Other AI Tools"
-    case .applications: "Uninstaller"
-    case .leftovers: "Leftovers"
-    case .systemApps: "System Applications"
+    case .aiTools: String(localized: "Other AI Tools")
+    case .applications: String(localized: "Uninstaller")
+    case .leftovers: String(localized: "Leftovers")
+    case .systemApps: String(localized: "System Applications")
     case .homebrew: "Homebrew"
-    case .jsGlobal: "JS Globals"
-    case .pythonTools: "Python Tools"
-    case .toolchains: "Toolchains"
-    case .games: "Games"
-    case .virtualMachines: "Virtual Machines"
-    case .databases: "Databases"
-    case .media: "Media"
-    case .system: "System"
-    case .caches: "Caches & Temp"
-    case .appData: "App Data"
-    case .installers: "Installers & Archives"
-    case .files: "Other Files"
-    case .trash: "Trash"
+    case .jsGlobal: String(localized: "JS Globals")
+    case .pythonTools: String(localized: "Python Tools")
+    case .toolchains: String(localized: "Toolchains")
+    case .games: String(localized: "Games")
+    case .virtualMachines: String(localized: "Virtual Machines")
+    case .databases: String(localized: "Databases")
+    case .media: String(localized: "Media")
+    case .system: String(localized: "System")
+    case .caches: String(localized: "Caches & Temp")
+    case .appData: String(localized: "App Data")
+    case .installers: String(localized: "Installers & Archives")
+    case .files: String(localized: "Other Files")
+    case .trash: String(localized: "Trash")
     }
   }
 
   var subtitle: String {
     switch self {
-    case .xcode: "DerivedData, simulators, device support, SwiftPM, project builds, Command Line Tools"
-    case .android: "Emulators, SDK, Gradle caches, JDKs, project builds"
-    case .web: "Browser caches and profiles, Playwright and test browsers"
-    case .javascript: "Project node_modules and build outputs, Bun, npm, pnpm and Yarn caches"
-    case .python: "Virtual environments, uv, pip, Poetry and conda caches"
-    case .languages: "Rust, Go, .NET, Dart, Ruby, Zig: caches and project builds"
-    case .aiModels: "ComfyUI models by type, Ollama, Hugging Face, LM Studio, loose model files"
-    case .claude: "Claude desktop VM and caches, Claude Code transcripts, scratchpads and versions"
-    case .hermes: "Hermes agent, its cache and temp files"
-    case .codex: "Codex CLI and app data"
-    case .appleIntelligence: "Siri, Translation, Dictation and Apple Intelligence models macOS downloaded"
-    case .aiTools: "Cursor, Gemini CLI and other assistants"
-    case .applications: "Apps with everything they keep in your Library: support files, caches, preferences, logs"
-    case .leftovers: "Files of apps you already deleted. Nothing uses them any more."
-    case .systemApps: "Apple's apps in /Applications, Xcode included"
-    case .homebrew: "Formulae, casks and Homebrew's download cache"
-    case .jsGlobal: "Global npm and Bun packages, npx, Node versions"
-    case .pythonTools: "pipx, pip --user packages, Python versions"
-    case .toolchains: "rustup, .NET SDK, rbenv and other installed toolchains"
-    case .games: "Steam games and caches"
-    case .virtualMachines: "UTM, Parallels, Docker, OrbStack, disk images"
-    case .databases: "Local database data directories and files"
-    case .media: "Videos, audio and large images"
-    case .system: "macOS volumes and assets, system logs and caches, swap, the rest of the disk"
-    case .caches: "App caches, logs and temporary files"
-    case .appData: "App support data and containers, iOS backups, Mail and Messages"
-    case .installers: "Disk images, packages and archives you downloaded"
-    case .files: "Your projects and files that fit no category"
-    case .trash: "What is already in the Trash"
+    case .xcode: String(localized: "DerivedData, simulators, device support, SwiftPM, project builds, Command Line Tools")
+    case .android: String(localized: "Emulators, SDK, Gradle caches, JDKs, project builds")
+    case .web: String(localized: "Browser caches and profiles, Playwright and test browsers")
+    case .javascript: String(localized: "Project node_modules and build outputs, Bun, npm, pnpm and Yarn caches")
+    case .python: String(localized: "Virtual environments, uv, pip, Poetry and conda caches")
+    case .languages: String(localized: "Rust, Go, .NET, Dart, Ruby, Zig: caches and project builds")
+    case .aiModels: String(localized: "ComfyUI models by type, Ollama, Hugging Face, LM Studio, loose model files")
+    case .claude: String(localized: "Claude desktop VM and caches, Claude Code transcripts, scratchpads and versions")
+    case .hermes: String(localized: "Hermes agent, its cache and temp files")
+    case .codex: String(localized: "Codex CLI and app data")
+    case .appleIntelligence: String(localized: "Siri, Translation, Dictation and Apple Intelligence models macOS downloaded")
+    case .aiTools: String(localized: "Cursor, Gemini CLI and other assistants")
+    case .applications: String(localized: "Apps with everything they keep in your Library: support files, caches, preferences, logs")
+    case .leftovers: String(localized: "Files of apps you already deleted. Nothing uses them any more.")
+    case .systemApps: String(localized: "Apple's apps in /Applications, Xcode included")
+    case .homebrew: String(localized: "Formulae, casks and Homebrew's download cache")
+    case .jsGlobal: String(localized: "Global npm and Bun packages, npx, Node versions")
+    case .pythonTools: String(localized: "pipx, pip --user packages, Python versions")
+    case .toolchains: String(localized: "rustup, .NET SDK, rbenv and other installed toolchains")
+    case .games: String(localized: "Steam games and caches")
+    case .virtualMachines: String(localized: "UTM, Parallels, Docker, OrbStack, disk images")
+    case .databases: String(localized: "Local database data directories and files")
+    case .media: String(localized: "Videos, audio and large images")
+    case .system: String(localized: "macOS volumes and assets, system logs and caches, swap, the rest of the disk")
+    case .caches: String(localized: "App caches, logs and temporary files")
+    case .appData: String(localized: "App support data and containers, iOS backups, Mail and Messages")
+    case .installers: String(localized: "Disk images, packages and archives you downloaded")
+    case .files: String(localized: "Your projects and files that fit no category")
+    case .trash: String(localized: "What is already in the Trash")
     }
   }
 
@@ -224,19 +224,19 @@ nonisolated enum StorageSafety: Int, Codable, Sendable, Comparable {
 
   var title: String {
     switch self {
-    case .lossless: "Lossless"
-    case .cache: "Cache"
-    case .rebuildable: "Rebuildable"
-    case .data: "Your data"
+    case .lossless: String(localized: "Lossless")
+    case .cache: String(localized: "Cache")
+    case .rebuildable: String(localized: "Rebuildable")
+    case .data: String(localized: "Your data")
     }
   }
 
   var help: String {
     switch self {
-    case .lossless: "Nothing is removed: identical copies share their space."
-    case .cache: "Refilled automatically by the tool that owns it."
-    case .rebuildable: "Rebuilt or re-downloaded the next time it is needed."
-    case .data: "Not recreated on its own — review before removing."
+    case .lossless: String(localized: "Nothing is removed: identical copies share their space.")
+    case .cache: String(localized: "Refilled automatically by the tool that owns it.")
+    case .rebuildable: String(localized: "Rebuilt or re-downloaded the next time it is needed.")
+    case .data: String(localized: "Not recreated on its own — review before removing.")
     }
   }
 }
@@ -262,10 +262,10 @@ nonisolated enum StorageCleanup: Codable, Sendable, Hashable {
 
   var verb: String {
     switch self {
-    case .trash, .trashContents: "Move to Trash"
-    case .cloneDuplicates: "Replace with clones"
+    case .trash, .trashContents: String(localized: "Move to Trash")
+    case .cloneDuplicates: String(localized: "Replace with clones")
     case .command(_, _, let verb), .adminCommand(_, let verb): verb
-    case .revealOnly: "Reveal only"
+    case .revealOnly: String(localized: "Reveal only")
     }
   }
 

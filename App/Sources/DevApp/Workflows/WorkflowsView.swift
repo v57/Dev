@@ -180,7 +180,7 @@ struct WorkflowsView: View {
   private func sidebar(_ list: [Workflow], selected: Workflow?) -> some View {
     KitList(selection: pick(selected)) {
       KitSection(
-        "Workflows", meta: list.count == 1 ? "1 workflow" : "\(list.count) workflows",
+        "Workflows", meta: list.count == 1 ? String(localized: "1 workflow") : String(localized: "\(list.count) workflows"),
         systemImage: "play", hue: .blue
       ) {
         ForEach(list) { workflow in
@@ -210,7 +210,7 @@ struct WorkflowsView: View {
       if let selected {
         let runs = store.runs(for: root).filter { $0.workflowID == selected.id }
         KitSection(
-          "Runs", meta: runs.isEmpty ? "None yet" : "\(runs.count) run\(runs.count == 1 ? "" : "s")",
+          "Runs", meta: runs.isEmpty ? String(localized: "None yet") : String(localized: "\(runs.count) run\(runs.count == 1 ? "" : "s")"),
           systemImage: "clock", hue: .gray, status: runs.first?.state == .running ? .working : .idle
         ) {
           if runs.isEmpty {
@@ -235,7 +235,7 @@ struct WorkflowsView: View {
       let releases = store.runs(for: root).filter { !$0.files.isEmpty }
       if !releases.isEmpty {
         KitSection(
-          "Releases", meta: releases.count == 1 ? "1 run with files" : "\(releases.count) runs with files",
+          "Releases", meta: releases.count == 1 ? String(localized: "1 run with files") : String(localized: "\(releases.count) runs with files"),
           systemImage: "shippingbox", hue: .green
         ) {
           ForEach(releases) { run in
@@ -298,12 +298,12 @@ struct WorkflowsView: View {
 
   private func runNote(_ run: WorkflowRun) -> String {
     switch run.state {
-    case .running: return "Running · \(run.commit ?? "")"
+    case .running: return String(localized: "Running · \(run.commit ?? "")")
     case .failed:
       let step = run.steps.first { $0.state == .failed }
-      return "Failed · \(step?.name ?? "") · \(run.startedAt.formatted(date: .abbreviated, time: .omitted))"
-    case .passed: return "Passed · \(run.startedAt.formatted(date: .abbreviated, time: .omitted))"
-    case .cancelled: return "Cancelled · \(run.startedAt.formatted(date: .abbreviated, time: .omitted))"
+      return String(localized: "Failed · \(step?.name ?? "") · \(run.startedAt.formatted(date: .abbreviated, time: .omitted))")
+    case .passed: return String(localized: "Passed · \(run.startedAt.formatted(date: .abbreviated, time: .omitted))")
+    case .cancelled: return String(localized: "Cancelled · \(run.startedAt.formatted(date: .abbreviated, time: .omitted))")
     }
   }
 
@@ -544,7 +544,7 @@ struct WorkflowsView: View {
     if let step, let index = workflow.steps.firstIndex(of: step) {
       KitInspector(width: nil) {
         InspectorHeader(
-          step.name, meta: ["Step \(index + 1) of \(workflow.steps.count)", step.runnerTitle],
+          step.name, meta: [String(localized: "Step \(index + 1) of \(workflow.steps.count)"), step.runnerTitle],
           systemImage: step.kind == .command ? "terminal" : "hammer",
           status: run.flatMap { $0.steps.first { $0.id == step.id } }.map { Self.status(for: $0.state) } ?? .idle)
         FormCard {

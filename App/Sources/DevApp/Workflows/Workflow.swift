@@ -33,10 +33,10 @@ nonisolated struct Workflow: Codable, Hashable, Identifiable, Sendable {
 
     var summary: String {
       var parts: [String] = []
-      if let branch, !branch.isEmpty { parts.append("Every commit on \(branch)") }
-      if let tag, !tag.isEmpty { parts.append("Tags matching \(tag)") }
-      if let daily, !daily.isEmpty { parts.append("Every day at \(daily)") }
-      return parts.isEmpty ? "Run by hand" : parts.joined(separator: " · ")
+      if let branch, !branch.isEmpty { parts.append(String(localized: "Every commit on \(branch)")) }
+      if let tag, !tag.isEmpty { parts.append(String(localized: "Tags matching \(tag)")) }
+      if let daily, !daily.isEmpty { parts.append(String(localized: "Every day at \(daily)")) }
+      return parts.isEmpty ? String(localized: "Run by hand") : parts.joined(separator: " · ")
     }
   }
 
@@ -69,7 +69,7 @@ nonisolated struct Workflow: Codable, Hashable, Identifiable, Sendable {
     var releasePlatform: ReleasePlatform? { platform.flatMap(ReleasePlatform.init) }
 
     var runnerTitle: String {
-      if let vmName { return "\(vmName) (VM)" }
+      if let vmName { return String(localized: "\(vmName) (VM)") }
       return DevDesktop.thisComputer
     }
 
@@ -218,7 +218,7 @@ nonisolated struct WorkflowRun: Codable, Hashable, Identifiable, Sendable {
     var id: String { path }
     var url: URL { URL(fileURLWithPath: path) }
     var name: String { url.lastPathComponent }
-    var platformTitle: String { ReleasePlatform(rawValue: platform)?.title ?? "All platforms" }
+    var platformTitle: String { ReleasePlatform(rawValue: platform)?.title ?? String(localized: "All platforms") }
     var isFolder: Bool {
       kind == "archive" || kind == "tests" || kind == "screenshots" || (kind == "bundle" && url.pathExtension != "zip")
     }

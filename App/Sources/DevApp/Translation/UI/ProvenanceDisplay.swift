@@ -32,11 +32,11 @@ extension Provider {
   /// retired producers kept only so historical records still render.
   var displayName: String {
     switch self {
-    case .manual: return "Human"
+    case .manual: return String(localized: "Human")
     case .apple: return "Apple Translation"
     case .ollama: return "Ollama"
-    case .deepseek: return "AI model"
-    case .importedDB: return "Imported DB"
+    case .deepseek: return String(localized: "AI model")
+    case .importedDB: return String(localized: "Imported DB")
     }
   }
 }
@@ -47,9 +47,9 @@ extension TranslationState {
   /// Short state title for dots and tooltips.
   var displayName: String {
     switch self {
-    case .empty: return "Empty"
-    case .needs_review: return "Needs review"
-    case .reviewed: return "Reviewed"
+    case .empty: return String(localized: "Empty")
+    case .needs_review: return String(localized: "Needs review")
+    case .reviewed: return String(localized: "Reviewed")
     }
   }
 }
@@ -63,15 +63,15 @@ extension ContextVersions {
   /// was written" and is not worth showing.
   var provenanceText: String? {
     let parts = [
-      global.map { "global \($0)" },
-      project.map { "project \($0)" },
-      language.map { "language \($0)" },
+      global.map { String(localized: "global \($0)") },
+      project.map { String(localized: "project \($0)") },
+      language.map { String(localized: "language \($0)") },
     ].compactMap { $0 }
     guard !parts.isEmpty else { return nil }
     if parts.count == 1, global == 0 {
       return nil
     }
-    return "Context versions — " + parts.joined(separator: ", ")
+    return String(localized: "Context versions — \(parts.joined(separator: ", "))")
   }
 }
 
@@ -92,17 +92,17 @@ extension TranslationRecord {
       let app = lastEditor.flatMap {
         $0.hasPrefix(prefix) ? String($0.dropFirst(prefix.count)) : nil
       }
-      producer = "Imported translation DB — \(app ?? "source")"
+      producer = String(localized: "Imported translation DB — \(app ?? "source")")
     } else if lastEditor == ProvenanceMarkers.translationMemory {
       producer = state == .reviewed
-        ? "Translation memory — human-confirmed copy (gold)"
-        : "Translation memory — machine hint"
+        ? String(localized: "Translation memory — human-confirmed copy (gold)")
+        : String(localized: "Translation memory — machine hint")
     } else if let editor = lastEditor, !editor.isEmpty {
-      producer = provider == .manual ? "Human edit — \(editor)" : editor
+      producer = provider == .manual ? String(localized: "Human edit — \(editor)") : editor
     } else if let provider {
       producer = provider.displayName
     } else {
-      producer = "Imported from catalog"
+      producer = String(localized: "Imported from catalog")
     }
 
     var lines = [producer]
@@ -113,11 +113,11 @@ extension TranslationRecord {
     case .empty:
       break
     case .needs_review:
-      lines.append("Machine output — needs review")
+      lines.append(String(localized: "Machine output — needs review"))
     case .reviewed:
       lines.append(autoReviewed
-        ? "Automatically reviewed — click the auto badge to confirm"
-        : "Reviewed")
+        ? String(localized: "Automatically reviewed — click the auto badge to confirm")
+        : String(localized: "Reviewed"))
     }
     return lines.joined(separator: "\n")
   }

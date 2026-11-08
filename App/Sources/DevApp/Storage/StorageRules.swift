@@ -160,7 +160,7 @@ nonisolated extension StorageDiscovery {
           : .revealOnly(reason: "simctl reports this runtime as not deletable"),
         bytes: runtime.sizeBytes ?? 0, reportedSize: true)
       if owns, bootedRuntimes.contains(key) {
-        item.lockReason = "A simulator on it is booted"
+        item.lockReason = String(localized: "A simulator on it is booted")
       }
       add(item)
     }
@@ -433,7 +433,7 @@ nonisolated extension StorageDiscovery {
           safety: .cache,
           cleanup: .command(executable: "/bin/bash", arguments: ["-c", script, qemuImg, image, temporary], verb: "Compact"),
           bytes: reclaimable, reportedSize: true)
-        if running.contains(name) { item.lockReason = "Running: stop the machine first" }
+        if running.contains(name) { item.lockReason = String(localized: "Running: stop the machine first") }
         add(item)
       }
     }

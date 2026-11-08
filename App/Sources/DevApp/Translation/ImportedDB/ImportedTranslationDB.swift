@@ -158,8 +158,8 @@ final class ImportedTranslationDB {
   func importViaPanel() async {
     guard
       let url = await KitDesktop.chooseFiles(
-        title: "Import Translation Database", prompt: "Import",
-        message: "Choose a sqlite file with a translations (language, source, target, app) table",
+        title: String(localized: "Import Translation Database"), prompt: String(localized: "Import"),
+        message: String(localized: "Choose a sqlite file with a translations (language, source, target, app) table"),
         contentTypes: [.data]
       ).first
     else { return }

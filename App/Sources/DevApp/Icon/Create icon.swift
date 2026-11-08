@@ -98,7 +98,7 @@ struct CreateIconView: View {
       }
 
       FormCard("Icon Composer") {
-        FormRow("Render", help: renderStatus, systemImage: "sparkles", hue: .blue) {
+        FormRow(String(localized: "Render"), help: renderStatus, systemImage: "sparkles", hue: .blue) {
           EmptyView()
         }
         .status(create.isRendering ? .working : .idle)
@@ -255,10 +255,10 @@ struct CreateIconView: View {
 
   private var renderStatus: String {
     if let error = create.renderError { return error }
-    if create.isRendering { return "Rendering with actool…" }
-    guard let render = create.render else { return "actool renders the icon as Icon Composer draws it" }
+    if create.isRendering { return String(localized: "Rendering with actool…") }
+    guard let render = create.render else { return String(localized: "actool renders the icon as Icon Composer draws it") }
     let size = ByteCountFormatter.string(fromByteCount: Int64(render.catalogBytes), countStyle: .file)
-    return "Assets.car \(size); release archives store it as HEVC"
+    return String(localized: "Assets.car \(size); release archives store it as HEVC")
   }
 
   // MARK: - generation
@@ -291,7 +291,7 @@ struct CreateIconView: View {
       try await IconGenerator.export(
         symbol: create.settings.symbol, scale: create.settings.scale,
         background: IconColor(create.settings.background), glyph: IconColor(create.settings.glyph), to: dir)
-      alertMessage = "Exported \(dir.path)/Assets.xcassets/AppIcon.appiconset and \(dir.path)/AppIcon.icon"
+      alertMessage = String(localized: "Exported \(dir.path)/Assets.xcassets/AppIcon.appiconset and \(dir.path)/AppIcon.icon")
     } catch {
       alertMessage = error.localizedDescription
     }
@@ -299,7 +299,7 @@ struct CreateIconView: View {
 
   private func exportDirectory() async -> URL? {
     if let exportRootURL { return exportRootURL }
-    return await KitDesktop.chooseFolders(message: "Choose a folder to write Assets.xcassets into").first
+    return await KitDesktop.chooseFolders(message: String(localized: "Choose a folder to write Assets.xcassets into")).first
   }
 }
 
@@ -316,20 +316,20 @@ enum IconAppearance: String, CaseIterable, Identifiable {
 
   var title: String {
     switch self {
-    case .default: "Default"
-    case .dark: "Dark"
-    case .clear: "Clear"
-    case .tinted: "Tinted"
+    case .default: String(localized: "Default")
+    case .dark: String(localized: "Dark")
+    case .clear: String(localized: "Clear")
+    case .tinted: String(localized: "Tinted")
     }
   }
 
   /// The line under the title on its card.
   var subtitle: String {
     switch self {
-    case .default: "Light Dock"
-    case .dark: "Dark Dock"
-    case .clear: "Glass on a photo"
-    case .tinted: "Monochrome"
+    case .default: String(localized: "Light Dock")
+    case .dark: String(localized: "Dark Dock")
+    case .clear: String(localized: "Glass on a photo")
+    case .tinted: String(localized: "Monochrome")
     }
   }
 

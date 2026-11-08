@@ -37,8 +37,8 @@ final class ServerRun {
 
     var title: String {
       switch self {
-      case .full: return "Translate"
-      case .skipLearning: return "Skip learning"
+      case .full: return String(localized: "Translate")
+      case .skipLearning: return String(localized: "Skip learning")
       }
     }
 
@@ -67,14 +67,14 @@ final class ServerRun {
 
     var title: String {
       switch self {
-      case .idle: return "idle"
-      case .starting: return "starting…"
-      case .learning: return "learning from verified values"
-      case .vertical: return "translating"
-      case .horizontal: return "the row pass"
-      case .finished: return "finished"
-      case .cancelled: return "cancelled"
-      case .failed: return "failed"
+      case .idle: return String(localized: "idle")
+      case .starting: return String(localized: "starting…")
+      case .learning: return String(localized: "learning from verified values")
+      case .vertical: return String(localized: "translating")
+      case .horizontal: return String(localized: "the row pass")
+      case .finished: return String(localized: "finished")
+      case .cancelled: return String(localized: "cancelled")
+      case .failed: return String(localized: "failed")
       }
     }
   }
@@ -118,16 +118,16 @@ final class ServerRun {
   var summaryLine: String {
     guard isRunning || phase == .finished || phase == .cancelled || isFailed else { return "" }
     var parts: [String] = [phase.title]
-    if rowsRead > 0 { parts.append("\(rowsRead) read") }
-    if rowsWritten > 0 { parts.append("\(rowsWritten) written") }
-    if rowsSkipped > 0 { parts.append("\(rowsSkipped) refused by the server") }
-    if rowsUntranslatable > 0 { parts.append("\(rowsUntranslatable) not translatable") }
+    if rowsRead > 0 { parts.append(String(localized: "\(rowsRead) read")) }
+    if rowsWritten > 0 { parts.append(String(localized: "\(rowsWritten) written")) }
+    if rowsSkipped > 0 { parts.append(String(localized: "\(rowsSkipped) refused by the server")) }
+    if rowsUntranslatable > 0 { parts.append(String(localized: "\(rowsUntranslatable) not translatable")) }
     if phase == .horizontal || phase == .finished || phase == .cancelled {
-      if rowsRepaired > 0 { parts.append("\(rowsRepaired) repaired") }
-      if rowsStillInvalid > 0 { parts.append("\(rowsStillInvalid) still invalid") }
+      if rowsRepaired > 0 { parts.append(String(localized: "\(rowsRepaired) repaired")) }
+      if rowsStillInvalid > 0 { parts.append(String(localized: "\(rowsStillInvalid) still invalid")) }
     }
     if !model.isEmpty { parts.append(model) }
-    if sourceCharacters > 0 { parts.append("\(sourceCharacters) chars") }
+    if sourceCharacters > 0 { parts.append(String(localized: "\(sourceCharacters) chars")) }
     if let locale { parts.append("-> \(locale)") }
     return parts.joined(separator: " · ")
   }
@@ -147,12 +147,12 @@ final class ServerRun {
   func start(connection: ServerConnection, locale: String, scope: String?, plan: Plan) {
     guard let base = connection.base else {
       reset()
-      phase = .failed("the endpoint is not a usable http(s) URL")
+      phase = .failed(String(localized: "the endpoint is not a usable http(s) URL"))
       return
     }
     guard let key = connection.resolvedKey else {
       reset()
-      phase = .failed("no key: add one to this server, or set \(ServerKeychain.sharedKeyName)")
+      phase = .failed(String(localized: "no key: add one to this server, or set \(ServerKeychain.sharedKeyName)"))
       return
     }
     start(base: base, key: key, locale: locale, scope: scope, plan: plan)
@@ -209,14 +209,14 @@ final class ServerRun {
 
   private func run(client: LocalizeClient, router: TranslationRouter) async {
     guard let locale, !locale.isEmpty else {
-      phase = .failed("pick a target locale")
+      phase = .failed(String(localized: "pick a target locale"))
       return
     }
     if let scope, scope.isEmpty == false {
       notes.append("scope: \(scope)")
     }
     guard await router.isEligible(from: Self.sourceLanguage, to: locale) else {
-      phase = .failed(ModelSettings.problem ?? "the translation model is cooling down; try again shortly")
+      phase = .failed(ModelSettings.problem ?? String(localized: "the translation model is cooling down; try again shortly"))
       return
     }
 

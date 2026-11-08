@@ -268,11 +268,11 @@ struct ContentView: View {
   private var windowTitle: String {
     switch model.selection {
     case .project(let id): return model.projectRow(id: id)?.name ?? "Dev"
-    case .tool(.icon): return "App Icon"
-    case .storage: return "Storage"
-    case .vms: return "Virtual Machines"
-    case .translations: return "Translations"
-    case .server(let id): return servers.connection(id: id)?.name ?? "Localization Server"
+    case .tool(.icon): return String(localized: "App Icon")
+    case .storage: return String(localized: "Storage")
+    case .vms: return String(localized: "Virtual Machines")
+    case .translations: return String(localized: "Translations")
+    case .server(let id): return servers.connection(id: id)?.name ?? String(localized: "Localization Server")
     default: return "Dev"
     }
   }

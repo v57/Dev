@@ -22,7 +22,7 @@ nonisolated struct ProjectFacts: Sendable {
   var commitCount: Int?
   var lastCommit: Date?
   var latestTag: String?
-  var kind = "Folder"
+  var kind = String(localized: "Folder")
   var icon = IconFacts()
 
   struct IconFacts: Sendable {
@@ -56,13 +56,13 @@ nonisolated struct ProjectFacts: Sendable {
     let names = (try? FileManager.default.contentsOfDirectory(atPath: root.path)) ?? []
     if names.contains(where: { $0.hasSuffix(".xcodeproj") || $0.hasSuffix(".xcworkspace") }) {
       let platform = ReleaseConfig.load(from: root)?["PLATFORM"]
-      facts.kind = platform == "ios" ? "iOS app · Xcode project" : (platform == "macos" ? "macOS app · Xcode project" : "Xcode project")
+      facts.kind = platform == "ios" ? String(localized: "iOS app · Xcode project") : (platform == "macos" ? String(localized: "macOS app · Xcode project") : String(localized: "Xcode project"))
     } else if names.contains("Package.swift") {
-      facts.kind = "Swift package"
+      facts.kind = String(localized: "Swift package")
     } else if names.contains("package.json") {
-      facts.kind = "Node project"
+      facts.kind = String(localized: "Node project")
     } else if names.contains("Cargo.toml") {
-      facts.kind = "Rust project"
+      facts.kind = String(localized: "Rust project")
     }
 
     // The row's icon set, else the app icon Code's ProjectIcon finds deeper in the project: a set or an AppIcon.icon.
@@ -221,7 +221,7 @@ struct ProjectOverviewView: View {
   private var iconCard: some View {
     OverviewCard(
       title: "App Icon", systemImage: "app.badge",
-      trailing: facts.icon.modified.map { "Exported \($0.formatted(date: .abbreviated, time: .omitted))" }
+      trailing: facts.icon.modified.map { String(localized: "Exported \($0.formatted(date: .abbreviated, time: .omitted))") }
     ) {
       HStack(alignment: .center, spacing: 16) {
         if facts.icon.hasSet || facts.icon.hasIconComposer {
@@ -287,7 +287,7 @@ struct ProjectOverviewView: View {
             status: .working(progress: Double(done) / Double(max(active.steps.count, 1))), size: 22)
           Text("\(active.workflowName) \(active.title)").fontWeight(.semibold)
           Spacer()
-          Text(active.steps.first { $0.state == .running }?.name ?? "Starting")
+          Text(active.steps.first { $0.state == .running }?.name ?? String(localized: "Starting"))
             .foregroundStyle(Hue.accent.text)
         }
         .padding(10)

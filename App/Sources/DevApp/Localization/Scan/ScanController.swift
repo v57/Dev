@@ -93,7 +93,7 @@ final class ScanController {
     Task {
       guard
         let url = await KitDesktop.chooseFolders(
-          prompt: "Scan", message: "Choose the repo folder to scan for Swift packages and Xcode projects"
+          prompt: String(localized: "Scan"), message: String(localized: "Choose the repo folder to scan for Swift packages and Xcode projects")
         ).first
       else { return }
       start(root: url.standardizedFileURL)

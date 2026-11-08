@@ -125,11 +125,11 @@ final class WorkflowStore {
   /// Starts a run. `confirmedPublishing` is true when the reader already agreed
   /// to the publishing steps (the Run button asks before calling this).
   func start(
-    _ workflow: Workflow, in root: URL, version: String? = nil, startedBy: String = "you",
+    _ workflow: Workflow, in root: URL, version: String? = nil, startedBy: String = String(localized: "you"),
     confirmedPublishing: Bool = false
   ) {
     guard active[root] == nil else {
-      notice = "\(root.lastPathComponent) already has a run in flight."
+      notice = String(localized: "\(root.lastPathComponent) already has a run in flight.")
       return
     }
     var run = WorkflowRun(workflowID: workflow.id, workflowName: workflow.name, startedBy: startedBy)
@@ -170,14 +170,14 @@ final class WorkflowStore {
     for stage in stages {
       if Task.isCancelled { break }
       if failed && !workflow.continueOnFailure {
-        for step in stage { setStep(root, step.id) { $0.state = .skipped; $0.note = "an earlier step failed" } }
+        for step in stage { setStep(root, step.id) { $0.state = .skipped; $0.note = String(localized: "an earlier step failed") } }
         continue
       }
       let publishing = stage.filter(\.publishes)
       if !publishing.isEmpty, !confirmedPublishing {
         let ok = await ask(root: root, workflow: workflow.name, steps: publishing.map(\.name))
         if !ok {
-          for step in stage { setStep(root, step.id) { $0.state = .skipped; $0.note = "not confirmed" } }
+          for step in stage { setStep(root, step.id) { $0.state = .skipped; $0.note = String(localized: "not confirmed") } }
           failed = true
           continue
         }
@@ -199,7 +199,7 @@ final class WorkflowStore {
     update(root) { run in
       for index in run.steps.indices where run.steps[index].state == .waiting || run.steps[index].state == .running {
         run.steps[index].state = cancelled ? .skipped : run.steps[index].state
-        if cancelled { run.steps[index].note = "cancelled" }
+        if cancelled { run.steps[index].note = String(localized: "cancelled") }
       }
       run.finishedAt = Date()
       run.state = cancelled ? .cancelled : (failed ? .failed : .passed)
@@ -255,7 +255,7 @@ final class WorkflowStore {
   private func runRelease(_ step: Workflow.Step, _ name: String, runID: UUID, root: URL, version: String?) async -> Bool {
     let stepID = step.id
     guard let script = ReleaseRunner.scriptURL else {
-      setStep(root, stepID) { $0.note = "release.sh is missing from the app" }
+      setStep(root, stepID) { $0.note = String(localized: "release.sh is missing from the app") }
       return false
     }
     var arguments = [script.path, "--project", root.path]
@@ -334,14 +334,14 @@ final class WorkflowStore {
         let workflow = active[root]?.workflowName ?? step.name
         guard await ask(root: root, workflow: workflow, steps: ["Publish \(request.summary)"]) else {
           append(runID, stepID, root, "not published: not confirmed")
-          setStep(root, stepID) { $0.note = "not confirmed" }
+          setStep(root, stepID) { $0.note = String(localized: "not confirmed") }
           return false
         }
       }
       let account = accounts[root] ?? VaultAccount.personal.id
       guard let token = (try? KeychainTokenStore.forAccount(account).load())?.token else {
         append(runID, stepID, root, "not published: this account has no GitHub sign-in (sign in with the Git app; Dev shares it through the vault)")
-        setStep(root, stepID) { $0.note = "no GitHub sign-in" }
+        setStep(root, stepID) { $0.note = String(localized: "no GitHub sign-in") }
         return false
       }
       append(runID, stepID, root, "publishing \(request.summary)")
@@ -350,7 +350,7 @@ final class WorkflowStore {
       return true
     } catch {
       append(runID, stepID, root, "not published: \(error.localizedDescription)")
-      setStep(root, stepID) { $0.note = "not published" }
+      setStep(root, stepID) { $0.note = String(localized: "not published") }
       return false
     }
   }
@@ -399,7 +399,7 @@ final class WorkflowStore {
     guard let store = vms else { return nil }
     if store.machines.isEmpty { await store.refresh() }
     guard let vm = store.machines.first(where: { $0.name == vmName }) else {
-      setStep(root, stepID) { $0.note = "no UTM machine named \(vmName)" }
+      setStep(root, stepID) { $0.note = String(localized: "no UTM machine named \(vmName)") }
       return nil
     }
     if !vm.status.isRunning {
@@ -414,7 +414,7 @@ final class WorkflowStore {
       if Task.isCancelled { return nil }
     }
     guard let address else {
-      setStep(root, stepID) { $0.note = "no address for \(vm.name)" }
+      setStep(root, stepID) { $0.note = String(localized: "no address for \(vm.name)") }
       return nil
     }
     let settings = VMSettings.load(vm.id)
@@ -464,7 +464,7 @@ final class WorkflowStore {
   // MARK: - Confirmation
 
   private func ask(root: URL, workflow: String, steps: [String]) async -> Bool {
-    let startedBy = active[root]?.startedBy ?? "you"
+    let startedBy = active[root]?.startedBy ?? String(localized: "you")
     return await withCheckedContinuation { continuation in
       confirmation = Confirmation(root: root, workflowName: workflow, steps: steps, startedBy: startedBy) {
         continuation.resume(returning: $0)
@@ -505,7 +505,7 @@ final class WorkflowStore {
       if head.status == 0, !sha.isEmpty {
         let seen = defaults.string(forKey: key + ".branch")
         defaults.set(sha, forKey: key + ".branch")
-        if let seen, seen != sha { return "commit on \(branch)" }
+        if let seen, seen != sha { return String(localized: "commit on \(branch)") }
       }
     }
     if let pattern = workflow.trigger.tag, !pattern.isEmpty {
@@ -514,7 +514,7 @@ final class WorkflowStore {
       if tags.status == 0, !newest.isEmpty {
         let seen = defaults.string(forKey: key + ".tag")
         defaults.set(newest, forKey: key + ".tag")
-        if let seen, seen != newest { return "tag \(newest)" }
+        if let seen, seen != newest { return String(localized: "tag \(newest)") }
       }
     }
     if let daily = workflow.trigger.daily, let time = Self.time(daily) {
@@ -525,7 +525,7 @@ final class WorkflowStore {
       let last = defaults.object(forKey: key + ".daily") as? Date ?? .distantPast
       if last < due {
         defaults.set(now, forKey: key + ".daily")
-        return "schedule"
+        return String(localized: "schedule")
       }
     }
     return nil
@@ -611,7 +611,7 @@ final class WorkflowStore {
       failure = error.localizedDescription
     }
     guard process.status == 0, !made.isEmpty else {
-      notice = "No result archive: \(failure ?? "release.sh bundle failed")."
+      notice = String(localized: "No result archive: \(failure ?? String(localized: "release.sh bundle failed")).")
       return nil
     }
     let sized = await Task.detached(priority: .utility) {

@@ -137,23 +137,23 @@ nonisolated extension ProviderPreset {
       id: "commandcode", name: "CommandCode", group: .recommended,
       baseURL: "https://api.commandcode.ai/provider/v1", wire: .chatCompletions,
       keyNames: ["COMMANDCODE_API_KEY"], keysURL: "https://commandcode.ai/settings/keys",
-      note: "Full-quality models at upstream prices: the best default. API access needs a paid plan (Provider, $15/mo)."),
+      note: String(localized: "Full-quality models at upstream prices: the best default. API access needs a paid plan (Provider, $15/mo).")),
     ProviderPreset(
       id: "openrouter", name: "OpenRouter", group: .recommended,
       baseURL: "https://openrouter.ai/api/v1", wire: .chatCompletions,
       keyNames: ["OPENROUTER_API_KEY"], keysURL: "https://openrouter.ai/keys",
-      note: "One key for hundreds of models. Free models: 20 requests/min, 50/day (1000/day after buying credits), and may log prompts."),
+      note: String(localized: "One key for hundreds of models. Free models: 20 requests/min, 50/day (1000/day after buying credits), and may log prompts.")),
     ProviderPreset(
       id: "opencode-zen", name: "OpenCode Zen", group: .recommended,
       baseURL: "https://opencode.ai/zen/v1", wire: .chatCompletions, modelWires: openCodeZenWires,
       keyNames: ["OPENCODE_ZEN_API_KEY", "OPENCODE_API_KEY"], keysURL: "https://opencode.ai/auth",
-      note: "Free preview models, but open models run on heavily quantized hosts, so quality drops: review more.",
+      note: String(localized: "Free preview models, but open models run on heavily quantized hosts, so quality drops: review more."),
       headers: openCodeHeaders),
     ProviderPreset(
       id: "opencode-go", name: "OpenCode Go", group: .recommended,
       baseURL: "https://opencode.ai/zen/go/v1", wire: .chatCompletions, modelWires: openCodeGoWires,
       keyNames: ["OPENCODE_GO_API_KEY", "OPENCODE_API_KEY"], keysURL: "https://opencode.ai/auth",
-      note: "A flat subscription with free models. Open models run on heavily quantized hosts, so quality drops: review more.",
+      note: String(localized: "A flat subscription with free models. Open models run on heavily quantized hosts, so quality drops: review more."),
       headers: openCodeHeaders),
   ]
 
@@ -166,28 +166,28 @@ nonisolated extension ProviderPreset {
       id: "anthropic", name: "Anthropic", group: .popular,
       baseURL: "https://api.anthropic.com/v1", wire: .chatCompletions,
       keyNames: ["ANTHROPIC_API_KEY"], keysURL: "https://platform.claude.com/settings/keys",
-      note: "Through Anthropic's OpenAI-compatible endpoint (no prompt caching there)."),
+      note: String(localized: "Through Anthropic's OpenAI-compatible endpoint (no prompt caching there).")),
     ProviderPreset(
       id: "gemini", name: "Google Gemini", group: .popular,
       baseURL: "https://generativelanguage.googleapis.com/v1beta/openai", wire: .chatCompletions,
       keyNames: ["GEMINI_API_KEY", "GOOGLE_API_KEY"], keysURL: "https://aistudio.google.com/apikey",
-      note: "The free tier covers Flash, but Google may use free-tier prompts to improve its products."),
+      note: String(localized: "The free tier covers Flash, but Google may use free-tier prompts to improve its products.")),
     ProviderPreset(
       id: "deepseek", name: "DeepSeek", group: .popular,
       baseURL: "https://api.deepseek.com", wire: .chatCompletions,
       keyNames: ["DEEPSEEK_API_KEY"], keysURL: "https://platform.deepseek.com/api_keys",
-      note: "First-party, full-precision DeepSeek. Prices double at peak hours; the service runs in China."),
+      note: String(localized: "First-party, full-precision DeepSeek. Prices double at peak hours; the service runs in China.")),
     ProviderPreset(
       id: "xai", name: "xAI", group: .popular,
       baseURL: "https://api.x.ai/v1", wire: .responses,
       keyNames: ["XAI_API_KEY"], keysURL: "https://console.x.ai/",
-      note: "Responses are stored for 30 days on xAI's side."),
+      note: String(localized: "Responses are stored for 30 days on xAI's side.")),
     ProviderPreset(
       id: "meta-ai", name: "Meta Model API", group: .popular,
       baseURL: "https://api.meta.ai/v1", wire: .chatCompletions,
       keyNames: ["META_MODEL_API_KEY", "META_API_KEY", "MODEL_API_KEY"],
       keysURL: "https://dev.meta.ai/platform",
-      note: "Muse Spark. The cheap \"contributor\" tier lets Meta train on your strings."),
+      note: String(localized: "Muse Spark. The cheap \"contributor\" tier lets Meta train on your strings.")),
   ]
 
   static let more: [ProviderPreset] = [
@@ -225,12 +225,12 @@ nonisolated extension ProviderPreset {
       id: "azure-foundry", name: "Azure AI Foundry", group: .more,
       baseURL: "", wire: .chatCompletions,
       keyNames: ["AZURE_FOUNDRY_API_KEY"], keysURL: "https://ai.azure.com/",
-      note: "Paste your deployment's OpenAI-compatible endpoint as the base URL."),
+      note: String(localized: "Paste your deployment's OpenAI-compatible endpoint as the base URL.")),
     ProviderPreset(
       id: "deepinfra", name: "DeepInfra", group: .more,
       baseURL: "https://api.deepinfra.com/v1/openai", wire: .chatCompletions,
       keyNames: ["DEEPINFRA_API_KEY"], keysURL: "https://deepinfra.com/dash/api_keys",
-      note: "Shows each model's precision; avoid fp4 builds for translation."),
+      note: String(localized: "Shows each model's precision; avoid fp4 builds for translation.")),
     ProviderPreset(
       id: "fireworks", name: "Fireworks AI", group: .more,
       baseURL: "https://api.fireworks.ai/inference/v1", wire: .chatCompletions,
@@ -239,7 +239,7 @@ nonisolated extension ProviderPreset {
       id: "groq", name: "Groq", group: .more,
       baseURL: "https://api.groq.com/openai/v1", wire: .chatCompletions,
       keyNames: ["GROQ_API_KEY"], keysURL: "https://console.groq.com/keys",
-      note: "Very fast, with a small choice of models."),
+      note: String(localized: "Very fast, with a small choice of models.")),
     ProviderPreset(
       id: "gmi", name: "GMI Cloud", group: .more,
       baseURL: "https://api.gmi-serving.com/v1", wire: .chatCompletions,
@@ -257,7 +257,7 @@ nonisolated extension ProviderPreset {
       baseURL: "https://api.moonshot.ai/v1", wire: .chatCompletions,
       keyNames: ["KIMI_API_KEY", "MOONSHOT_API_KEY"],
       keysURL: "https://platform.moonshot.ai/console/api-keys",
-      note: "kimi-k3 thinks at maximum effort by default, which costs output tokens."),
+      note: String(localized: "kimi-k3 thinks at maximum effort by default, which costs output tokens.")),
     ProviderPreset(
       id: "kimi-coding-cn", name: "Moonshot (China)", group: .more,
       baseURL: "https://api.moonshot.cn/v1", wire: .chatCompletions,
@@ -266,7 +266,7 @@ nonisolated extension ProviderPreset {
       id: "minimax", name: "MiniMax", group: .more,
       baseURL: "https://api.minimax.io/v1", wire: .chatCompletions,
       keyNames: ["MINIMAX_API_KEY"], keysURL: "https://platform.minimax.io",
-      note: "Replies may start with the model's <think> reasoning before the answer."),
+      note: String(localized: "Replies may start with the model's <think> reasoning before the answer.")),
     ProviderPreset(
       id: "minimax-cn", name: "MiniMax (China)", group: .more,
       baseURL: "https://api.minimaxi.com/v1", wire: .chatCompletions,
@@ -275,7 +275,7 @@ nonisolated extension ProviderPreset {
       id: "mistral", name: "Mistral", group: .more,
       baseURL: "https://api.mistral.ai/v1", wire: .chatCompletions,
       keyNames: ["MISTRAL_API_KEY"], keysURL: "https://console.mistral.ai/api-keys",
-      note: "Strong on European languages."),
+      note: String(localized: "Strong on European languages.")),
     ProviderPreset(
       id: "nebius-token-factory", name: "Nebius Token Factory", group: .more,
       baseURL: "https://api.tokenfactory.nebius.com/v1", wire: .chatCompletions,
@@ -292,7 +292,7 @@ nonisolated extension ProviderPreset {
       id: "ollama-cloud", name: "Ollama Cloud", group: .more,
       baseURL: "https://ollama.com/v1", wire: .chatCompletions,
       keyNames: ["OLLAMA_API_KEY"], keysURL: "https://ollama.com/settings/keys",
-      note: "Zero data retention; billed from plan credits, cheaper off-peak."),
+      note: String(localized: "Zero data retention; billed from plan credits, cheaper off-peak.")),
     ProviderPreset(
       id: "router", name: "Ramp Router", group: .more,
       baseURL: "https://api.router.com/v1", wire: .responses,
@@ -304,7 +304,7 @@ nonisolated extension ProviderPreset {
     ProviderPreset(
       id: "tencent-tokenhub", name: "Tencent TokenHub", group: .more,
       baseURL: "", wire: .chatCompletions, keyNames: ["TOKENHUB_API_KEY"],
-      note: "Paste your TokenHub endpoint as the base URL."),
+      note: String(localized: "Paste your TokenHub endpoint as the base URL.")),
     ProviderPreset(
       id: "together", name: "Together AI", group: .more,
       baseURL: "https://api.together.xyz/v1", wire: .chatCompletions,
@@ -322,7 +322,7 @@ nonisolated extension ProviderPreset {
       baseURL: "https://api.z.ai/api/paas/v4", wire: .chatCompletions,
       keyNames: ["GLM_API_KEY", "ZAI_API_KEY", "Z_AI_API_KEY", "ZHIPU_API_KEY"],
       keysURL: "https://z.ai/manage-apikey/apikey-list",
-      note: "GLM reasons by default, which costs output tokens."),
+      note: String(localized: "GLM reasons by default, which costs output tokens.")),
   ]
 
   static let local: [ProviderPreset] = [
@@ -330,18 +330,18 @@ nonisolated extension ProviderPreset {
       id: "ollama", name: "Ollama", group: .local,
       baseURL: "http://localhost:11434/v1", wire: .chatCompletions,
       keyNames: [], needsKey: false, keysURL: "https://ollama.com/download",
-      note: "Free and private. Pull a model first (ollama pull gemma4:12b) and raise its context length for long batches.",
+      note: String(localized: "Free and private. Pull a model first (ollama pull gemma4:12b) and raise its context length for long batches."),
       requestsPerMinute: 600),
     ProviderPreset(
       id: "lmstudio", name: "LM Studio", group: .local,
       baseURL: "http://localhost:1234/v1", wire: .chatCompletions,
       keyNames: ["LM_API_KEY"], needsKey: false, keysURL: "https://lmstudio.ai/",
-      note: "Free and private. Start the server in the Developer tab; prefer MLX builds and set a long context.",
+      note: String(localized: "Free and private. Start the server in the Developer tab; prefer MLX builds and set a long context."),
       requestsPerMinute: 600),
   ]
 
   static let custom = ProviderPreset(
     id: "custom", name: "Custom (OpenAI-compatible)", group: .custom,
     baseURL: "", wire: .chatCompletions, keyNames: [], needsKey: false,
-    note: "Any server with an OpenAI-compatible /chat/completions or /responses endpoint.")
+    note: String(localized: "Any server with an OpenAI-compatible /chat/completions or /responses endpoint."))
 }

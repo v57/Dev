@@ -211,13 +211,13 @@ extension StorageStore {
   var sidebarStatus: String {
     switch phase {
     case .scanning:
-      return "Scanning…"
+      return String(localized: "Scanning…")
     case .cleaning:
-      return "Cleaning…"
+      return String(localized: "Cleaning…")
     case .idle:
       let safe = recommendedBytes
-      if hasResults, safe > 0 { return "\(safe.byteString) to free" }
-      return "\(volumeAvailable.byteString) free"
+      if hasResults, safe > 0 { return String(localized: "\(safe.byteString) to free") }
+      return String(localized: "\(volumeAvailable.byteString) free")
     }
   }
 

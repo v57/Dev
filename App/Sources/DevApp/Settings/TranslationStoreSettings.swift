@@ -146,14 +146,14 @@ enum StoreClearOutcome: Equatable {
 @MainActor
 func storeClearBlocker(localization: LocalizationStore, shell: Translation.Shell) -> String? {
   if localization.isLoading {
-    return "A catalog is opening — clear once it has landed"
+    return String(localized: "A catalog is opening — clear once it has landed")
   }
   if localization.isSyncing {
-    return "The store is still catching up with a catalog — clear once it has"
+    return String(localized: "The store is still catching up with a catalog — clear once it has")
   }
   if localization.scan.isRunning || localization.isAddingLanguage
     || shell.isRunning {
-    return "A run is in flight — finish or cancel it first"
+    return String(localized: "A run is in flight — finish or cancel it first")
   }
   return nil
 }

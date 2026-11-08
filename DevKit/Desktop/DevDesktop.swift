@@ -128,9 +128,9 @@ extension DevDesktop {
   /// The machine Dev runs on, as a workflow step's runner: "This Mac", or "This Computer".
   public nonisolated static var thisComputer: String {
     #if os(macOS)
-      "This Mac"
+      String(localized: "This Mac")
     #else
-      "This Computer"
+      String(localized: "This Computer")
     #endif
   }
 

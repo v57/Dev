@@ -76,20 +76,20 @@ struct ScreenshotsView: View {
     let processed = library?.shots.contains { $0.final != nil } ?? false
     let outdated = library?.outdated.count ?? 0
     return HStack(spacing: 10) {
-      stage(1, "Capture", phase == .capturing
-              ? (store.paused.contains(root) ? "Paused: switch back to the app" : "Taking the scenes…")
+      stage(1, String(localized: "Capture"), phase == .capturing
+              ? (store.paused.contains(root) ? String(localized: "Paused: switch back to the app") : String(localized: "Taking the scenes…"))
               : captureDetail(library),
             done: captured && phase != .capturing && outdated == 0, current: phase == .capturing || !captured,
             warning: captured && phase != .capturing && outdated > 0)
       connector(captured)
-      stage(2, "Frame", phase == .processing ? "Framing…" :
-              (store.reports[root].map { "\($0.rendered) pictures" } ?? "Not framed yet"),
+      stage(2, String(localized: "Frame"), phase == .processing ? String(localized: "Framing…") :
+              (store.reports[root].map { String(localized: "\($0.rendered) pictures") } ?? String(localized: "Not framed yet")),
             done: processed && phase != .processing, current: phase == .processing)
       connector(processed)
-      stage(3, "Review", library?.status?.summary ?? "Nothing to review",
+      stage(3, String(localized: "Review"), library?.status?.summary ?? String(localized: "Nothing to review"),
             done: false, current: processed && phase == .idle)
       connector(false)
-      stage(4, "Upload", "App Store Connect", done: false, current: false)
+      stage(4, String(localized: "Upload"), "App Store Connect", done: false, current: false)
       Spacer()
       if !store.logs[root, default: []].isEmpty {
         Button("Show Log") { showsLog = true }.buttonStyle(.kitPlain)
@@ -101,10 +101,10 @@ struct ScreenshotsView: View {
   }
 
   private func captureDetail(_ library: ScreenshotLibrary?) -> String {
-    guard let library, let date = library.capturedAt else { return "Not captured yet" }
-    let when = "Captured \(date.formatted(.relative(presentation: .named)))"
+    guard let library, let date = library.capturedAt else { return String(localized: "Not captured yet") }
+    let when = String(localized: "Captured \(date.formatted(.relative(presentation: .named)))")
     let outdated = library.outdated.count
-    return outdated == 0 ? when : "\(outdated) of \(library.status?.scenes.count ?? 0) scenes outdated"
+    return outdated == 0 ? when : String(localized: "\(outdated) of \(library.status?.scenes.count ?? 0) scenes outdated")
   }
 
   private func stage(
@@ -169,7 +169,7 @@ struct ScreenshotsView: View {
               } label: {
                 ScreenshotThumbnail(
                   shot: shot, preferFinal: showsFinal,
-                  flag: overflowing.contains(shot.file) ? "Caption too long" : nil)
+                  flag: overflowing.contains(shot.file) ? String(localized: "Caption too long") : nil)
                   .padding(4)
                   .background(
                     RoundedRectangle(cornerRadius: KitMetrics.radiusLarge)
@@ -193,9 +193,9 @@ struct ScreenshotsView: View {
       }
     } else {
       EmptyState(
-        systemImage: "photo.on.rectangle", title: "No Screenshot Scenes",
+        systemImage: "photo.on.rectangle", title: String(localized: "No Screenshot Scenes"),
         message: library?.configError.map { "\($0)" }
-          ?? "Describe the app's screens in .dev/screenshots.json: each scene is the launch arguments that open it. Dev captures them, frames them for the App Store and uploads them."
+          ?? String(localized: "Describe the app's screens in .dev/screenshots.json: each scene is the launch arguments that open it. Dev captures them, frames them for the App Store and uploads them.")
       ) {
         Button("Show Project in \(KitDesktop.fileManagerName)") { KitDesktop.reveal([root]) }
           .buttonStyle(.kit)
@@ -390,7 +390,7 @@ struct ScreenshotsView: View {
     for problem in config?.problems() ?? [] { items.append((problem, .red)) }
     if let framing {
       if ScreenshotConfig.Framing.isAppStoreSize(width: framing.width, height: framing.height) {
-        items.append(("\(framing.width) × \(framing.height) is an App Store Connect size", .green))
+        items.append((String(localized: "\(framing.width) × \(framing.height) is an App Store Connect size"), .green))
       }
       for problem in framing.problems() { items.append((problem, .red)) }
     }
@@ -399,9 +399,9 @@ struct ScreenshotsView: View {
     }
     if let report {
       if report.overflowing.isEmpty {
-        items.append(("Every caption fits in \(framing?.caption.maxLines ?? 2) lines", .green))
+        items.append((String(localized: "Every caption fits in \(framing?.caption.maxLines ?? 2) lines"), .green))
       } else {
-        for item in report.overflowing { items.append(("Caption too long: \(item)", .red)) }
+        for item in report.overflowing { items.append((String(localized: "Caption too long: \(item)"), .red)) }
       }
       for error in report.errors { items.append((error, .red)) }
     }
@@ -409,7 +409,7 @@ struct ScreenshotsView: View {
       let missing = library.locales.filter { locale in
         library.shots(in: locale).contains { $0.platform == platform && $0.final == nil }
       }
-      if !missing.isEmpty { items.append(("Not framed yet: \(missing.joined(separator: ", "))", .orange)) }
+      if !missing.isEmpty { items.append((String(localized: "Not framed yet: \(missing.joined(separator: ", "))"), .orange)) }
     }
     return VStack(alignment: .leading, spacing: 7) {
       Text("Checks").kitFont(.headline)

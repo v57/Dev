@@ -53,13 +53,13 @@ nonisolated enum ModelSettings {
 
   /// Why `resolved()` cannot run a call, in the reader's words, or nil when it can.
   static var problem: String? {
-    guard let preset else { return "Choose a model provider in Settings (⌘,)." }
+    guard let preset else { return String(localized: "Choose a model provider in Settings (⌘,).") }
     if preset.asksForBaseURL, baseURL == nil, preset.baseURL.isEmpty {
-      return "Enter \(preset.name)'s base URL in Settings (⌘,)."
+      return String(localized: "Enter \(preset.name)'s base URL in Settings (⌘,).")
     }
-    guard model != nil else { return "Choose a model for \(preset.name) in Settings (⌘,)." }
+    guard model != nil else { return String(localized: "Choose a model for \(preset.name) in Settings (⌘,).") }
     if preset.needsKey, ProviderKeychain.key(for: preset) == nil {
-      return "Add your \(preset.name) API key in Settings (⌘,)."
+      return String(localized: "Add your \(preset.name) API key in Settings (⌘,).")
     }
     return nil
   }
