@@ -133,8 +133,9 @@ struct RunArtifacts: View {
             .disabled(!isFinished)
         }
       }
-      .labelStyle(.iconOnly)
-      .buttonStyle(.kitPlain)
+      // The kit's icon buttons: a kit button style sets its own label style, so `.labelStyle(.iconOnly)` around
+      // `.kitPlain` still showed the titles.
+      .buttonStyle(.kitIcon)
     }
     .kitContextMenu {
       KitOpenWithRow([
