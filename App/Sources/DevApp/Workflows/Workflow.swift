@@ -31,6 +31,11 @@ nonisolated struct Workflow: Codable, Hashable, Identifiable, Sendable {
     /// Every day at this time (`02:00`), or nil.
     var daily: String?
 
+    /// Whether anything starts the workflow besides the Run button.
+    var isSet: Bool {
+      !(branch ?? "").isEmpty || !(tag ?? "").isEmpty || !(daily ?? "").isEmpty
+    }
+
     var summary: String {
       var parts: [String] = []
       if let branch, !branch.isEmpty { parts.append(String(localized: "Every commit on \(branch)")) }

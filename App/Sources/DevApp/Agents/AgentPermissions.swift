@@ -4,10 +4,13 @@
 //
 
 import Foundation
+import Synchronization
 
 /// What agents may do through Dev's MCP server, set in Settings ▸ Agents and
-/// read by both the app and the `Dev --mcp` process (they share the app's
-/// defaults: the same bundle identifier).
+/// read by both the app and the `Dev --mcp` process (the same signed binary).
+/// The levels and the on switch live in Dev's keychain item, not in
+/// UserDefaults: `defaults write dev.v57.dev …` from any process (an agent's
+/// shell among them) must not be able to grant itself `run` (security audit M16).
 nonisolated enum AgentPermissions {
   enum Level: String, CaseIterable, Identifiable, Sendable {
     case allow, ask, never
@@ -48,21 +51,60 @@ nonisolated enum AgentPermissions {
       case .run, .publish: .ask
       }
     }
-
-    var key: String { "agents.permission." + rawValue }
   }
 
-  static let enabledKey = "agents.enabled"
   static let lastClientKey = "agents.lastClient"
   static let lastSeenKey = "agents.lastSeen"
   static let logKey = "agents.log"
 
-  static var isEnabled: Bool {
-    UserDefaults.standard.object(forKey: enabledKey) as? Bool ?? true
+  static var isEnabled: Bool { Stored.load().enabled ?? true }
+
+  static func setEnabled(_ enabled: Bool) {
+    var stored = Stored.load()
+    stored.enabled = enabled
+    stored.save()
   }
 
   static func level(_ action: Action) -> Level {
-    UserDefaults.standard.string(forKey: action.key).flatMap(Level.init) ?? action.defaultLevel
+    Stored.load().levels[action.rawValue].flatMap(Level.init) ?? action.defaultLevel
+  }
+
+  static func setLevel(_ level: Level, for action: Action) {
+    var stored = Stored.load()
+    stored.levels[action.rawValue] = level.rawValue
+    stored.save()
+  }
+
+  /// The settings as kept in the keychain (one item, JSON). Levels an earlier Dev wrote to UserDefaults are
+  /// dropped, not adopted: anyone could have written them.
+  struct Stored: Codable, Equatable {
+    var enabled: Bool?
+    var levels: [String: String] = [:]
+
+    static let service = "dev.v57.dev.agents"
+    static let account = "permissions"
+
+    static func load() -> Stored {
+      forgetDefaults()
+      guard let text = DevKeychain.read(service: service, account: account),
+            let stored = try? JSONDecoder().decode(Stored.self, from: Data(text.utf8))
+      else { return Stored() }
+      return stored
+    }
+
+    func save() {
+      guard let data = try? JSONEncoder().encode(self), let text = String(data: data, encoding: .utf8) else { return }
+      _ = DevKeychain.write(text, service: Self.service, account: Self.account, label: "Dev: agent permissions")
+    }
+
+    private static let forgotten = Mutex(false)
+
+    private static func forgetDefaults() {
+      guard !forgotten.withLock({ let was = $0; $0 = true; return was }) else { return }
+      let defaults = UserDefaults.standard
+      defaults.removeObject(forKey: "agents.enabled")
+      for action in Action.allCases { defaults.removeObject(forKey: "agents.permission." + action.rawValue) }
+    }
   }
 
   /// One line in the agent activity list, newest first, 50 kept.
@@ -108,7 +150,11 @@ nonisolated enum KnownProjects {
     try? JSONEncoder().encode(entries).write(to: url, options: .atomic)
   }
 
+  /// Tests' own list instead of the file; nil reads the file.
+  static let override = Mutex<[Entry]?>(nil)
+
   static func read() -> [Entry] {
+    if let entries = override.withLock({ $0 }) { return entries }
     guard let url, let data = try? Data(contentsOf: url) else { return [] }
     return (try? JSONDecoder().decode([Entry].self, from: data)) ?? []
   }

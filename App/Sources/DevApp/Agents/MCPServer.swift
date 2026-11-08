@@ -126,7 +126,7 @@ nonisolated enum MCPServer {
            ["project": projectArg], required: ["project"]),
       tool("list_workflows", "A project's CI workflows: names, triggers and steps.",
            ["project": projectArg], required: ["project"]),
-      tool("set_workflow", "Creates or replaces a workflow (.dev/workflows/<id>.json). Fields: id, name, trigger {branch, tag, daily HH:MM}, steps [{id, name, kind release|screenshots|command, releaseStep check|build|test|screenshots|archive|direct|bundle|github|appstore|googleplay|msstore, platform macos|ios|windows|linux|android (release steps; empty is release.env's PLATFORM), command, runner mac|vm:<UTM name> (commands, and release steps for windows and linux), parallel}], continueOnFailure. archive packages each platform (.xcarchive + .dmg/.zip on macOS, .xcarchive on iOS, .zip on Windows, .tar.gz on Linux); bundle makes the run's result archive (every platform's files + manifest.json).",
+      tool("set_workflow", "Creates or replaces a workflow (.dev/workflows/<id>.json). Fields: id, name, trigger {branch, tag, daily HH:MM}, steps [{id, name, kind release|screenshots|command, releaseStep check|build|test|screenshots|archive|direct|bundle|github|appstore|googleplay|msstore, platform macos|ios|windows|linux|android (release steps; empty is release.env's PLATFORM), command, runner mac|vm:<UTM name> (commands, and release steps for windows and linux), parallel}], continueOnFailure. archive packages each platform (.xcarchive + .dmg/.zip on macOS, .xcarchive on iOS, .zip on Windows, .tar.gz on Linux); bundle makes the run's result archive (every platform's files + manifest.json). Needs the run permission too, and a saved workflow starts on its trigger or through run_workflow only once the reader approves it in Dev.",
            ["project": projectArg, "workflow": ["type": "object"]], required: ["project", "workflow"]),
       tool("delete_workflow", "Deletes a workflow file.",
            ["project": projectArg, "workflow": ["type": "string", "description": "The workflow id"]], required: ["project", "workflow"]),
@@ -153,7 +153,7 @@ nonisolated enum MCPServer {
     ]
   }
 
-  private static func call(_ name: String, _ arguments: [String: Any]) throws -> Any {
+  static func call(_ name: String, _ arguments: [String: Any]) throws -> Any {
     guard AgentPermissions.isEnabled else { throw ToolError(message: "Agents are turned off in Dev ▸ Settings ▸ Agents.") }
     switch name {
     case "list_projects":
@@ -228,9 +228,12 @@ nonisolated enum MCPServer {
       return try json(Workflow.load(in: try project(arguments)))
     case "set_workflow":
       let root = try project(arguments)
+      // A workflow is commands that run on this Mac, so writing one needs run as well as edit (security audit H6).
       try require(.edit, "change a workflow of \(root.lastPathComponent)")
+      try require(.run, "change a workflow of \(root.lastPathComponent), which runs commands")
       var workflow: Workflow = try decode(arguments["workflow"])
       workflow.id = workflow.id.isEmpty ? workflow.name.lowercased().replacingOccurrences(of: " ", with: "-") : workflow.id
+      try workflowID(workflow.id)
       if !FileManager.default.fileExists(atPath: Workflow.folder(in: root).path) {
         for other in Workflow.load(in: root) where other.id != workflow.id { try other.save(in: root) }
       }
@@ -242,6 +245,7 @@ nonisolated enum MCPServer {
       let root = try project(arguments)
       try require(.edit, "delete a workflow of \(root.lastPathComponent)")
       let id = arguments["workflow"] as? String ?? ""
+      try workflowID(id)
       guard FileManager.default.fileExists(atPath: Workflow.url(id, in: root).path) else {
         throw ToolError(message: "No workflow \(id).")
       }
@@ -331,6 +335,11 @@ nonisolated enum MCPServer {
   }
 
   // MARK: - Helpers
+
+  /// A workflow id is a file name in `.dev/workflows`: no `/` or `..` that would leave it (security audit M17).
+  private static func workflowID(_ id: String) throws {
+    do { try StoreTexts.check(id, "workflow id") } catch { throw ToolError(message: error.localizedDescription) }
+  }
 
   private static func storeField(_ value: String) throws -> StoreField {
     guard let field = StoreField(rawValue: value) else {

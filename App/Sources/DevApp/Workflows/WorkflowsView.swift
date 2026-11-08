@@ -124,7 +124,9 @@ struct WorkflowsView: View {
     }
   }
 
+  /// The reader's own run: running it from here approves the workflow as shown.
   private func start(_ workflow: Workflow, confirmed: Bool) {
+    store.approve(workflow, in: root)
     store.start(workflow, in: root, version: version, confirmedPublishing: confirmed)
     runID = store.active[root]?.id
   }
@@ -367,6 +369,18 @@ struct WorkflowsView: View {
               }
             }
             .disabled(isDetecting)
+          }
+          .padding([.horizontal, .top], -KitMetrics.gutter)
+          .padding(.bottom, 4)
+        }
+        // A workflow from the repository or an agent starts on its own only once the reader approved its steps.
+        if workflow.trigger.isSet, !store.isApproved(workflow, in: root) {
+          Banner(
+            "\(workflow.trigger.summary) is off until you approve this workflow.",
+            message: "It came from the project's files or an agent. Check its steps below; a change to its file needs approving again.",
+            systemImage: "checkmark.shield", hue: .orange
+          ) {
+            Button("Approve") { store.approve(workflow, in: root) }
           }
           .padding([.horizontal, .top], -KitMetrics.gutter)
           .padding(.bottom, 4)

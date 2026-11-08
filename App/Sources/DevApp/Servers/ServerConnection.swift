@@ -4,6 +4,7 @@
 //
 
 import Foundation
+import Synchronization
 import VaultKit
 
 // MARK: - ServerConnection
@@ -182,7 +183,11 @@ nonisolated enum ServerKeychain {
 /// (VaultKit: the keychain on Apple platforms, the Secret Service on Linux), this device's only. Items an earlier Dev
 /// kept in the login keychain move there on first read. Every failure reads as nil or false.
 nonisolated enum DevKeychain {
+  /// Tests keep their items here instead of the keychain (`service|account` → value); nil uses the keychain.
+  static let memory = Mutex<[String: String]?>(nil)
+
   static func read(service: String, account: String) -> String? {
+    if let stored = memory.withLock({ $0 }) { return stored["\(service)|\(account)"] }
     let keychain = VaultKeychain(service: service, accessGroup: nil)
     let data = (try? keychain.read(account, options: .thisDevice))
       ?? keychain.adoptLoginKeychainItem(account, options: .thisDevice)
@@ -191,6 +196,11 @@ nonisolated enum DevKeychain {
   }
 
   static func write(_ value: String, service: String, account: String, label: String? = nil) -> Bool {
+    if memory.withLock({ memory in
+      guard memory != nil else { return false }
+      memory?["\(service)|\(account)"] = value
+      return true
+    }) { return true }
     let keychain = VaultKeychain(service: service, accessGroup: nil)
     do {
       try keychain.write(Data(value.utf8), account: account, options: .init(synchronizable: false, label: label))
@@ -201,6 +211,11 @@ nonisolated enum DevKeychain {
   }
 
   static func delete(service: String, account: String) -> Bool {
+    if memory.withLock({ memory in
+      guard memory != nil else { return false }
+      memory?["\(service)|\(account)"] = nil
+      return true
+    }) { return true }
     let keychain = VaultKeychain(service: service, accessGroup: nil)
     // An item an earlier Dev kept in the login keychain goes too, so it isn't adopted again.
     keychain.adoptLoginKeychainItem(account, options: .thisDevice)

@@ -87,8 +87,26 @@ final class WorkflowStore {
     workflows[root] = Workflow.load(in: root)
   }
 
+  // MARK: - Approvals
+
+  /// Bumped when an approval changes, so the tab redraws.
+  private(set) var approvalChanges = 0
+
+  /// Whether a trigger or an agent may start this workflow as its file is now (`WorkflowApprovals`).
+  func isApproved(_ workflow: Workflow, in root: URL) -> Bool {
+    _ = approvalChanges
+    return WorkflowApprovals.isApproved(workflow, in: root)
+  }
+
+  /// The reader approved the workflow's steps as shown: its triggers start runs, and agents may ask to run it.
+  func approve(_ workflow: Workflow, in root: URL) {
+    WorkflowApprovals.approve(workflow, in: root)
+    approvalChanges += 1
+  }
+
   /// Writes a workflow (and, the first time, the defaults beside it, so the
-  /// folder always holds every workflow the tab shows).
+  /// folder always holds every workflow the tab shows). A workflow the reader
+  /// edits in the app is approved as saved.
   func save(_ workflow: Workflow, in root: URL) throws {
     var all = workflows(for: root)
     let onDisk = FileManager.default.fileExists(atPath: Workflow.folder(in: root).path)
@@ -101,11 +119,14 @@ final class WorkflowStore {
       for other in all where other.id != workflow.id { try other.save(in: root) }
     }
     try workflow.save(in: root)
+    approve(workflow, in: root)
     workflows[root] = all.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
   }
 
   func delete(_ id: String, in root: URL) {
     Workflow.delete(id, in: root)
+    WorkflowApprovals.forget(id, in: root)
+    approvalChanges += 1
     workflows[root]?.removeAll { $0.id == id }
   }
 
@@ -480,13 +501,14 @@ final class WorkflowStore {
   // MARK: - Triggers
 
   /// Starts the runs whose trigger fired: a new commit on the watched branch, a
-  /// new tag that matches, or the daily time passing.
+  /// new tag that matches, or the daily time passing. Only workflows the reader
+  /// approved, unchanged since, start on their own (security audit H6): a new or
+  /// changed file, from git or an agent, waits in the Workflows tab.
   func checkTriggers() {
     guard !LaunchOptions.isScreenshotMode else { return }
     for root in watchedRoots where active[root] == nil {
-      for workflow in workflows(for: root) {
-        let trigger = workflow.trigger
-        guard trigger.branch != nil || trigger.tag != nil || trigger.daily != nil else { continue }
+      reload(root)
+      for workflow in Self.triggerable(workflows(for: root), in: root) {
         Task { [weak self] in
           guard let self, let reason = await self.firedTrigger(workflow, in: root) else { return }
           guard self.active[root] == nil else { return }
@@ -494,6 +516,11 @@ final class WorkflowStore {
         }
       }
     }
+  }
+
+  /// The workflows whose triggers are checked: those with a trigger that the reader approved as they are now.
+  static func triggerable(_ workflows: [Workflow], in root: URL) -> [Workflow] {
+    workflows.filter { $0.trigger.isSet && WorkflowApprovals.isApproved($0, in: root) }
   }
 
   private func firedTrigger(_ workflow: Workflow, in root: URL) async -> String? {
