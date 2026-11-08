@@ -18,13 +18,21 @@ import Foundation
 /// }
 /// ```
 ///
-/// Without a scene in the environment, nothing happens, so the call can stay in release builds.
+/// Without a scene in the environment, nothing happens, so the call can stay in release builds, where it never acts.
 @MainActor
 public enum Screenshots {
   public typealias Scene = ScreenshotConfig.Scene
 
-  /// The first scene being captured, nil in a normal launch.
-  public nonisolated static var scene: String? { ScreenshotSignal.environment(ScreenshotSignal.sceneKey) }
+  /// The first scene being captured, nil in a normal launch. Always nil in a release build: captures run Debug
+  /// builds (`ScreenshotConfig.Build.configuration`), and a shipped app doesn't act on a capture's environment
+  /// (security audit L12).
+  public nonisolated static var scene: String? {
+    #if DEBUG
+      ScreenshotSignal.environment(ScreenshotSignal.sceneKey)
+    #else
+      nil
+    #endif
+  }
 
   public nonisolated static var isCapturing: Bool { scene != nil }
 

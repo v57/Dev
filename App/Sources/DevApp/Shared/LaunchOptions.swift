@@ -9,12 +9,20 @@ import Foundation
 /// `-DevScreenshotMode` and a demo project, so the pictures never show the
 /// user's own projects, servers or translation memory.
 nonisolated enum LaunchOptions {
-  /// The store is in memory, and nothing the run does is kept.
-  static let isScreenshotMode = ProcessInfo.processInfo.arguments.contains("-DevScreenshotMode")
+  /// The store is in memory, and nothing the run does is kept. Debug builds only: a release Dev ignores these
+  /// launch options, the demo projects and the hang log's remote commands (security audit L37).
+  static let isScreenshotMode: Bool = {
+    #if DEBUG
+      ProcessInfo.processInfo.arguments.contains("-DevScreenshotMode")
+    #else
+      false
+    #endif
+  }()
 
-  /// Folders to import as projects at launch (`DEV_DEMO_PROJECTS`, colon-separated).
+  /// Folders to import as projects at launch (`DEV_DEMO_PROJECTS`, colon-separated), in screenshot mode.
   static var demoProjects: [URL] {
-    (ProcessInfo.processInfo.environment["DEV_DEMO_PROJECTS"] ?? "")
+    guard isScreenshotMode else { return [] }
+    return (ProcessInfo.processInfo.environment["DEV_DEMO_PROJECTS"] ?? "")
       .split(separator: ":").map { URL(fileURLWithPath: String($0)) }
   }
 
@@ -27,7 +35,13 @@ nonisolated enum LaunchOptions {
   static var storagePage: String? { value(after: "-DevStoragePage") }
 
   /// `-DevHangLog <file>`: main-thread stalls are logged there (`MainThreadWatchdog`).
-  static var hangLog: String? { value(after: "-DevHangLog") }
+  static var hangLog: String? {
+    #if DEBUG
+      value(after: "-DevHangLog")
+    #else
+      nil
+    #endif
+  }
 
   private static func value(after flag: String) -> String? {
     let arguments = ProcessInfo.processInfo.arguments
