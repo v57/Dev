@@ -17,7 +17,9 @@
 # cross-compiles on this Mac (not set up yet).
 #
 # Steps, in the order `all` runs them (a step that doesn't apply to the platform is skipped):
-#   check        tools, signing identity, notary profile, gh login, the build host
+#   check        tools, signing identity, notary profile, the build host, release.env holds no ASC_* values, the
+#                package pins (a committed Package.resolved, no -Local workspace, no branch pins unless
+#                RELEASE_PINS=branch; Windows/Linux: clean checkouts)
 #   build        a build (xcodebuild; swift build on Windows and Linux)
 #   test         xcodebuild test (skipped when TEST_SCHEME is empty)
 #   screenshots  the scenes in .dev/screenshots.json (dev-screenshots; pictures in its output folder),
@@ -480,6 +482,7 @@ do_check() {
           linux_sh 'swift --version 2>&1 | head -1' || fail "$HOST has no Swift (or doesn't answer)"
         fi
       fi
+      check_pins
       done_step
       return ;;
     android)
@@ -509,6 +512,7 @@ do_check() {
     [ -n "$GITHUB_REPO" ] || fail "GITHUB_REPO is empty"
     echo "GitHub: $GITHUB_REPO"
   fi
+  check_pins
   done_step
 }
 
@@ -517,6 +521,42 @@ check_asc_values() {
   if grep -qE '^[[:space:]]*ASC_(KEY_ID|ISSUER_ID|KEY_PATH)=[^[:space:]#]' release.env; then
     fail "release.env holds ASC_* values: move them to $ASC_CONFIG (Dev's Release Settings ▸ App Store Connect does)"
   fi
+}
+
+# The packages a release builds from, pinned (security audit H2): Apple platforms build from the project's committed
+# Package.resolved and nothing else (archive passes -onlyUsePackageVersionsFromResolvedFile), never from a -Local
+# workspace's sibling checkouts, and with tags rather than branches unless RELEASE_PINS=branch (until the libraries'
+# tags are pushed). Windows and Linux build from this Mac's checkouts (V57_LOCAL=1): each must be clean, and its
+# commit is printed for the record.
+check_pins() {
+  if [ "$PLATFORM" = windows ] || [ "$PLATFORM" = linux ]; then
+    local folder dirty=""
+    for folder in "${LOCAL_FOLDERS[@]}"; do
+      echo "  $(rel "$folder") $(git -C "$folder" rev-parse --short HEAD 2>/dev/null || echo '(no git)')"
+      [ -z "$(git -C "$folder" status --porcelain 2>/dev/null)" ] || dirty="$dirty $(rel "$folder")"
+    done
+    [ -z "$dirty" ] || [ "$RELEASE_PINS" = branch ] || fail "uncommitted changes in:$dirty (commit them, or RELEASE_PINS=branch for a test build)"
+    return 0
+  fi
+  [ "$APPLE" = 1 ] || return 0
+  case "$WORKSPACE" in *-Local.xcworkspace)
+    [ "$RELEASE_PINS" = branch ] || fail "WORKSPACE is $WORKSPACE, which builds from the sibling checkouts: release from the .xcodeproj (or RELEASE_PINS=branch for a test build)" ;;
+  esac
+  local resolved=""
+  if [ -n "$WORKSPACE" ]; then resolved="$WORKSPACE/xcshareddata/swiftpm/Package.resolved"
+  elif [ -n "$PROJECT" ]; then resolved="$PROJECT/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
+  fi
+  [ -n "$resolved" ] || return 0
+  if ! git ls-files --error-unmatch "$resolved" >/dev/null 2>&1; then
+    [ "$RELEASE_PINS" = branch ] && { echo "note: $resolved isn't committed (RELEASE_PINS=branch)"; return 0; }
+    fail "$resolved isn't committed: resolve the packages and commit it (security audit H2)"
+  fi
+  [ -z "$(git status --porcelain -- "$resolved")" ] || fail "$resolved has uncommitted changes"
+  if grep -q '"branch"' "$resolved"; then
+    [ "$RELEASE_PINS" = branch ] || fail "$resolved pins branches: tag the libraries and resolve against the tags (or RELEASE_PINS=branch)"
+    echo "note: $resolved pins branches at the revisions it names (RELEASE_PINS=branch)"
+  fi
+  echo "packages: $resolved"
 }
 
 do_build() {
@@ -647,6 +687,9 @@ do_archive() {
   # Code checkout beside this Dev repo.
   # Automatic signing makes or renews the team's profiles on the way (iCloud and other capabilities need them).
   local tool=xcodebuild settings=()
+  # The committed Package.resolved and nothing else (check_pins): no package moves while the archive builds.
+  PINNED=()
+  [ "$RELEASE_PINS" = branch ] || PINNED=(-onlyUsePackageVersionsFromResolvedFile -disableAutomaticPackageResolution)
   if [ "$PLATFORM" = macos ]; then
     # From a worktree of this repo, the Code checkout beside its main checkout.
     local main
@@ -658,7 +701,8 @@ do_archive() {
   fi
   XCB_TOOL="$tool" xcb ${CONTAINER[@]+"${CONTAINER[@]}"} -scheme "$SCHEME" -configuration "$CONFIGURATION" \
     -destination "$DESTINATION" ${DERIVED[@]+"${DERIVED[@]}"} -archivePath "$ARCHIVE" -allowProvisioningUpdates \
-    MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" ${settings[@]+"${settings[@]}"} archive \
+    ${PINNED[@]+"${PINNED[@]}"} MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+    ${settings[@]+"${settings[@]}"} archive \
     || fail "the archive failed"
   artifact archive "$ARCHIVE"
   # macOS downloads before notarization: the Developer ID export as <App>.zip and a signed <App>.dmg (direct
