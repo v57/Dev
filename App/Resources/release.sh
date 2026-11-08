@@ -569,6 +569,22 @@ PLIST
     -allowProvisioningUpdates || fail "the Developer ID export failed"
   EXPORTED_APP="$export/$APP_NAME.app"
   [ -d "$EXPORTED_APP" ] || [ "$DRY_RUN" = 1 ] || fail "the export has no $APP_NAME.app"
+  check_signature "$EXPORTED_APP"
+}
+
+# A Developer ID app ships with the hardened runtime (notarization requires it; security audit M6) and, when it has
+# push, with the production APNs environment (L10: the export swaps development for production; a mismatch with the
+# profile stops the app from launching).
+check_signature() {
+  [ "$DRY_RUN" = 1 ] && return 0
+  codesign -dv "$1" 2>&1 | grep -qE '^CodeDirectory .*flags=0x[0-9a-f]*\([^)]*runtime' \
+    || fail "$(basename "$1") isn't signed with the hardened runtime (ENABLE_HARDENED_RUNTIME = YES)"
+  local entitlements="$OUT/.entitlements-check.plist" aps
+  codesign -d --entitlements - --xml "$1" >"$entitlements" 2>/dev/null || true
+  aps=$(/usr/libexec/PlistBuddy -c 'Print :com.apple.developer.aps-environment' "$entitlements" 2>/dev/null \
+    || /usr/libexec/PlistBuddy -c 'Print :aps-environment' "$entitlements" 2>/dev/null || true)
+  rm -f "$entitlements"
+  [ -z "$aps" ] || [ "$aps" = production ] || fail "$(basename "$1") says aps-environment = $aps, not production"
 }
 
 do_archive() {
