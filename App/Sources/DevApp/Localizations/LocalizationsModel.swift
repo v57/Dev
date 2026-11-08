@@ -28,6 +28,8 @@ nonisolated struct LocalizationsApp: Codable, Hashable, Sendable, Identifiable {
   var scheme: String
   /// Whether Scan and Translate All include it.
   var included = true
+  /// Added by hand (Add App…): an app that isn't next to the repository, like Hub. Kept when the apps are re-read.
+  var added: Bool?
 
   var id: String { name }
   var folderURL: URL { URL(fileURLWithPath: folder, isDirectory: true) }
@@ -38,22 +40,33 @@ nonisolated enum LocalizationsApps {
   /// sibling checkouts) and an application target named like the folder in `<Folder>.xcodeproj`.
   static func discover(near repo: URL) -> [LocalizationsApp] {
     let parent = repo.standardizedFileURL.deletingLastPathComponent()
-    let manager = FileManager.default
-    let folders = (try? manager.contentsOfDirectory(
+    let folders = (try? FileManager.default.contentsOfDirectory(
       at: parent, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])) ?? []
     return folders
       .filter { $0.lastPathComponent != repo.lastPathComponent }
-      .compactMap { folder -> LocalizationsApp? in
-        let name = folder.lastPathComponent
-        let workspace = "\(name)-Local.xcworkspace"
-        guard manager.fileExists(atPath: folder.appendingPathComponent(workspace).path) else { return nil }
-        let project = folder.appendingPathComponent("\(name).xcodeproj/project.pbxproj")
-        let targets = applicationTargets(pbxproj: (try? String(contentsOf: project, encoding: .utf8)) ?? "")
-        guard let scheme = targets.first(where: { $0 == name }) ?? targets.first else { return nil }
-        return LocalizationsApp(
-          name: name, folder: folder.standardizedFileURL.path, container: workspace, scheme: scheme)
-      }
+      .compactMap { app(at: $0, requireFolderName: true) }
       .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+  }
+
+  /// The app in `folder`: its `<Name>-Local.xcworkspace` (named like the folder, or — for an app added by hand, like
+  /// Hub's `hub-app` — the only one there) and an application target in `<Name>.xcodeproj`, the one named like the
+  /// app first. The source is named after the workspace.
+  static func app(at folder: URL, requireFolderName: Bool = false) -> LocalizationsApp? {
+    let manager = FileManager.default
+    let suffix = "-Local.xcworkspace"
+    var workspace = "\(folder.lastPathComponent)\(suffix)"
+    if !manager.fileExists(atPath: folder.appendingPathComponent(workspace).path) {
+      guard !requireFolderName,
+        let only = ((try? manager.contentsOfDirectory(atPath: folder.path)) ?? []).filter({ $0.hasSuffix(suffix) })
+          .sorted().first
+      else { return nil }
+      workspace = only
+    }
+    let name = String(workspace.dropLast(suffix.count))
+    let project = folder.appendingPathComponent("\(name).xcodeproj/project.pbxproj")
+    let targets = applicationTargets(pbxproj: (try? String(contentsOf: project, encoding: .utf8)) ?? "")
+    guard let scheme = targets.first(where: { $0 == name }) ?? targets.first else { return nil }
+    return LocalizationsApp(name: name, folder: folder.standardizedFileURL.path, container: workspace, scheme: scheme)
   }
 
   /// The names of a project's application targets, in file order.
@@ -119,7 +132,7 @@ nonisolated enum StringsDataScan {
       warnings.append("No link list for \(app.scheme): every module in the build folder was read")
       linked = Set(targetDirectories.map { moduleName(directory: $0) })
     }
-    let appsParent = app.folderURL.deletingLastPathComponent().standardizedFileURL.path
+    let packages = derivedData.appendingPathComponent("SourcePackages").standardizedFileURL.path + "/"
     var modules: [ModuleStrings] = []
     var otherTables = 0
     for directory in targetDirectories {
@@ -148,9 +161,8 @@ nonisolated enum StringsDataScan {
           }
         }
       }
-      // Only v57's own checkouts (next to the app) are sources; a package from GitHub ships its own strings.
-      guard let repo, !keys.isEmpty,
-        URL(fileURLWithPath: repo).deletingLastPathComponent().standardizedFileURL.path == appsParent
+      // Only local checkouts are sources; a package Xcode fetched from GitHub ships its own strings.
+      guard let repo, !keys.isEmpty, !(repo + "/").hasPrefix(packages), !repo.contains("/SourcePackages/checkouts/")
       else { continue }
       modules.append(ModuleStrings(module: module, repo: repo, keys: keys))
     }
@@ -259,8 +271,9 @@ nonisolated struct LocalizationsSource: Hashable, Sendable, Identifiable {
 
 /// Which sources the scanned apps make, and the order each app looks them up in.
 ///
-/// A module an app links from ANOTHER checkout is a kit: it is its own source, named after the module, and every app
-/// that links it shares it. Every other module of the app's own checkout belongs to the app's source. A key is in one
+/// A module an app links from ANOTHER checkout next to the repository (`kitsFolder`, v57's) is a kit: it is its own
+/// source, named after the module, and every app that links it shares it. Every other module (the app's checkout,
+/// and checkouts elsewhere like Hub's own packages) belongs to the app's source. A key is in one
 /// place per app: the app's source leaves out what the kits it links already hold, so a kit's string is translated
 /// once. A module that one app links from another's checkout (Code's `CodeActionsUI` in Shell) is a kit for the app
 /// it lives in too.
@@ -269,12 +282,19 @@ nonisolated struct LocalizationsPlan: Sendable {
   /// App -> its sources in lookup order: its own first, then its kits by name.
   var lookup: [String: [String]]
 
-  init(apps: [LocalizationsApp], scans: [String: AppScan]) {
+  init(apps: [LocalizationsApp], scans: [String: AppScan], kitsFolder: String? = nil) {
     let scanned = apps.filter(\.included).compactMap { app in scans[app.name].map { (app, $0) } }
     let appNames = Set(scanned.map(\.0.name))
     var kitModules: Set<String> = []
     for (app, scan) in scanned {
-      for module in scan.modules where module.repo != app.folder { kitModules.insert(module.module) }
+      for module in scan.modules where module.repo != app.folder {
+        if let kitsFolder,
+          URL(fileURLWithPath: module.repo).deletingLastPathComponent().standardizedFileURL.path != kitsFolder
+        {
+          continue
+        }
+        kitModules.insert(module.module)
+      }
     }
     func kitName(_ module: String) -> String {
       appNames.contains(module) ? "\(module)Strings" : module

@@ -200,7 +200,7 @@ final class LocalizationsStore {
     var state = LocalizationsState.load(from: stateURL)
     if state.repo == nil { state.repo = LocalizationsRepo.standard?.path }
     self.state = state
-    plan = LocalizationsPlan(apps: state.apps, scans: state.scans)
+    plan = LocalizationsPlan(apps: state.apps, scans: state.scans, kitsFolder: Self.kitsFolder(state.repo))
     refreshApps()
   }
 
@@ -235,10 +235,15 @@ final class LocalizationsStore {
     }
   }
 
-  /// Re-reads the apps next to the repository, keeping each known app's settings.
+  /// Re-reads the apps next to the repository, keeping each known app's settings and the apps added by hand.
   func refreshApps() {
     guard let repoURL else { return }
-    let found = LocalizationsApps.discover(near: repoURL)
+    var found = LocalizationsApps.discover(near: repoURL)
+    for app in state.apps where app.added == true && !found.contains(where: { $0.name == app.name }) {
+      guard var current = LocalizationsApps.app(at: app.folderURL) else { continue }
+      current.added = true
+      found.append(current)
+    }
     state.apps = found.map { app in
       guard let known = state.apps.first(where: { $0.name == app.name }) else { return app }
       var app = app
@@ -248,6 +253,30 @@ final class LocalizationsStore {
     }
     replan()
     refreshProgress()
+  }
+
+  /// Asks for an app's folder (one holding a `-Local` workspace) and adds it.
+  func chooseApp() {
+    Task {
+      guard let url = await KitDesktop.chooseFolders(
+        prompt: String(localized: "Add"), message: String(localized: "Choose an app's folder (it holds a -Local workspace)")
+      ).first else { return }
+      addApp(at: url)
+    }
+  }
+
+  /// Adds the app in `folder`, one that isn't next to the repository (Hub).
+  func addApp(at folder: URL) {
+    guard var app = LocalizationsApps.app(at: folder) else {
+      error = String(localized: "\(folder.lastPathComponent) has no -Local workspace with an app target.")
+      return
+    }
+    app.added = true
+    state.apps.removeAll { $0.name == app.name }
+    state.apps.append(app)
+    state.apps.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    replan()
+    persist()
   }
 
   func setIncluded(_ app: String, _ included: Bool) {
@@ -286,7 +315,12 @@ final class LocalizationsStore {
   }
 
   private func replan() {
-    plan = LocalizationsPlan(apps: state.apps, scans: state.scans)
+    plan = LocalizationsPlan(apps: state.apps, scans: state.scans, kitsFolder: Self.kitsFolder(state.repo))
+  }
+
+  /// The folder of the shared checkouts: the repository's (v57's).
+  private static func kitsFolder(_ repo: String?) -> String? {
+    repo.map { URL(fileURLWithPath: $0).deletingLastPathComponent().standardizedFileURL.path }
   }
 
   private func persist() { state.save(to: stateURL) }
@@ -421,7 +455,8 @@ final class LocalizationsStore {
       error = problem
       return
     }
-    let sources = (names ?? sourceNames).filter {
+    // Translate All is the included apps' sources: a catalog no included app makes now stays as it is.
+    let sources = (names ?? plan.sources.map(\.name)).filter {
       FileManager.default.fileExists(atPath: LocalizationsRepo.catalog($0, in: repoURL).path)
     }
     let languages = state.languages
@@ -518,7 +553,8 @@ final class LocalizationsStore {
 
   #if DEBUG
     /// Debug builds take commands without a click: post the distributed notification `dev.v57.dev.localizations`
-    /// with `scan [app…]`, `translate [source…]`, `build`, `cancel`, `include <app> yes|no`, `languages <code…>` or
+    /// with `scan [app…]`, `translate [source…]`, `build`, `cancel`, `include <app> yes|no`, `addapp <folder>`,
+    /// `languages <code…>` or
     /// `dump` (the state, plan and progress to /tmp/dev-localizations.txt).
     func listenForDebugCommands(shell: Translation.Shell) async {
       for await note in Broadcast.messages(named: "dev.v57.dev.localizations") {
@@ -531,6 +567,7 @@ final class LocalizationsStore {
         case "build": buildAndCommit()
         case "cancel": cancel()
         case "include": if rest.count == 2 { setIncluded(rest[0], rest[1] == "yes") }
+        case "addapp": if !rest.isEmpty { addApp(at: URL(fileURLWithPath: rest.joined(separator: " "))) }
         case "languages":
           state.languages = rest
           persist()

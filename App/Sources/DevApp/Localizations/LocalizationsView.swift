@@ -145,6 +145,10 @@ private struct LocalizationsOverview: View {
               }
             }
           }
+          FormRow("Other App", help: "An app that isn't next to the repository, like Hub", systemImage: "plus.app") {
+            Button("Add App…") { store.chooseApp() }
+              .disabled(store.isBusy)
+          }
         }
         FormCard("Languages", footer: "Every source is translated into these. Apps bundle a few and download the rest from the repository.") {
           FormRow(

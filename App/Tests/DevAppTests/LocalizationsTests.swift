@@ -89,6 +89,60 @@ import Testing
     #expect(plan.sources.prefix(3).allSatisfy { $0.kind == .app })
   }
 
+  @Test func checkoutsElsewhereBelongToTheirApp() {
+    let apps = [
+      LocalizationsApp(name: "Hub", folder: "/hub/Apps/hub-app", container: "", scheme: "Hub", added: true),
+      LocalizationsApp(name: "Markdown", folder: "/v57/Markdown", container: "", scheme: "Markdown"),
+    ]
+    let kit = ModuleStrings(module: "ComponentKit", repo: "/v57/Component", keys: ["Close": []])
+    let scans = [
+      "Hub": AppScan(
+        app: "Hub", date: .now,
+        modules: [
+          ModuleStrings(module: "Hub", repo: "/hub/Apps/hub-app", keys: ["Devices": []]),
+          ModuleStrings(module: "ChannelSwift", repo: "/hub/Channel", keys: ["Connected": [], "Close": []]), kit,
+        ]),
+      "Markdown": AppScan(
+        app: "Markdown", date: .now,
+        modules: [ModuleStrings(module: "MarkdownApp", repo: "/v57/Markdown", keys: ["Export": []]), kit]),
+    ]
+    let plan = LocalizationsPlan(apps: apps, scans: scans, kitsFolder: "/v57")
+    let byName = Dictionary(uniqueKeysWithValues: plan.sources.map { ($0.name, $0) })
+    #expect(Set(byName.keys) == ["Hub", "Markdown", "ComponentKit"])
+    // Hub's own packages are Hub's source; v57's kit stays a kit.
+    #expect(Set(byName["Hub"]?.keys.keys.map { $0 } ?? []) == ["Devices", "Connected"])
+    #expect(byName["ComponentKit"]?.usedBy == ["Hub", "Markdown"])
+    #expect(plan.lookup["Hub"] == ["Hub", "ComponentKit"])
+  }
+
+  @Test func anAppIsFoundByItsLocalWorkspace() throws {
+    let folder = FileManager.default.temporaryDirectory
+      .appendingPathComponent("LocalizationsTests-\(UUID().uuidString)/hub-app", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: folder.deletingLastPathComponent()) }
+    try FileManager.default.createDirectory(
+      at: folder.appendingPathComponent("Hub-Local.xcworkspace"), withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(
+      at: folder.appendingPathComponent("Hub.xcodeproj"), withIntermediateDirectories: true)
+    try """
+      \t\tAA /* Hub Pro */ = {
+      \t\t\tisa = PBXNativeTarget;
+      \t\t\tname = "Hub Pro";
+      \t\t\tproductType = "com.apple.product-type.application";
+      \t\t};
+      \t\tBB /* Hub */ = {
+      \t\t\tisa = PBXNativeTarget;
+      \t\t\tname = Hub;
+      \t\t\tproductType = "com.apple.product-type.application";
+      \t\t};
+      """.write(to: folder.appendingPathComponent("Hub.xcodeproj/project.pbxproj"), atomically: true, encoding: .utf8)
+    let app = try #require(LocalizationsApps.app(at: folder))
+    #expect(app.name == "Hub")
+    #expect(app.container == "Hub-Local.xcworkspace")
+    #expect(app.scheme == "Hub")
+    // Discovery next to the repository wants the folder's own name.
+    #expect(LocalizationsApps.app(at: folder, requireFolderName: true) == nil)
+  }
+
   @Test func applicationTargetsComeFromTheProject() {
     let pbxproj = """
       \t\tAA /* Remote */ = {
