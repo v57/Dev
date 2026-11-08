@@ -91,7 +91,7 @@ struct ReleaseSettingsSheet: View {
       }
       FormCard(
         "App Store Connect",
-        footer: "The API key uploads screenshots, and builds without the account signed in to Xcode. Dev copies it to ~/.appstoreconnect/private_keys."
+        footer: "The API key uploads screenshots, and builds without the account signed in to Xcode. One key for every project on this Mac: Dev copies it to ~/.appstoreconnect/private_keys and keeps its IDs in ~/.appstoreconnect/v57.env, never in release.env."
       ) {
         GroupRow("Upload to App Store Connect") {
           Toggle("Upload to App Store Connect", isOn: Binding(

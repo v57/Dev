@@ -7,8 +7,8 @@ import ComponentKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// The App Store Connect API key release.env names (ASC_KEY_ID, ASC_ISSUER_ID,
-/// ASC_KEY_PATH), set up the way Shell's Notarization sheet sets up its key:
+/// The App Store Connect API key (ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_PATH, in the machine-wide
+/// `machineFile`, not in release.env), set up the way Shell's Notarization sheet sets up its key:
 /// choose the `.p8` App Store Connect downloads, read the key ID from its name,
 /// check it with Apple. One key serves the screenshot upload, release.sh's
 /// build upload and, saved as a notarytool profile, notarization.
@@ -18,6 +18,47 @@ nonisolated enum AppStoreConnectKey {
   static var folder: URL {
     FileManager.default.homeDirectoryForCurrentUser
       .appendingPathComponent(".appstoreconnect/private_keys", isDirectory: true)
+  }
+
+  // MARK: The machine-wide file
+
+  /// The key's IDs, which belong to this Mac rather than to a project: ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_PATH.
+  static let keys = ["ASC_KEY_ID", "ASC_ISSUER_ID", "ASC_KEY_PATH"]
+
+  /// One file for every project on this Mac, readable only by you, outside every repository: Dev's Release Settings
+  /// write it and release.sh reads it (as data, never sourced), so no release.env carries the IDs (security audit L7).
+  nonisolated(unsafe) static var machineFile = FileManager.default.homeDirectoryForCurrentUser
+    .appendingPathComponent(".appstoreconnect/v57.env")
+
+  static func loadMachineValues(from file: URL = machineFile) -> [String: String] {
+    guard let text = try? String(contentsOf: file, encoding: .utf8) else { return [:] }
+    let parsed = ReleaseConfig.parse(text)
+    return Dictionary(uniqueKeysWithValues: keys.compactMap { key in parsed[key].isEmpty ? nil : (key, parsed[key]) })
+  }
+
+  /// Writes the IDs (empty ones as empty lines), the folder 0700 and the file 0600.
+  static func saveMachineValues(_ values: [String: String], to file: URL = machineFile) throws {
+    let manager = FileManager.default
+    let folder = file.deletingLastPathComponent()
+    try manager.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+    var text = "# The App Store Connect API key for every v57 project on this Mac: Dev's Release Settings write it, release.sh\n"
+    text += "# reads it (as data, never sourced). Keep it 0600 and outside every repository.\n"
+    for key in keys {
+      let value = values[key] ?? ""
+      let needsQuotes = value.contains { $0 == " " || $0 == "#" || $0 == "\"" || $0 == "$" }
+      text += "\(key)=" + (needsQuotes ? "'\(value)'" : value) + "\n"
+    }
+    if !manager.fileExists(atPath: file.path) {
+      guard manager.createFile(atPath: file.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
+        throw CocoaError(.fileWriteNoPermission)
+      }
+    }
+    // Written in place, so the file keeps its 0600 (an atomic write would make a new file with the default mode).
+    let handle = try FileHandle(forWritingTo: file)
+    defer { try? handle.close() }
+    try handle.truncate(atOffset: 0)
+    try handle.write(contentsOf: Data(text.utf8))
+    try manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
   }
 
   /// `AuthKey_<KEYID>.p8` is how App Store Connect names the download.

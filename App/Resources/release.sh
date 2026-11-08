@@ -100,9 +100,43 @@ PACKAGE_PATH=""; WINDOWS_PRODUCT=""; WINDOWS_HOST=""; LINUX_PRODUCT=""; LINUX_HO
 LINUX_JOBS=4; SWIFTUI_PATH=""
 ANDROID_PRODUCT=""; ANDROID_KEYSTORE=""; ANDROID_KEY_ALIAS=""; ANDROID_KEYCHAIN_ITEM=""
 GOOGLE_PLAY="no"; GOOGLE_PLAY_TRACK="internal"; GOOGLE_PLAY_KEY_PATH=""
-MS_STORE="no"; MS_STORE_APP_ID=""
-# shellcheck disable=SC1091
-. ./release.env
+MS_STORE="no"; MS_STORE_APP_ID=""; RELEASE_PINS="resolved"
+
+# read_env FILE KEYS: the KEY=value lines of FILE, read as data, never run: a value is taken as written ('…' or "…"
+# quoted, else up to a " #" comment), nothing in it is expanded or executed (a leading ~/ is your home folder), and
+# only the keys named in KEYS are set. Other lines are skipped.
+read_env() {
+  local file="$1" keys=" $2 " line key value
+  [ -f "$file" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    case "$line" in '' | '#'*) continue ;; esac
+    [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || continue
+    key="${BASH_REMATCH[1]}"
+    value="${BASH_REMATCH[2]}"
+    case "$keys" in *" $key "*) ;; *) continue ;; esac
+    case "$value" in
+      \'*) value="${value#\'}"; value="${value%%\'*}" ;;
+      \"*) value="${value#\"}"; value="${value%%\"*}" ;;
+      *) value="${value%%[[:space:]]#*}"; value="${value%"${value##*[![:space:]]}"}" ;;
+    esac
+    case "$value" in '~/'*) value="$HOME/${value#\~/}" ;; esac
+    printf -v "$key" '%s' "$value"
+  done <"$file"
+}
+
+RELEASE_KEYS="APP_NAME SCHEME PROJECT WORKSPACE PLATFORM TEAM_ID CONFIGURATION TEST_SCHEME TEST_DESTINATION
+  SCREENSHOT_TEST SCREENSHOT_LOCALES SCREENSHOT_DESTINATION DIRECT_DOWNLOAD DIRECT_ARCHS DIRECT_SETTINGS NOTARY_PROFILE
+  GITHUB_REPO GITHUB_DRAFT APP_STORE PACKAGE_PATH WINDOWS_PRODUCT WINDOWS_HOST WINDOWS_RELEASE_ROOT LINUX_PRODUCT
+  LINUX_HOST LINUX_STATIC LINUX_JOBS SWIFTUI_PATH ANDROID_PRODUCT ANDROID_KEYSTORE ANDROID_KEY_ALIAS
+  ANDROID_KEYCHAIN_ITEM GOOGLE_PLAY GOOGLE_PLAY_TRACK GOOGLE_PLAY_KEY_PATH GOOGLE_PLAY_PACKAGE MS_STORE MS_STORE_APP_ID
+  MS_STORE_TENANT_ID MS_STORE_CLIENT_ID RELEASE_PINS"
+RELEASE_KEYS="$(echo $RELEASE_KEYS)"
+read_env release.env "$RELEASE_KEYS"
+# The App Store Connect key's IDs are this Mac's, not the project's: one machine-wide file (0600, outside every
+# repository) that Dev's Release Settings writes. ASC_* lines in a release.env are ignored (check refuses them).
+ASC_CONFIG="${ASC_CONFIG:-$HOME/.appstoreconnect/v57.env}"
+read_env "$ASC_CONFIG" "ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_PATH"
 [ -n "$SCHEME" ] || { echo "::fail config SCHEME is not set in release.env"; exit 1; }
 APP_NAME="${APP_NAME:-$SCHEME}"
 PLATFORM="${ARG_PLATFORM:-${PLATFORM:-macos}}"
@@ -432,6 +466,7 @@ echo \"dev-release-file: \$out/$name-Linux-\$arch.tar.gz\"" || fail "the Linux r
 
 do_check() {
   step check
+  check_asc_values
   case "$PLATFORM" in
     windows|linux)
       build_host
@@ -475,6 +510,13 @@ do_check() {
     echo "GitHub: $GITHUB_REPO"
   fi
   done_step
+}
+
+# A tracked release.env is public: the App Store Connect key's IDs belong in $ASC_CONFIG, never in it.
+check_asc_values() {
+  if grep -qE '^[[:space:]]*ASC_(KEY_ID|ISSUER_ID|KEY_PATH)=[^[:space:]#]' release.env; then
+    fail "release.env holds ASC_* values: move them to $ASC_CONFIG (Dev's Release Settings ▸ App Store Connect does)"
+  fi
 }
 
 do_build() {

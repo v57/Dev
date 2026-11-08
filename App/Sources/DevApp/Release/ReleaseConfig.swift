@@ -16,6 +16,8 @@ nonisolated struct ReleaseConfig: Equatable, Sendable {
   var values: [String: String] = [:]
   /// Lines Dev does not model (other keys, comments), written back unchanged.
   var extraLines: [String] = []
+  /// The App Store Connect values as `load` found them, so `save` writes the machine-wide file only when they change.
+  private var loadedAppStoreConnect: [String: String] = [:]
 
   /// The keys the Release tool edits, in file order, with the line written above each.
   static let fields: [(key: String, comment: String?)] = [
@@ -25,7 +27,7 @@ nonisolated struct ReleaseConfig: Equatable, Sendable {
     ("SCREENSHOT_LOCALES", nil), ("SCREENSHOT_DESTINATION", nil),
     ("DIRECT_DOWNLOAD", ""), ("DIRECT_ARCHS", nil), ("DIRECT_SETTINGS", nil), ("NOTARY_PROFILE", nil),
     ("GITHUB_REPO", ""), ("GITHUB_DRAFT", nil),
-    ("APP_STORE", ""), ("ASC_KEY_ID", nil), ("ASC_ISSUER_ID", nil), ("ASC_KEY_PATH", nil),
+    ("APP_STORE", ""),
   ]
 
   /// The other platforms' and stores' keys, written only when set (most apps ship on Apple platforms only).
@@ -47,14 +49,23 @@ nonisolated struct ReleaseConfig: Equatable, Sendable {
 
   static func url(in root: URL) -> URL { root.appendingPathComponent(fileName) }
 
+  /// The project's release.env, with the App Store Connect key's IDs from the machine-wide file
+  /// (`AppStoreConnectKey.machineFile`). ASC_* values still in an old release.env are kept only where that file has
+  /// none, and move there on the next `save`.
   static func load(from root: URL) -> ReleaseConfig? {
     guard let text = try? String(contentsOf: url(in: root), encoding: .utf8) else { return nil }
-    return parse(text)
+    var config = parse(text)
+    let machine = AppStoreConnectKey.loadMachineValues()
+    for key in AppStoreConnectKey.keys {
+      if let value = machine[key], !value.isEmpty { config[key] = value }
+    }
+    config.loadedAppStoreConnect = machine
+    return config
   }
 
   static func parse(_ text: String) -> ReleaseConfig {
     var config = ReleaseConfig()
-    let known = Set(fields.map(\.key) + platformFields)
+    let known = Set(fields.map(\.key) + platformFields + AppStoreConnectKey.keys)
     for raw in text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init) {
       let line = raw.trimmingCharacters(in: .whitespaces)
       guard !line.isEmpty, !line.hasPrefix("#"), let equals = line.firstIndex(of: "=") else {
@@ -109,8 +120,13 @@ nonisolated struct ReleaseConfig: Equatable, Sendable {
 
   static let platformComment = "Windows and Linux (built on a VM), Android, and their stores."
 
+  /// Writes release.env, which never holds the App Store Connect key's IDs (a tracked release.env is public, and
+  /// release.sh refuses one that does), and the machine-wide file when those changed.
   func save(to root: URL) throws {
     try rendered().write(to: Self.url(in: root), atomically: true, encoding: .utf8)
+    let asc = Dictionary(uniqueKeysWithValues: AppStoreConnectKey.keys.map { ($0, self[$0]) })
+    let before = Dictionary(uniqueKeysWithValues: AppStoreConnectKey.keys.map { ($0, loadedAppStoreConnect[$0] ?? "") })
+    if asc != before { try AppStoreConnectKey.saveMachineValues(asc) }
   }
 
   // MARK: - first setup
@@ -156,6 +172,9 @@ nonisolated struct ReleaseConfig: Equatable, Sendable {
     config["APP_STORE"] = config["PLATFORM"] == "ios" ? "yes" : "no"
     let remote = await LineProcess.run("/usr/bin/git", ["remote", "get-url", "origin"], directory: root)
     config["GITHUB_REPO"] = githubRepo(from: remote.output)
+    let machine = AppStoreConnectKey.loadMachineValues()
+    for (key, value) in machine { config[key] = value }
+    config.loadedAppStoreConnect = machine
     return config
   }
 
