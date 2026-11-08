@@ -645,7 +645,7 @@ android_archive() {
   [ -x "$swiftui/Android/scripts/build-app" ] || fail "no v57/SwiftUI checkout at $swiftui (SWIFTUI_PATH)"
   local product="${ANDROID_PRODUCT:-${APP_NAME// /}Android}" identifier
   identifier=$(xcodebuild ${CONTAINER[@]+"${CONTAINER[@]}"} -scheme "$SCHEME" -showBuildSettings 2>/dev/null \
-    | awk -F' = ' '/ PRODUCT_BUNDLE_IDENTIFIER = / {print $2; exit}')
+    | awk -F' = ' '/ PRODUCT_BUNDLE_IDENTIFIER = / {print $2; exit}' || true)
   V57_LOCAL=1 run "$swiftui/Android/scripts/build-app" --package-path "$PACKAGE_DIR" --product "$product" -c release \
     --no-install --app-id "${identifier:-dev.v57.$(echo "$APP_NAME" | tr A-Z a-z)}" --label "$APP_NAME" || fail "the Android build failed"
   local apk
@@ -657,8 +657,11 @@ android_archive() {
   local apksigner
   apksigner=$(find "${ANDROID_HOME:-$HOME/Library/Android/sdk}/build-tools" -name apksigner | sort | tail -1)
   [ -n "$apksigner" ] || fail "apksigner not found (Android SDK build-tools)"
-  run "$apksigner" sign --ks "$ANDROID_KEYSTORE" ${ANDROID_KEY_ALIAS:+--ks-key-alias "$ANDROID_KEY_ALIAS"} \
-    --ks-pass "pass:$password" --out "$OUT/$APP_NAME-Android.apk" "$apk" || fail "signing the APK failed"
+  # The password reaches apksigner through its environment (env:), set for that one command: never on a command line
+  # (ps) or in the log `run` prints (security audit M8).
+  V57_KS_PASS="$password" run "$apksigner" sign --ks "$ANDROID_KEYSTORE" \
+    ${ANDROID_KEY_ALIAS:+--ks-key-alias "$ANDROID_KEY_ALIAS"} --ks-pass env:V57_KS_PASS \
+    --out "$OUT/$APP_NAME-Android.apk" "$apk" || fail "signing the APK failed"
   artifact package "$OUT/$APP_NAME-Android.apk"
 }
 
