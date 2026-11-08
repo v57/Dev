@@ -5,6 +5,7 @@
 
 import CryptoKit
 import Foundation
+import GitHubKit
 import Observation
 import VaultKit
 
@@ -235,7 +236,13 @@ final class WorkflowStore {
         passed = await runOnVM(step, vmName: vmName, runID: runID, root: root)
       } else {
         let process = LineProcess("/bin/bash", ["-lc", step.command ?? ""], directory: root)
-        passed = await stream(process, stepID: step.id, runID: runID, root: root) == 0
+        let requested = PublishRequest()
+        passed = await stream(process, stepID: step.id, runID: runID, root: root) { line in
+          if let file = GitHubReleaseRequest.file(fromMarker: line) { requested.file = file }
+        } == 0
+        if passed, let file = requested.file {
+          passed = await publishRelease(file, step: step, runID: runID, root: root)
+        }
       }
     }
     setStep(root, step.id) {
@@ -266,12 +273,18 @@ final class WorkflowStore {
       if let commit = run.commit { arguments += ["--commit", commit] }
     }
     arguments.append(name)
-    // The GitHub step publishes with the sign-in of the project's account.
-    let environment = ReleaseRunner.environment(forAccount: accounts[root] ?? VaultAccount.personal.id)
-    let process = LineProcess("/bin/bash", arguments, directory: root, environment: environment)
+    // No token: the GitHub step only says what to publish, and Dev publishes it below with the project account's
+    // sign-in.
+    let process = LineProcess("/bin/bash", arguments, directory: root, environment: ReleaseRunner.environment())
+    let requested = PublishRequest()
     let status = await stream(process, stepID: stepID, runID: runID, root: root) { [weak self] line in
-      // release.sh's markers: a skipped step passes, a failed one says why, an artifact joins the run.
+      // release.sh's markers: a skipped step passes, a failed one says why, an artifact joins the run, a publish
+      // request is kept for afterwards.
       guard line.hasPrefix("::") else { return }
+      if let file = GitHubReleaseRequest.file(fromMarker: line) {
+        requested.file = file
+        return
+      }
       if let artifact = WorkflowRun.Artifact(marker: line, stepID: stepID) {
         self?.update(root) { run in
           var files = run.files.filter { $0.path != artifact.path }
@@ -292,7 +305,66 @@ final class WorkflowStore {
       }
     }
     await measureArtifacts(of: stepID, in: root)
-    return status == 0
+    guard status == 0 else { return false }
+    if let file = requested.file { return await publishRelease(file, step: step, runID: runID, root: root) }
+    return true
+  }
+
+  /// The `::publish github <file>` a step's script printed.
+  private final class PublishRequest: @unchecked Sendable {
+    var file: URL?
+  }
+
+  /// Publishes the GitHub release a step's script asked for, in-process with the project account's sign-in
+  /// (GitHubKit), signing its Windows and Linux files with the release key: the token and the key never reach the
+  /// script, its environment or the log (security audit H1, M4). Only to the project's own repository (release.env's
+  /// GITHUB_REPO or the origin remote) and only files of the project or the run. A release step was confirmed with
+  /// the run (it publishes); a command step asks now, naming the release.
+  private func publishRelease(_ file: URL, step: Workflow.Step, runID: UUID, root: URL) async -> Bool {
+    let stepID = step.id
+    let log: @Sendable (String) -> Void = { [weak self] line in
+      Task { @MainActor in self?.append(runID, stepID, root, line) }
+    }
+    do {
+      var folders = [root]
+      if let output = active[root]?.output { folders.append(URL(fileURLWithPath: output)) }
+      let request = try GitHubReleaseRequest.load(file)
+        .validated(allowedRepositories: await Self.repositories(of: root), folders: folders)
+      if step.kind != .release {
+        let workflow = active[root]?.workflowName ?? step.name
+        guard await ask(root: root, workflow: workflow, steps: ["Publish \(request.summary)"]) else {
+          append(runID, stepID, root, "not published: not confirmed")
+          setStep(root, stepID) { $0.note = "not confirmed" }
+          return false
+        }
+      }
+      let account = accounts[root] ?? VaultAccount.personal.id
+      guard let token = (try? KeychainTokenStore.forAccount(account).load())?.token else {
+        append(runID, stepID, root, "not published: this account has no GitHub sign-in (sign in with the Git app; Dev shares it through the vault)")
+        setStep(root, stepID) { $0.note = "no GitHub sign-in" }
+        return false
+      }
+      append(runID, stepID, root, "publishing \(request.summary)")
+      _ = try await GitHubReleasePublisher.publish(
+        request, api: GitHubAPI(token: token), signingKey: { try ReleaseSigningKey.load() }, log: log)
+      return true
+    } catch {
+      append(runID, stepID, root, "not published: \(error.localizedDescription)")
+      setStep(root, stepID) { $0.note = "not published" }
+      return false
+    }
+  }
+
+  /// The repositories a project's run may publish to: its release.env's GITHUB_REPO and its origin remote.
+  static func repositories(of root: URL) async -> Set<String> {
+    var repositories = Set<String>()
+    if let repository = ReleaseConfig.load(from: root)?["GITHUB_REPO"], !repository.isEmpty {
+      repositories.insert(repository)
+    }
+    let remote = await LineProcess.run("/usr/bin/git", ["remote", "get-url", "origin"], directory: root)
+    let origin = ReleaseConfig.githubRepo(from: remote.output)
+    if !origin.isEmpty { repositories.insert(origin) }
+    return repositories
   }
 
   /// The sizes of a step's files, read off the main thread once it has finished.

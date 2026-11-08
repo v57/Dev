@@ -5,7 +5,6 @@
 
 import CodeActions
 import Foundation
-import GitHubKit
 import Observation
 
 // MARK: - ReleaseStep
@@ -37,14 +36,14 @@ nonisolated enum ReleaseStep: String, CaseIterable, Identifiable, Sendable {
 
   var detail: String {
     switch self {
-    case .check: return "Tools, certificate, notary profile, GitHub sign-in, the build machine"
+    case .check: return "Tools, certificate, notary profile, package pins, the build machine"
     case .build: return "A release build"
     case .test: return "The test scheme"
     case .screenshots: return "The scenes in .dev/screenshots.json, or a UI test per locale"
     case .archive: return "The release build, packaged: .xcarchive, .dmg, .zip, .tar.gz or .apk"
     case .direct: return "Developer ID, notarized and stapled .zip and .dmg"
     case .bundle: return "One zip of every platform's files, with a manifest"
-    case .github: return "A release with every platform's download files"
+    case .github: return "A release with every platform's download files, Windows and Linux ones signed"
     case .appstore: return "Uploads the archive"
     case .googleplay: return "Uploads the Android build"
     case .msstore: return "Submits the Windows build"
@@ -136,27 +135,18 @@ final class ReleaseRunner {
 
   func state(_ step: ReleaseStep) -> StepState { states[step] ?? .idle }
 
-  /// The environment that hands release.sh a vault account's GitHub sign-in (Git and Markdown share it): gh takes
-  /// it from GH_TOKEN, so a GitHub release needs no separate `gh auth login`. Empty while the account is signed
-  /// out, and gh uses its own login.
-  static func gitHubEnvironment(forAccount accountID: String) -> [String: String] {
-    guard let token = (try? KeychainTokenStore.forAccount(accountID).load())?.token else { return [:] }
-    return ["GH_TOKEN": token]
-  }
-
-  /// What release.sh gets from Dev besides its arguments: the account's GitHub sign-in, this app as dev-screenshots
-  /// (`Dev --screenshots`) and the archive's release link (xcodebuild-release and its tools: CodeActions' copy
-  /// inside this app).
-  static func environment(forAccount accountID: String) -> [String: String] {
-    var environment = gitHubEnvironment(forAccount: accountID)
+  /// What release.sh gets from Dev besides its arguments: this app as dev-screenshots (`Dev --screenshots`) and the
+  /// archive's release link (xcodebuild-release and its tools: CodeActions' copy inside this app). Never a GitHub token:
+  /// the github step only writes what to publish, and Dev publishes it in-process (`GitHubReleasePublisher`).
+  static func environment() -> [String: String] {
+    var environment: [String: String] = [:]
     if let executable = Bundle.main.executablePath { environment["DEV_APP_EXECUTABLE"] = executable }
     if let tools = ReleaseTools.folder { environment["RELEASE_TOOLS"] = tools.path }
     return environment
   }
 
   func run(
-    _ steps: [ReleaseStep], in root: URL, version: String, dryRun: Bool = false,
-    accountID: String = KeychainTokenStore.personalAccountID
+    _ steps: [ReleaseStep], in root: URL, version: String, dryRun: Bool = false
   ) {
     guard !isRunning, let script = Self.scriptURL else { return }
     states = [:]
@@ -169,7 +159,7 @@ final class ReleaseRunner {
     if !version.isEmpty { arguments += ["--version", version] }
     if dryRun { arguments.append("--dry-run") }
     arguments += steps.map(\.rawValue)
-    let environment = Self.environment(forAccount: accountID)
+    let environment = Self.environment()
     let process = LineProcess("/bin/bash", arguments, directory: root, environment: environment)
     self.process = process
     isRunning = true
