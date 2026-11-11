@@ -743,6 +743,13 @@ final class LocalizationsTranslator {
     // Written before the run, so its prompts carry them. A changed line marks the source's translations stale, like any
     // project rule.
     workspace.project.context.replaceLines(prefixed: LocalizationsStore.aboutPrefix, with: about)
+    // A source with nothing left to translate isn't run: a run ends in the row pass, which sends every row again
+    // whatever its state (Translate by row), and over a finished source that costs hours and changes nothing.
+    try workspace.project.loadData()
+    let hasWork = workspace.project.data.contains { row in
+      row.isCatalogRow && row.targets.contains(where: \.needsMachineTranslate)
+    }
+    guard hasWork || !missing.isEmpty else { return Outcome() }
     try await workspace.run(.vertical)
     let run = workspace.runner.runs[.vertical]
     await workspace.save()
