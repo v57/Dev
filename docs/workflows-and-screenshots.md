@@ -40,7 +40,7 @@ editor all edit the same thing.
   (`V57_LOCAL=1`, the same checkouts as the Mac's `-Local` workspace) into `~/dev-release/<App>` (Linux) or
   `C:\rel\<App>` (Windows), builds there with v57/SwiftUI's `build-app` scripts and copies the package back.
 - `runner: "hub"` (or `hub:macos`, `hub:linux`, `hub:macos-arm64`): a command runs on the runners of the user's Hub,
-  the `dev-runner` services (`~/Developer/Hub/Services/dev-runner`) on the devices they opted in. See
+  the `dev-runner` services (`~/Developer/Hub/Services/hub-dev-runner`) on the devices they opted in. See
   [Hub runners](#hub-runners) below.
 - `parallel`: the step runs at the same time as the step before it.
 - `trigger`: Dev checks these while it is open (every five minutes): a new commit on `branch`, a new tag matching

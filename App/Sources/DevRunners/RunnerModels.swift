@@ -2,7 +2,7 @@
 //  RunnerModels.swift
 //  DevRunners
 //
-//  The runner protocol (`dev-runner` in ~/Developer/Hub/Services/dev-runner): what a runner advertises, a job, its
+//  The runner protocol (`dev-runner` in ~/Developer/Hub/Services/hub-dev-runner): what a runner advertises, a job, its
 //  result and its log. Plain values with no Hub or app types, so the runner model can move to CodeKit later.
 //
 
