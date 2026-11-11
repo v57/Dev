@@ -4,6 +4,7 @@
 //
 
 import DevDesktop
+import DevRunners
 import Foundation
 
 // MARK: - Workflow
@@ -59,22 +60,39 @@ nonisolated struct Workflow: Codable, Hashable, Identifiable, Sendable {
     /// For `.command`: what runs in the project folder.
     var command: String?
     /// `mac`, or `vm:<name>` for a UTM machine (commands, and release steps for Windows and Linux, which build
-    /// there and bring their packages back).
+    /// there and bring their packages back), or `hub` / `hub:<system>` (`hub:macos`, `hub:linux-arm64`) for a
+    /// command on the runners of the user's Hub (dev-runner), which run it at the pushed commit.
     var runner: String = "mac"
     /// Runs at the same time as the step before it.
     var parallel = false
+    /// For a Hub command: how many jobs it splits into, each on its own runner (`DEV_SHARD_INDEX` of
+    /// `DEV_SHARD_COUNT`; `dev-shard swift test` splits a package's tests).
+    var shards: Int?
+    /// For a Hub command: what its runner needs beyond `runner` (Xcode or Swift version, a free simulator).
+    var requires: RunnerRequirement?
 
     enum Kind: String, Codable, Sendable, CaseIterable {
       case release, screenshots, command
     }
 
     var runsOnVM: Bool { runner.hasPrefix("vm:") }
+    /// What a Hub runner needs for this step, nil when it doesn't run on Hub runners.
+    var hubRequirement: RunnerRequirement? {
+      kind == .command ? RunnerRequirement(runner: runner, requires: requires) : nil
+    }
+    /// The jobs it splits into on Hub runners.
+    var jobCount: Int { hubRequirement == nil ? 1 : min(max(shards ?? 1, 1), 64) }
     var vmName: String? { runsOnVM ? String(runner.dropFirst(3)) : nil }
 
     var releasePlatform: ReleasePlatform? { platform.flatMap(ReleasePlatform.init) }
 
     var runnerTitle: String {
       if let vmName { return String(localized: "\(vmName) (VM)") }
+      if let requirement = hubRequirement {
+        let needs = requirement.summary
+        let base = needs.isEmpty ? String(localized: "Hub runners") : String(localized: "Hub runners · \(needs)")
+        return jobCount > 1 ? String(localized: "\(base) · \(jobCount) shards") : base
+      }
       return DevDesktop.thisComputer
     }
 
@@ -287,6 +305,35 @@ nonisolated struct WorkflowRun: Codable, Hashable, Identifiable, Sendable {
     var note: String?
     /// The last lines of the step's output (the full log lives with the run).
     var logTail: [String] = []
+    /// A Hub step's jobs (one per shard), each with its runner and its own log (nil for other steps).
+    var jobs: [Job]?
+
+    /// The runners a Hub step's jobs ran on, for its row ("This Mac, ubuntu").
+    var jobRunners: String? {
+      let names = (jobs ?? []).compactMap(\.runner)
+      guard !names.isEmpty else { return nil }
+      var seen: Set<String> = []
+      return names.filter { seen.insert($0).inserted }.joined(separator: ", ")
+    }
+
+    /// One job of a step on a Hub runner.
+    struct Job: Codable, Hashable, Identifiable, Sendable {
+      /// The key of its log in the run's logs: `<step>#<shard>`
+      var id: String
+      /// "Shard 1 of 2", or the step's name
+      var title: String
+      /// The runner that took it, once one did
+      var runner: String?
+      var state: StepState = .waiting
+      var startedAt: Date?
+      var finishedAt: Date?
+      var note: String?
+
+      var duration: TimeInterval? {
+        guard let startedAt else { return nil }
+        return (finishedAt ?? Date()).timeIntervalSince(startedAt)
+      }
+    }
 
     var duration: TimeInterval? {
       guard let startedAt else { return nil }

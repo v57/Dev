@@ -39,6 +39,9 @@ editor all edit the same thing.
   runs `release.sh --host <user>@<address>` on this Mac, which copies the project and every package it builds from
   (`V57_LOCAL=1`, the same checkouts as the Mac's `-Local` workspace) into `~/dev-release/<App>` (Linux) or
   `C:\rel\<App>` (Windows), builds there with v57/SwiftUI's `build-app` scripts and copies the package back.
+- `runner: "hub"` (or `hub:macos`, `hub:linux`, `hub:macos-arm64`): a command runs on the runners of the user's Hub,
+  the `dev-runner` services (`~/Developer/Hub/Services/dev-runner`) on the devices they opted in. See
+  [Hub runners](#hub-runners) below.
 - `parallel`: the step runs at the same time as the step before it.
 - `trigger`: Dev checks these while it is open (every five minutes): a new commit on `branch`, a new tag matching
   `tag`, or `daily` at `HH:MM`. There is no server, so nothing runs while Dev is quit.
@@ -47,6 +50,37 @@ editor all edit the same thing.
   confirmed it, or Settings ▸ Agents allows agents to publish.
 - Without the folder, a project gets two defaults from its `release.env` (Pull Request and Release); they are written
   to disk the first time any workflow is saved.
+
+### Hub runners
+
+Settings ▸ Runners turns them on (off by default) and names the hub; Dev connects while it runs, in-process
+(`DevRunners`, the one target that imports HubService). The hub's owner adds Dev's key (Copy Key) as an owner, or
+grants it `hub/devices` and the `dev-runner/` prefix. The pane and a Hub step's inspector list the runners with their
+system, Xcode and Swift versions, free simulators, free CPU and disk, and the job each runs.
+
+```json
+{ "id": "build", "name": "Build", "kind": "command", "runner": "hub:macos", "parallel": false,
+  "command": "swift build --scratch-path \"$DEV_BUILD_DIR\"" },
+{ "id": "test", "name": "Test", "kind": "command", "runner": "hub", "shards": 2, "parallel": false,
+  "requires": { "swift": "6" },
+  "command": "dev-shard swift test --scratch-path \"$DEV_BUILD_DIR\"" }
+```
+
+- A Hub step runs at the pushed HEAD: runners fetch it from the project's `origin` and read the command from the
+  workflow file committed there, so a step must be committed and pushed (Dev says so when HEAD isn't pushed, and
+  logs when the workflow file has uncommitted changes).
+- `shards` (2 to 64) splits the step into jobs, each on its own runner, with `DEV_SHARD_INDEX` and `DEV_SHARD_COUNT`;
+  `dev-shard swift test` runs this shard's share of a package's tests. The run shows a block per job with the runner
+  that took it and its live log.
+- `requires` narrows the runners: `xcode` or `swift` (a version prefix, "" for any), `simulator` (part of a free
+  simulator's name or runtime; the job gets `DEV_SIMULATOR_UDID`).
+- Matching (`RunnerPlan`): a runner takes a job when its device is an approved device of the hub, it allows the
+  repository (`DEV_RUNNER_REPOS`) and it has what the step needs. When every runner behind a run path could take it,
+  the job goes through the hub's `available` load balancer (`dev-runner/run`, or `dev-runner/run/<os>-<arch>`; Dev
+  sets the balancer when its key is an owner); otherwise Dev picks the free runner with the most free CPU and sends it
+  there by device. Busy runners take no jobs, so a job waits for a free one.
+- Not yet: release and signing steps (runners refuse them), secrets, artifacts, GitHub status checks, UTM VMs as
+  runners.
 
 Run history is kept in `~/Library/Application Support/dev.v57.dev/Workflows/history.json` (50 runs per project, and
 every older one that still has files).

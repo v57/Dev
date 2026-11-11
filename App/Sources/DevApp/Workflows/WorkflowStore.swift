@@ -4,9 +4,11 @@
 //
 
 import CryptoKit
+import DevRunners
 import Foundation
 import GitHubKit
 import Observation
+import PlatformBroadcast
 import VaultKit
 
 /// Every project's workflows, their run history, the run in flight and the
@@ -69,6 +71,11 @@ final class WorkflowStore {
 
   init() {
     loadHistory()
+    // Hub runners connect only once the reader turned them on (Settings ▸ Runners)
+    Runners.apply()
+    #if DEBUG
+      Task { await listenForDebugCommands() }
+    #endif
     triggerTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
       MainActor.assumeIsolated { self?.checkTriggers() }
     }
@@ -155,8 +162,15 @@ final class WorkflowStore {
     }
     var run = WorkflowRun(workflowID: workflow.id, workflowName: workflow.name, startedBy: startedBy)
     run.version = version?.trimmingCharacters(in: .whitespaces).nilIfEmpty
-    run.steps = workflow.steps.map {
-      WorkflowRun.StepRun(id: $0.id, name: $0.name, runner: $0.runnerTitle)
+    run.steps = workflow.steps.map { step in
+      var stepRun = WorkflowRun.StepRun(id: step.id, name: step.name, runner: step.runnerTitle)
+      if step.hubRequirement != nil {
+        let count = step.jobCount
+        stepRun.jobs = (1...count).map { shard in
+          .init(id: Self.jobLogID(step.id, shard), title: count > 1 ? String(localized: "Shard \(shard) of \(count)") : step.name)
+        }
+      }
+      return stepRun
     }
     active[root] = run
     logs[run.id] = [:]
@@ -206,7 +220,7 @@ final class WorkflowStore {
       let results = await withTaskGroup(of: Bool.self) { group in
         for step in stage {
           group.addTask { @MainActor [weak self] in
-            await self?.run(step, runID: runID, root: root) ?? false
+            await self?.run(step, workflowID: workflow.id, runID: runID, root: root) ?? false
           }
         }
         var all: [Bool] = []
@@ -221,6 +235,12 @@ final class WorkflowStore {
       for index in run.steps.indices where run.steps[index].state == .waiting || run.steps[index].state == .running {
         run.steps[index].state = cancelled ? .skipped : run.steps[index].state
         if cancelled { run.steps[index].note = String(localized: "cancelled") }
+      }
+      // A Hub step's jobs that never ran end with it
+      for index in run.steps.indices {
+        for job in (run.steps[index].jobs ?? []).indices where [.waiting, .running].contains(run.steps[index].jobs![job].state) {
+          run.steps[index].jobs![job].state = .skipped
+        }
       }
       run.finishedAt = Date()
       run.state = cancelled ? .cancelled : (failed ? .failed : .passed)
@@ -237,7 +257,7 @@ final class WorkflowStore {
   }
 
   /// Runs one step and answers whether it passed.
-  private func run(_ step: Workflow.Step, runID: UUID, root: URL) async -> Bool {
+  private func run(_ step: Workflow.Step, workflowID: String, runID: UUID, root: URL) async -> Bool {
     setStep(root, step.id) { $0.state = .running; $0.startedAt = Date() }
     let version = active[root]?.version
     var passed: Bool
@@ -253,7 +273,9 @@ final class WorkflowStore {
         passed = report.succeeded
       }
     case .command:
-      if let vmName = step.vmName {
+      if step.hubRequirement != nil {
+        passed = await runOnHub(step, workflowID: workflowID, runID: runID, root: root)
+      } else if let vmName = step.vmName {
         passed = await runOnVM(step, vmName: vmName, runID: runID, root: root)
       } else {
         let process = LineProcess("/bin/bash", ["-lc", step.command ?? ""], directory: root)
@@ -404,6 +426,140 @@ final class WorkflowStore {
     }
   }
 
+  #if DEBUG
+    /// Debug builds take commands without a click: post the distributed notification `dev.v57.dev.workflows` with
+    /// `run <workflow id> <project folder>`, `cancel <project folder>`, or `dump <project folder>` (the run in flight
+    /// or the last one, with each step's jobs, runners and log tails, to /tmp/dev-workflows.txt).
+    private func listenForDebugCommands() async {
+      for await note in Broadcast.messages(named: "dev.v57.dev.workflows") {
+        guard let command = note[Broadcast.objectKey] else { continue }
+        let parts = command.split(separator: " ", maxSplits: 2).map(String.init)
+        switch parts.first {
+        case "run" where parts.count == 3:
+          let root = URL(fileURLWithPath: parts[2])
+          reload(root)
+          if let workflow = workflows(for: root).first(where: { $0.id == parts[1] }) {
+            start(workflow, in: root, startedBy: "debug command")
+          } else {
+            notice = "No workflow \(parts[1]) in \(root.path)"
+          }
+        case "cancel" where parts.count == 2: cancel(URL(fileURLWithPath: parts[1]))
+        case "dump" where parts.count == 2:
+          let root = URL(fileURLWithPath: parts[1])
+          var lines = ["hub: \(Runners.shared.status) runners: " + Runners.shared.runners.map {
+            "\($0.name)[\($0.info?.kind ?? "?") trusted=\($0.trusted) job=\($0.info?.job?.id ?? "-")]"
+          }.joined(separator: " ")]
+          if let run = active[root] ?? runs(for: root).first {
+            lines.append("run \(run.workflowName) \(run.state.rawValue) commit \(run.commit ?? "-")")
+            for step in run.steps {
+              lines.append("  step \(step.id) \(step.state.rawValue) \(step.note ?? "")")
+              for job in step.jobs ?? [] {
+                let tail = (logs[run.id]?[job.id] ?? []).suffix(3).joined(separator: " | ")
+                lines.append("    job \(job.title) \(job.state.rawValue) on \(job.runner ?? "-") \(job.note ?? "") :: \(tail)")
+              }
+            }
+          }
+          try? lines.joined(separator: "\n").write(toFile: "/tmp/dev-workflows.txt", atomically: true, encoding: .utf8)
+        default: break
+        }
+      }
+    }
+  #endif
+
+  // MARK: - Hub runners
+
+  /// The log key of a Hub step's job: `<step>#<shard from 1>`.
+  static func jobLogID(_ stepID: String, _ shard: Int) -> String { "\(stepID)#\(shard)" }
+
+  /// Runs a command step on the Hub's runners: one job per shard at the pushed HEAD, each sent to a runner that has
+  /// what the step needs (`Runners.shared`, RunnerPlan), with its own live log. Runners fetch the commit from the
+  /// project's `origin` and read the command from the workflow file committed there.
+  private func runOnHub(_ step: Workflow.Step, workflowID: String, runID: UUID, root: URL) async -> Bool {
+    guard let requirement = step.hubRequirement else { return false }
+    func fail(_ note: String) -> Bool {
+      setStep(root, step.id) { stepRun in
+        stepRun.note = note
+        for index in (stepRun.jobs ?? []).indices { stepRun.jobs?[index].state = .skipped }
+      }
+      append(runID, step.id, root, note)
+      return false
+    }
+    guard Runners.shared.status != .off else {
+      return fail(String(localized: "Hub runners are off: turn them on in Settings ▸ Runners"))
+    }
+    let remote = await LineProcess.run("/usr/bin/git", ["remote", "get-url", "origin"], directory: root)
+    let head = await LineProcess.run("/usr/bin/git", ["rev-parse", "HEAD"], directory: root)
+    let repo = remote.output.trimmingCharacters(in: .whitespacesAndNewlines)
+    let commit = head.output.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard remote.status == 0, !repo.isEmpty else {
+      return fail(String(localized: "No origin remote: runners fetch the commit from the project's origin"))
+    }
+    guard head.status == 0, commit.count == 40 else { return fail(String(localized: "No commit to run")) }
+    let pushed = await LineProcess.run("/usr/bin/git", ["branch", "-r", "--contains", commit], directory: root)
+    guard pushed.status == 0, !pushed.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+      return fail(String(localized: "HEAD (\(commit.prefix(7))) isn't pushed: runners fetch it from \(repo)"))
+    }
+    let file = ".dev/workflows/\(workflowID).json"
+    let changed = await LineProcess.run("/usr/bin/git", ["status", "--porcelain", "--", file], directory: root)
+    if !changed.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      append(runID, step.id, root, "\(file) has changes that aren't committed: runners run the step as committed")
+    }
+
+    let run = runID.uuidString.prefix(8).lowercased()
+    let jobs = RunnerPlan.jobs(
+      run: String(run), workflow: workflowID, step: step.id, shards: step.shards, repo: repo, commit: commit)
+    let results = await withTaskGroup(of: Bool.self) { group in
+      for (index, job) in jobs.enumerated() {
+        group.addTask { @MainActor [weak self] in
+          await self?.runJob(job, shard: index + 1, step: step.id, requirement: requirement, runID: runID, root: root) ?? false
+        }
+      }
+      var all: [Bool] = []
+      for await result in group { all.append(result) }
+      return all
+    }
+    let failures = (active[root]?.steps.first { $0.id == step.id }?.jobs ?? []).filter { $0.state == .failed }
+    if let first = failures.first {
+      setStep(root, step.id) { $0.note = jobs.count > 1 ? "\(first.title): \(first.note ?? "failed")" : first.note }
+    }
+    return !results.isEmpty && !results.contains(false)
+  }
+
+  private func runJob(
+    _ job: RunnerJob, shard: Int, step stepID: String, requirement: RunnerRequirement, runID: UUID, root: URL
+  ) async -> Bool {
+    let logID = Self.jobLogID(stepID, shard)
+    setJob(root, stepID, logID) { $0.state = .running; $0.startedAt = Date() }
+    let result = await Runners.shared.run(job, requirement: requirement) { [weak self] event in
+      guard let self else { return }
+      switch event {
+      case .assigned(let runner):
+        setJob(root, stepID, logID) { $0.runner = runner; $0.note = nil }
+        append(runID, stepID, root, "Runner: \(runner)", log: logID)
+      case .line(let line):
+        append(runID, stepID, root, line, log: logID)
+      case .waiting(let why):
+        setJob(root, stepID, logID) { $0.note = why }
+        append(runID, stepID, root, why, log: logID)
+      }
+    }
+    if let reason = result.reason, result.state != "passed" { append(runID, stepID, root, reason, log: logID) }
+    setJob(root, stepID, logID) { job in
+      job.finishedAt = Date()
+      job.state = result.passed ? .passed : (result.state == "cancelled" ? .skipped : .failed)
+      if job.runner == nil, let runner = result.runner { job.runner = runner }
+      job.note = result.passed ? nil : (result.reason ?? result.exitCode.map { String(localized: "exit \($0)") })
+    }
+    return result.passed
+  }
+
+  private func setJob(_ root: URL, _ stepID: String, _ logID: String, _ change: (inout WorkflowRun.StepRun.Job) -> Void) {
+    setStep(root, stepID) { step in
+      guard let index = step.jobs?.firstIndex(where: { $0.id == logID }) else { return }
+      change(&step.jobs![index])
+    }
+  }
+
   private func runOnVM(_ step: Workflow.Step, vmName: String, runID: UUID, root: URL) async -> Bool {
     guard let target = await vmTarget(vmName, stepID: step.id, runID: runID, root: root) else { return false }
     let process = VMRunner.process(
@@ -460,9 +616,11 @@ final class WorkflowStore {
     return process.status ?? -1
   }
 
-  private func append(_ runID: UUID, _ stepID: String, _ root: URL, _ line: String) {
-    logs[runID, default: [:]][stepID, default: []].append(line)
-    if logs[runID]![stepID]!.count > 20_000 { logs[runID]![stepID]!.removeFirst(5_000) }
+  /// Adds a line to a step's log, or to one of its jobs' logs (`log`, a Hub step's `<step>#<shard>`).
+  private func append(_ runID: UUID, _ stepID: String, _ root: URL, _ line: String, log: String? = nil) {
+    let key = log ?? stepID
+    logs[runID, default: [:]][key, default: []].append(line)
+    if logs[runID]![key]!.count > 20_000 { logs[runID]![key]!.removeFirst(5_000) }
     setStep(root, stepID) { step in
       step.logTail.append(line)
       if step.logTail.count > 12 { step.logTail.removeFirst(step.logTail.count - 12) }

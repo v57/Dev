@@ -6,6 +6,7 @@
 import Foundation
 import ComponentKit
 import DevDesktop
+import DevRunners
 import SwiftUI
 
 /// The Workflows tab: a project's CI. Left, its workflows and their runs, and
@@ -522,7 +523,7 @@ struct WorkflowsView: View {
       stepID = step.id
     } label: {
       LaneItem(
-        step.name, subtitle: state?.note ?? step.runnerTitle, subtitleHue: state?.state == .failed ? .red : nil,
+        step.name, subtitle: state?.note ?? state?.jobRunners ?? step.runnerTitle, subtitleHue: state?.state == .failed ? .red : nil,
         isSelected: isSelectedStep(step)
       ) {
         let stepState = state?.state ?? .waiting
@@ -580,6 +581,17 @@ struct WorkflowsView: View {
           FormRow("Runs On", help: "\(step.runnerTitle)", systemImage: "laptopcomputer", hue: .gray) {
             KitPicker("Runs On", selection: binding(workflow, index, \.runner), segments: runners(for: step))
           }
+          if step.hubRequirement != nil {
+            FormRow("Shards", help: "Jobs on separate runners; dev-shard swift test splits a package's tests",
+                    systemImage: "square.split.2x1", hue: .orange) {
+              Stepper(
+                "\(step.jobCount)",
+                value: Binding(
+                  get: { step.jobCount },
+                  set: { value in update(workflow) { $0.steps[index].shards = value > 1 ? value : nil } }),
+                in: 1...64)
+            }
+          }
           if step.kind == .command {
             // A script: Return starts a new line, and no smart quotes.
             FormRow("Command", systemImage: "apple.terminal", hue: .green) { EmptyView() }
@@ -612,7 +624,28 @@ struct WorkflowsView: View {
               .toggleStyle(.kitSwitch)
           }
         }
-        if let run, let state = run.steps.first(where: { $0.id == step.id }) {
+        if step.hubRequirement != nil {
+          let runners = Runners.shared
+          FormCard(
+            "Hub Runners",
+            footer: runners.status == .off
+              ? "Turn on runners in Settings ▸ Runners." : runners.runners.isEmpty ? "No runners on the hub." : nil
+          ) {
+            RunnerRows(runners: runners.runners)
+          }
+        }
+        if let run, let state = run.steps.first(where: { $0.id == step.id }), let jobs = state.jobs, !jobs.isEmpty {
+          // A Hub step: a block per job, with the runner that took it and its own live log
+          RunBlocks {
+            ForEach(jobs) { job in
+              RunBlock(
+                [job.title, job.runner ?? job.note].compactMap { $0 }.joined(separator: " · "),
+                command: step.commandLine, status: Self.status(for: job.state), duration: job.duration?.clock,
+                output: ((store.logs[run.id]?[step.id] ?? []) + (store.logs[run.id]?[job.id] ?? []))
+                  .suffix(400).joined(separator: "\n"))
+            }
+          }
+        } else if let run, let state = run.steps.first(where: { $0.id == step.id }) {
           let lines = store.logs[run.id]?[step.id] ?? state.logTail
           RunBlocks {
             RunBlock(
@@ -670,6 +703,17 @@ struct WorkflowsView: View {
   private func runners(for step: Workflow.Step) -> [KitSegment<String>] {
     var runners = [KitSegment(DevDesktop.thisComputer, value: "mac", systemImage: "laptopcomputer")]
     guard step.kind == .command || step.releasePlatform?.buildSystem != nil else { return runners }
+    // Commands also on the Hub's runners: any, or only Macs or Linux machines
+    if step.kind == .command {
+      runners += [
+        KitSegment("Hub Runners", value: "hub", systemImage: "point.3.connected.trianglepath.dotted"),
+        KitSegment("Hub Macs", value: "hub:macos", systemImage: "point.3.connected.trianglepath.dotted"),
+        KitSegment("Hub Linux", value: "hub:linux", systemImage: "point.3.connected.trianglepath.dotted"),
+      ]
+      if step.hubRequirement != nil, !["hub", "hub:macos", "hub:linux"].contains(step.runner) {
+        runners.append(KitSegment(step.runnerTitle, value: step.runner, systemImage: "point.3.connected.trianglepath.dotted"))
+      }
+    }
     runners += vms.machines.map { KitSegment("\($0.name) (VM)", value: "vm:" + $0.name, systemImage: "desktopcomputer") }
     if let name = step.vmName, !vms.machines.contains(where: { $0.name == name }) {
       runners.append(KitSegment("\(name) (VM)", value: step.runner, systemImage: "desktopcomputer"))
