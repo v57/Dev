@@ -49,4 +49,12 @@ package.dependencies.append(v57("SwiftUI"))
 for target in package.targets where ["DevDesktop", "DevGraphics"].contains(target.name) {
   target.dependencies.append(.product(name: "SwiftUI", package: "SwiftUI"))
 }
+// Foundation's APIs swift-corelibs-foundation lacks (`String(localized:)`, …): imported everywhere, as Foundation
+// brings them on Apple platforms.
+for target in package.targets where target.type == .regular || target.type == .executable {
+  target.dependencies.append(.product(name: "SwiftUIPortability", package: "SwiftUI"))
+  target.swiftSettings = (target.swiftSettings ?? []) + [
+    .unsafeFlags(["-Xfrontend", "-import-module", "-Xfrontend", "SwiftUIPortability"])
+  ]
+}
 #endif
