@@ -11,6 +11,13 @@ func v57(_ name: String) -> Package.Dependency {
     ? .package(url: "https://github.com/v57/\(name).git", branch: "main") : .package(path: "../../\(name)")
 }
 
+/// A package of Hub's (`~/Developer/Hub`): GitHub's main branch, or the checkout there with `V57_LOCAL=1`.
+func hub(_ path: String) -> Package.Dependency {
+  let name = String(path.split(separator: "/").last!)
+  return Context.environment["V57_LOCAL"] == nil
+    ? .package(url: "https://github.com/v57/\(name).git", branch: "main") : .package(path: "../../../Hub/\(path)")
+}
+
 /// This repository's DevKit, the package at "..": SwiftPM names a path dependency after its folder, which is Dev in the
 /// main checkout and the worktree's own name in a worktree.
 let kits = String(Context.packageDirectory.split(whereSeparator: { $0 == "/" || $0 == "\\" }).dropLast().last ?? "Dev")
@@ -21,16 +28,28 @@ let settings: [SwiftSetting] = [
   .enableUpcomingFeature("MemberImportVisibility"),
 ]
 
+/// DevRunners' settings: no default actor, so its wire values are plain Sendable values (HubRunners is @MainActor).
+let plainSettings: [SwiftSetting] = [.swiftLanguageMode(.v5), .enableUpcomingFeature("MemberImportVisibility")]
+
 let package = Package(
   name: "DevApp", platforms: [.macOS(.v15)],
-  products: [.library(name: "DevApp", targets: ["DevApp"])],
+  products: [.library(name: "DevApp", targets: ["DevApp"]), .library(name: "DevRunners", targets: ["DevRunners"])],
   dependencies: [
     .package(path: ".."),
     // The shared design, the vault, Code's progress, workspaces and actions (installs, the release tools), Database's
     // SQLite for the imported translation database, Git's GitHub sign-in, in-app updates and Platform's backends.
     v57("Component"), v57("Vault"), v57("Code"), v57("Database"), v57("Git"), v57("UpdateKit"), v57("Platform"),
+    // Hub's Swift SDK, for the runners' backend only (DevRunners): the app itself never imports it.
+    hub("HubService/HubService"), hub("Channel/ChannelSwift"),
   ],
   targets: [
+    // Workflow runners on the user's Hub (dev-runner services on their devices): the runner model, the job planner
+    // and the Hub backend. The one target that talks to Hub, so the app sees plain values; kept free of the app's
+    // types so it can move to CodeKit.
+    .target(
+      name: "DevRunners",
+      dependencies: [.product(name: "HubService", package: "HubService"), .product(name: "Channel", package: "ChannelSwift")],
+      swiftSettings: plainSettings),
     // The app, all of it but its entry point (Sources/Dev/DevMain.swift): Dev.xcodeproj builds that file into Dev.app
     // with Resources (the icon, entitlements and release.sh, which the app runs from its bundle); on Linux the Dev
     // target below does.
@@ -47,11 +66,13 @@ let package = Package(
         .product(name: "PlatformDiskUsage", package: "Platform"), .product(name: "PlatformImage", package: "Platform"),
         .product(name: "PlatformLanguageModel", package: "Platform"),
         .product(name: "PlatformBroadcast", package: "Platform"), .product(name: "PlatformHTTP", package: "Platform"),
+        "DevRunners",
       ],
       swiftSettings: settings),
     // The app's own tests (the translation store, localization flow, storage rules), no host app needed: `swift test`
     // here (V57_LOCAL=1 for the checkouts beside this one).
     .testTarget(name: "DevAppTests", dependencies: ["DevApp"], swiftSettings: settings),
+    .testTarget(name: "DevRunnersTests", dependencies: ["DevRunners"], swiftSettings: plainSettings),
   ])
 
 #if os(Windows) || os(Linux)
