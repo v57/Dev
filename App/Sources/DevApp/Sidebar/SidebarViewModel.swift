@@ -534,7 +534,7 @@ final class SidebarViewModel {
     if !resolved.isEmpty, shown.isEmpty {
       alert = SidebarAlert(
         title: "No Xcode project",
-        message: "Dev lists only folders with an Xcode project. To list the others too, turn off Show only Xcode projects in Settings ▸ General.")
+        message: "Dev lists only folders with an Xcode project or Dev workflows (.dev/workflows). To list the others too, turn off Show only Xcode projects in Settings ▸ General.")
     }
     // Offer only what the vault doesn't have: re-dropping a folder must not
     // keep suggesting the directories the reader added from its last drop.

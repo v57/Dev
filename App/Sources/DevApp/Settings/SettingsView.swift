@@ -54,7 +54,7 @@ struct GeneralSettingsView: View {
       }
       FormRow(
         "Show only Xcode projects",
-        help: "Folders without an .xcodeproj stay in the other v57 apps.", systemImage: "hammer", hue: .blue
+        help: "Folders without an .xcodeproj or Dev workflows stay in the other v57 apps.", systemImage: "hammer", hue: .blue
       ) {
         Toggle("Show only Xcode projects", isOn: $onlyXcodeProjects).labelsHidden().toggleStyle(.kitSwitch)
       }

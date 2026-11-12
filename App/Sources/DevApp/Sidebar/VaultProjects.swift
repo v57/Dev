@@ -124,7 +124,19 @@ import VaultKit
   /// The folders of the projects Dev leaves out: the vault's projects on this Mac that aren't Xcode projects.
   func hiddenRoots() -> Set<String> {
     guard !LaunchOptions.isScreenshotMode, showsOnlyXcodeProjects else { return [] }
-    return Set(vault.localProjects.filter { !$0.kinds.contains(.xcode) }.compactMap(\.localPath))
+    return Set(vault.localProjects.filter { !listsWhenOnlyXcode($0) }.compactMap(\.localPath))
+  }
+
+  /// Whether Show only Xcode projects keeps a project: an Xcode project, or a folder with Dev workflows
+  /// (`.dev/workflows`, like SSH's Publish libssh2), which only Dev can run.
+  func listsWhenOnlyXcode(_ project: VaultProject) -> Bool {
+    project.kinds.contains(.xcode) || project.localPath.map(Self.hasWorkflows) == true
+  }
+
+  static func hasWorkflows(_ path: String) -> Bool {
+    let folder = URL(fileURLWithPath: path, isDirectory: true).appending(path: ".dev/workflows")
+    let files = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
+    return files.contains { $0.hasSuffix(".json") }
   }
 
   /// The app icons the vault keeps (see `Vault.findProjectIcons`), by project folder.
@@ -144,7 +156,7 @@ import VaultKit
     return vault.localProjects
       .filter { project in
         guard let path = project.localPath else { return false }
-        return !listed.contains(path) && (!showsOnlyXcodeProjects || project.kinds.contains(.xcode))
+        return !listed.contains(path) && (!showsOnlyXcodeProjects || listsWhenOnlyXcode(project))
       }
       .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
   }
@@ -169,7 +181,7 @@ import VaultKit
     vault.perform { try $0.refreshProjectKinds() }
     let fileManager = FileManager.default
     let local = vault.localProjects.filter { project in
-      !dismissed.contains(project.id) && (!showsOnlyXcodeProjects || project.kinds.contains(.xcode))
+      !dismissed.contains(project.id) && (!showsOnlyXcodeProjects || listsWhenOnlyXcode(project))
     }
     let known = Set(model.projects.compactMap { $0.rootURL?.standardizedFileURL.path })
     let missing = local.compactMap(\.localPath).filter { path in
