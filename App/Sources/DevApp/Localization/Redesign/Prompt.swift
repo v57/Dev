@@ -500,9 +500,12 @@ extension Translation {
       7. When an item's "source" and "target" are OBJECTS of plural categories, the \
       string is a localized plural: translate EVERY category the item lists and \
       answer with the same object shape, one entry per category. Translate each \
-      category with the number agreement it calls for (the "one" form reads \
-      naturally for exactly one item), keep the placeholders intact, and leave no \
-      category out. Empty category values are the forms you are being asked to fill.
+      category with the number agreement it calls for. A category covers every number \
+      the target language's plural rules give it (Russian "one" is 1, 21, 31…; \
+      Polish "few" is 2–4, 22–24…), so keep the number placeholder in every form \
+      except one that stands for a single number only (English "one", Arabic "zero" \
+      and "two"), keep the other placeholders intact, and leave no category out. Empty \
+      category values are the forms you are being asked to fill.
       8. A filled "target" is the current value of that slot: produce the better \
       translation for the same slot, in the same shape, or answer with the same \
       value when it is already right.

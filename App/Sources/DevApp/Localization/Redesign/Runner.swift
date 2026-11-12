@@ -1053,6 +1053,11 @@ extension Translation {
         // parallel and the form the artifact reads is the one filled.
         let body = Validator.decode(entry.value, for: item, language: language)
         guard !body.isEmpty else { continue }
+        // A plural slot takes memory only when the entry answers EVERY form of the language with
+        // the number kept: an entry remembered from the key's flat era ("%lld файлов" for every
+        // number) decodes to `other` alone, and applied it would settle the slot with its other
+        // forms empty, never asked again.
+        if case .plural = body, !Validator.defects(body, of: item, language: language).isEmpty { continue }
         writes.append(
           SlotWrite(
             key: item.key,
@@ -1314,7 +1319,7 @@ extension Translation {
       // rejected: spending a call on a value nobody is allowed to write is
       // paying twice (4.6).
       let writable = writablePositions(of: batch)
-      var report = Validator.validate(replies, for: batch.items, writable: writable)
+      var report = Validator.validate(replies, for: batch.items, writable: writable, language: batch.language)
       // A reply is CUT when its structure never closed — and a stream that broke mid-answer
       // is cut whether or not the text it left behind happens to parse: the rows after the
       // break never arrived.
@@ -1631,7 +1636,7 @@ extension Translation {
       let language = language(of: item, in: batch)
       guard writable(position, in: batch) else { return }
       let body = Validator.decode(row.text, for: item, language: language)
-      guard Validator.defects(body, of: item).isEmpty else {
+      guard Validator.defects(body, of: item, language: language).isEmpty else {
         batch.items[position].phase = .failed
         fail(
           run, key: item.key, language: language,
@@ -2178,7 +2183,7 @@ extension Translation {
     /// answered for a SETTLED slot is neither — it is discarded, because nobody may
     /// write it.
     static func validate(
-      _ reply: [String: String], for items: [Run.Item], writable: IndexSet
+      _ reply: [String: String], for items: [Run.Item], writable: IndexSet, language: String? = nil
     ) -> Report {
       var report = Report()
       let asked = Set((0..<items.count).map(String.init))
@@ -2192,8 +2197,10 @@ extension Translation {
           report.rejected.append(id)
           continue
         }
-        let body = decode(answer, for: item, language: item.language ?? "")
-        guard defects(body, of: item).isEmpty else {
+        // An item's own language, else the batch's (a vertical batch names one for all its items).
+        let language = item.language ?? language ?? ""
+        let body = decode(answer, for: item, language: language)
+        guard defects(body, of: item, language: language).isEmpty else {
           report.rejected.append(id)
           continue
         }
@@ -2271,23 +2278,39 @@ extension Translation {
     /// start in danish, symbol is symbol"). A language reuses a source word far more
     /// often than a check can tell, and the reviewer sees the slot — so sameness is
     /// written as `.translated` and judged by a human, never thrown away here.
-    static func defects(_ answer: StringBody, of item: Run.Item) -> [Defect] {
-      defects(answer, of: item.payloadSource)
+    static func defects(_ answer: StringBody, of item: Run.Item, language: String? = nil) -> [Defect] {
+      let language = language ?? item.language
+      return defects(answer, of: item.payloadSource, language: language?.isEmpty == false ? language : nil)
     }
 
     /// The same check against the body an answer MIRRORS, with no item around it: the item is
     /// only ever read for its source text (which is its key when nothing was authored), so a
     /// probe can ask this question without building one.
-    static func defects(_ answer: StringBody, of source: StringBody) -> [Defect] {
+    ///
+    /// `language` is the answer's (the item's target language). With it, only a form that stands
+    /// for ONE number in that language (`PluralRules.exactCategories`: English `one`, Arabic
+    /// `zero` and `two`) may leave a token out; every other form covers several numbers — Russian
+    /// `one` is 1, 21, 31…, Polish `few` 2–4, 22–24… — so it must print the number, and it is held
+    /// to the exact set of the source's `other`, the form that carries the number. Without a
+    /// language every non-`other` form may leave tokens out, as before.
+    static func defects(_ answer: StringBody, of source: StringBody, language: String? = nil) -> [Defect] {
       guard !answer.isEmpty else { return [.empty] }
       var defects: [Defect] = []
       let anywhere = Set(comparable(placeholders(in: everything(source))))
+      let exact = language.map { PluralRules.exactCategories(for: $0) }
       for (category, text) in forms(of: answer) {
-        let reference = category.map { self.reference($0, of: source) } ?? whole(source)
+        var reference = category.map { self.reference($0, of: source) } ?? whole(source)
+        let mayOmit: Bool
+        if let category, category != Plural.Rule.other.rawValue {
+          mayOmit = exact?.contains(category) ?? true
+          if !mayOmit { reference = whole(source) }
+        } else {
+          mayOmit = false
+        }
         let expected = placeholders(in: reference).sorted()
         let got = placeholders(in: text).sorted()
         let matches: Bool
-        if let category, category != Plural.Rule.other.rawValue {
+        if mayOmit {
           matches = comparable(got).allSatisfy(anywhere.contains)
         } else {
           matches = comparable(expected) == comparable(got)
@@ -2360,7 +2383,7 @@ extension Translation {
     /// The same defects as a sentence, for a failure report.
     static func describe(_ answer: String?, of item: Run.Item, language: String) -> String {
       guard let answer else { return "empty response" }
-      let defects = defects(decode(answer, for: item, language: language), of: item)
+      let defects = defects(decode(answer, for: item, language: language), of: item, language: language)
       return defects.isEmpty ? "rejected" : defects.map(\.description).joined(separator: "; ")
     }
 

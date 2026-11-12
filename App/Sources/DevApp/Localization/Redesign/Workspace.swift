@@ -276,6 +276,11 @@ extension Translation {
             project.data[index].targets[slot].target.isEmpty,
             Run.writable(project.data[index].targets[slot].status)
           else { continue }
+          // The database ships ONE text per source, which a plural slot cannot take: written over
+          // the empty form set it would turn the slot flat (and the file with it), so a plural
+          // slot is left to the model, which answers every form of its language.
+          if case .plural = project.data[index].targets[slot].target { continue }
+          if case .plural = project.data[index].source { continue }
           project.data[index].targets[slot].target = .value(value)
           project.data[index].targets[slot].status = .imported
         }

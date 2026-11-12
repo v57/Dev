@@ -1323,7 +1323,9 @@ The operation classes know what to send, nothing knows how to send it.
       the expensive shape by construction (4.6). If it is meant to be used on whole
       projects, the confirmation should quote the rows and the settled columns it
       will pay for; if it is meant for spot work, run it from a selection instead.
-- [ ] 10.13 Which table is the authority for plural categories: Xcode's own (what
+- [x] 10.13 (2026-11-12: ICU, what Foundation selects a form with at run time. `PluralRules` is generated from
+      macOS's libicucore and `PluralTranslationTests` compares it with ICU; `Plural.rules` reads it.)
+      Which table is the authority for plural categories: Xcode's own (what
       runs today, and what the .xcstrings editor agrees with) or current CLDR
       (27 more locales, 3 corrected sets — 9.4). They cannot both win. A `many`
       form for Spanish that Xcode's editor does not offer is a category the IDE may

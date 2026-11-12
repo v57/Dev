@@ -447,14 +447,18 @@ nonisolated struct SourceProgress: Hashable, Sendable {
   init() {}
 
   init(_ catalog: StringCatalog) {
-    for entry in catalog.strings.values {
+    for (key, entry) in catalog.strings {
       if entry.extractionState == "stale" {
         stale += 1
         continue
       }
       guard entry.shouldTranslate != false else { continue }
       keys += 1
+      let pluralSource = catalog.hasPluralSource(key)
       for (language, node) in entry.localizations ?? [:] where language != catalog.sourceLanguage {
+        // Under a plural source a language is translated when it has every one of its forms: a flat
+        // value from before the source was varied, or a form left empty, is still to translate.
+        if pluralSource, !Self.hasEveryForm(node, language: language) { continue }
         guard let state = Self.state(of: node) else { continue }
         translated[language, default: 0] += 1
         if state == "needs_review" { needsReview[language, default: 0] += 1 }
@@ -464,6 +468,11 @@ nonisolated struct SourceProgress: Hashable, Sendable {
 
   func fraction(_ language: String) -> Double {
     keys == 0 ? 0 : min(1, Double(translated[language] ?? 0) / Double(keys))
+  }
+
+  private static func hasEveryForm(_ node: StringCatalog.Language, language: String) -> Bool {
+    guard let forms = node.variations?["plural"] else { return false }
+    return PluralRules.categories(for: language).allSatisfy { !(forms[$0]?.stringUnit?.value ?? "").isEmpty }
   }
 
   /// The node's state when it holds a value (a flat unit, or the `other` form of a plural), nil when it holds none.

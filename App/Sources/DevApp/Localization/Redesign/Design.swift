@@ -645,8 +645,8 @@ enum Translation {
     @ObservationIgnored private var recordObservation: ObservationToken?
 
     /// One row per CATALOG key, sorted by key — PURE, so the open path builds them off the
-    /// main actor.
-    nonisolated private static func rows(
+    /// main actor (and a test builds them with no store).
+    nonisolated static func rows(
       catalog: StringCatalog, records: ProjectRecords, languages: [String]
     ) -> (rows: [LocalizationKey], positions: [String: Int]) {
       var rows: [LocalizationKey] = []
@@ -811,6 +811,15 @@ enum Translation {
         }
         state = Self.state(of: units)
         slot.target = .plural(target)
+      } else if catalog.hasPluralSource(key) {
+        // A plural SOURCE makes every target plural (`StringCatalog.hasPluralSource`): a flat
+        // value the file holds was translated before the source was varied — one text for every
+        // number, wrong in any language with more forms than English — so the slot is the target
+        // language's empty form set, work for the next run, and its write-back replaces the flat
+        // unit with the forms (`Workspace.apply`).
+        slot.target = .plural(Plurals(language: language))
+        slot.status = .needsTranslate
+        return slot
       } else {
         state = catalog.state(for: key, language: language)
         slot.target = .value(catalog.rawValue(for: key, language: language) ?? "")
@@ -866,6 +875,12 @@ enum Translation {
       _ records: [TranslationRecord], shapedBy catalog: StringCatalog?, key: String,
       language: String
     ) -> [TranslationRecord] {
+      // Under a plural SOURCE only the form records are the slot: a flat record is a translation
+      // of the key from before the source was varied, so a slot with no form records yet is the
+      // file's own (`slot(language:key:catalog:)`), an empty form set to translate.
+      if let catalog, catalog.hasPluralSource(key) {
+        return records.filter { $0.category != nil }
+      }
       guard let catalog, catalog.holdsReviewedFlat(key: key, language: language) else {
         return records
       }

@@ -187,6 +187,13 @@ nonisolated struct StringCatalog: Codable, Sendable {
     return localizations.values.contains { $0.variations?["plural"]?.isEmpty == false }
   }
 
+  /// True when the key's SOURCE language is varied by plural ("%lld files": one "%lld file", other
+  /// "%lld files"). Such a key is plural in every language: a target is translated into its own
+  /// language's categories (`PluralRules`), and a flat value a target holds is work, not a translation.
+  func hasPluralSource(_ key: String) -> Bool {
+    hasPlurals(for: key, language: sourceLanguage)
+  }
+
   /// True when this key/language slot carries a plural variation.
   func hasPlurals(for key: String, language: String) -> Bool {
     strings[key]?.localizations?[language]?.variations?["plural"]?.isEmpty == false
@@ -204,8 +211,12 @@ nonisolated struct StringCatalog: Codable, Sendable {
   /// exactly this — so the app's plural form records never write over it: the load leaves a
   /// slot with reviewed values on both sides as it is (`Reconcile.shapeConflicts`), and the
   /// stale forms it keeps would otherwise put the plural back on the next write.
+  ///
+  /// Not under a plural SOURCE (`hasPluralSource`): there a flat value is a translation made before
+  /// the source was varied ("%lld files" translated once for every number), which no language can
+  /// say right, so it holds nothing back and the slot is translated again into its forms.
   func holdsReviewedFlat(key: String, language: String) -> Bool {
-    guard !hasPlurals(for: key, language: language),
+    guard !hasPlurals(for: key, language: language), !hasPluralSource(key),
           let unit = strings[key]?.localizations?[language]?.stringUnit,
           unit.state == "translated", unit.value?.isBlankOrEmpty == false
     else { return false }
@@ -558,63 +569,118 @@ nonisolated struct StringCatalog: Codable, Sendable {
 
 // MARK: - PluralRules
 
-/// The plural categories a language's variation template carries.
+/// The plural categories a language has: THE one table (`Plural.rules` reads it too).
 ///
-/// The table below is Xcode's OWN, extracted from
-/// `/Applications/Xcode.app/Contents/SharedFrameworks/XCStringsParser.framework/Versions/A/Resources/variationConfigFile.plist`
-/// (`PluralRule.ComplementedPluralKeys`, 161 bare locales), keeping only the
-/// languages whose set differs from the ubiquitous `one`/`other` — the
-/// `default` below is exactly that pair, so any code the table does not name
-/// still gets a correct template. Regenerate the same way when the Add
-/// Language set grows; never hand-write these from memory (three of the
-/// pre-12-Sep entries did: `cs`/`sk` were missing `many`, `hr`/`sr` an extra
-/// `many`, and `fr`/`pt` an extra `many`, all against Xcode's own data).
+/// Generated from ICU — the plural rules Foundation itself selects a `.stringsdict` form with at run time —
+/// by asking macOS's `libicucore` (`uplrules_getKeywords`) for every locale it ships plus the languages Dev
+/// translates into, so a catalog holds exactly the forms the runtime asks for: a category ICU has and the
+/// table lacked would fall back to `other` (Maltese `two`, the 1e6 `many` of French and Spanish), and one it
+/// lacks is never selected (Hebrew `many`; `mai`, `mi`, `mni`, `sa` and `tg`, for which ICU has no rules,
+/// use `other` for every number). It replaced Xcode's own table (`variationConfigFile.plist`, 2026-09), which
+/// differed from ICU in those places. `PluralRulesTests` compares it with ICU, so an ICU update that moves a
+/// language fails a test instead of shipping a missing form; regenerate it from ICU then, never by hand.
 ///
-/// Three locales Xcode ships NO template for are filled from CLDR instead, and
-/// are called out where they appear: `ars` (Arabic rules), `sa` and `sat`
-/// (one/two/other). They are keyboard-only languages; getting them wrong would
-/// silently create or drop a form, and nothing downstream would catch it —
-/// `xcstringstool` accepts any category for any locale (probed).
+/// Only sets other than the ubiquitous `one`/`other` are listed: every language ICU knows that is not
+/// named below has exactly that pair. A code ICU has no locale for at all gets that pair too (ICU itself
+/// would answer `other` alone); a region is looked up before its language where ICU tells them apart
+/// (`pt-PT`'s `one` is 1 only, Brazilian `one` is 0 and 1).
 nonisolated enum PluralRules {
-  /// Languages whose plural set is not the default `["one", "other"]`.
-  private static let nonDefault: [String: [String]] = [
-    "ar": ["zero", "one", "two", "few", "many", "other"], "be": ["one", "few", "many", "other"],
-    "bm": ["other"], "bo": ["other"],
-    "br": ["one", "two", "few", "many", "other"], "bs": ["one", "few", "other"],
-    "cs": ["one", "few", "many", "other"], "cy": ["zero", "one", "two", "few", "many", "other"],
-    "dsb": ["one", "two", "few", "other"], "dz": ["other"],
-    "ga": ["one", "two", "few", "many", "other"], "gd": ["one", "two", "few", "other"],
-    "gv": ["one", "two", "few", "many", "other"], "he": ["one", "two", "many", "other"],
-    "hr": ["one", "few", "other"], "hsb": ["one", "two", "few", "other"],
-    "id": ["other"], "ig": ["other"],
-    "ii": ["other"], "iu": ["one", "two", "other"],
-    "ja": ["other"], "kde": ["other"],
-    "kea": ["other"], "km": ["other"],
-    "ko": ["other"], "ksh": ["zero", "one", "other"],
-    "kw": ["one", "two", "other"], "lag": ["zero", "one", "other"],
-    "lkt": ["other"], "lo": ["other"],
-    "lt": ["one", "few", "many", "other"], "lv": ["zero", "one", "other"],
-    "ms": ["other"], "mt": ["one", "few", "many", "other"],
-    "my": ["other"], "naq": ["one", "two", "other"],
-    "pl": ["one", "few", "many", "other"], "ro": ["one", "few", "other"],
-    "ru": ["one", "few", "many", "other"], "sah": ["other"],
-    "se": ["one", "two", "other"], "ses": ["other"],
-    "sg": ["other"], "shi": ["one", "few", "other"],
-    "sk": ["one", "few", "many", "other"], "sl": ["one", "two", "few", "other"],
-    "smn": ["one", "two", "other"], "sr": ["one", "few", "other"],
-    "th": ["other"], "to": ["other"],
-    "uk": ["one", "few", "many", "other"], "vi": ["other"],
-    "yo": ["other"], "yue": ["other"],
-    "zh": ["other"],
-    // CLDR, because Xcode's table has no entry for these three at all.
-    "ars": ["zero", "one", "two", "few", "many", "other"],
-    "sa": ["one", "two", "other"],
-    "sat": ["one", "two", "other"],
+  private static let sets: [(categories: [String], languages: [String])] = [
+    (["other"], [
+      "acf", "agq", "ain", "apw", "arn", "ba", "bas", "ber", "bgc", "bla", "bm", "bo", "bua", "byn", "ccp", "cho",
+      "cic", "co", "com", "cr", "crj", "crk", "crl", "crm", "cst", "cwd", "dav", "dje", "dua", "dyo", "dz", "ebu",
+      "ewo", "fla", "gaa", "gcf", "gn", "guz", "hch", "hmn", "ht", "id", "ig", "ii", "inh", "isc", "ja", "jbo", "jv",
+      "kam", "kde", "kea", "kgp", "khq", "ki", "kio", "kln", "km", "ko", "kpe", "ksf", "kxv", "lkt", "lmo", "lo",
+      "lrc", "lu", "luo", "lut", "luy", "mai", "mer", "mfe", "mgh", "mi", "mic", "mid", "mni", "moh", "ms", "mua",
+      "mus", "my", "myv", "mzn", "nds", "nez", "nmg", "nnp", "nqo", "nus", "nv", "oc", "osa", "pms", "pqm", "qu",
+      "raj", "rej", "rhg", "rn", "rw", "sa", "sah", "sbp", "ses", "sg", "shn", "shp", "sjd", "sje", "sju", "sm",
+      "srs", "su", "szl", "tg", "th", "to", "tok", "trv", "tt", "twq", "tyv", "vai", "vi", "vmw", "wal", "wo", "xnr",
+      "yav", "yo", "yrl", "yue", "za", "zgh", "zh",
+    ]),
+    (["zero", "one", "other"], [
+      "blo", "cv", "ksh", "lag", "lv", "prg",
+    ]),
+    (["one", "two", "other"], [
+      "he", "iu", "naq", "sat", "se", "smn",
+    ]),
+    (["one", "few", "other"], [
+      "bs", "hr", "mo", "ro", "sh", "shi", "sr",
+    ]),
+    (["one", "many", "other"], [
+      "ca", "es", "fr", "it", "pt", "scn", "vec",
+    ]),
+    (["one", "two", "few", "other"], [
+      "dsb", "gd", "hsb", "sl",
+    ]),
+    (["one", "few", "many", "other"], [
+      "be", "cs", "lt", "pl", "ru", "sk", "uk",
+    ]),
+    (["one", "two", "few", "many", "other"], [
+      "br", "ga", "gv", "mt",
+    ]),
+    (["zero", "one", "two", "few", "many", "other"], [
+      "ar", "ars", "cy", "kw",
+    ]),
+  ]
+  private static let exactSets: [(categories: [String], languages: [String])] = [
+    ([], [
+      "ak", "am", "as", "bho", "bn", "ceb", "csw", "doi", "fa", "ff", "fil", "gu", "hi", "hy", "is", "kab", "kn",
+      "kok", "ln", "mg", "mk", "nso", "pa", "pcm", "si", "ti", "tzm", "wa", "zu",
+    ]),
+    (["one"], [
+      "pt-pt", "ca", "cs", "es", "it", "mo", "pl", "ro", "scn", "sk", "vec",
+    ]),
+    (["zero", "one"], [
+      "blo", "cv", "ksh", "kw", "lag",
+    ]),
+    (["one", "two"], [
+      "ga", "he", "iu", "mt", "naq", "sat", "se", "smn",
+    ]),
+    (["zero", "one", "two"], [
+      "ar", "ars",
+    ]),
+    (["zero", "one", "two", "few", "many"], [
+      "cy",
+    ]),
   ]
 
+  private static let byLanguage: [String: [String]] = Dictionary(
+    uniqueKeysWithValues: sets.flatMap { set in set.languages.map { ($0, set.categories) } })
+
+  /// The categories of a language whose set is the default `one`/`other` but whose `one` is not only the
+  /// number 1 (Hindi and Persian `one` is 0 and 1, Icelandic `one` is 1, 21, 31…), and of every language
+  /// whose exact categories differ from the default, which is "none" for a language not listed.
+  private static let exactByLanguage: [String: [String]] = Dictionary(
+    uniqueKeysWithValues: exactSets.flatMap { set in set.languages.map { ($0, set.categories) } })
+
+  /// The languages the table names (every one whose set is not `one`/`other`), for the test that
+  /// compares it with ICU.
+  static var listedLanguages: [String] { byLanguage.keys.sorted() }
+
+  /// A code as the tables spell a region: lowercased, "-" between its parts ("pt_PT" is "pt-pt").
+  private static func regional(_ language: String) -> String {
+    language.lowercased().replacingOccurrences(of: "_", with: "-")
+  }
+
+  /// The base language of a code: "pt-BR", "pt_PT", "zh-Hans" and "es-419" are pt, pt, zh and es.
+  static func base(of language: String) -> String {
+    language.split(separator: "-").first?.split(separator: "_").first.map(String.init)?.lowercased()
+      ?? language.lowercased()
+  }
+
+  /// The language's categories, in CLDR order (zero, one, two, few, many, other).
   static func categories(for language: String) -> [String] {
-    let base = language.split(separator: "-").first?.split(separator: "_").first.map(String.init)?.lowercased() ?? language.lowercased()
-    return nonDefault[base] ?? ["one", "other"]
+    byLanguage[base(of: language)] ?? ["one", "other"]
+  }
+
+  /// The categories that stand for exactly ONE whole number in this language (English `one` is 1, Arabic
+  /// `zero` and `two` are 0 and 2, Welsh `few` is 3), so a form may say the number in words ("One file",
+  /// "ملفان") instead of printing it. Every other form covers several numbers (Russian `one` is 1, 21, 31…;
+  /// French `one` is 0 and 1) and has to print the number.
+  static func exactCategories(for language: String) -> Set<String> {
+    let base = base(of: language)
+    if let exact = exactByLanguage[regional(language)] ?? exactByLanguage[base] { return Set(exact) }
+    return byLanguage[base] == nil ? ["one"] : []
   }
 
   /// Display names for the editor ("one" -> "One").

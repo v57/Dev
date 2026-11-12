@@ -496,6 +496,10 @@ nonisolated enum Reconcile {
           else { continue }
           reviewedShape = fileShape
         }
+        // Under a plural SOURCE the slot is plural whoever reviewed a flat value: that value was a
+        // translation of the key before the source was varied, so flattening the file back to it would
+        // undo the forms a run translated (`StringCatalog.hasPluralSource`).
+        if reviewedShape == .flat, catalog.hasPluralSource(key) { continue }
         // The conflict is the FILE's shape against the shape the reviewed value says the slot
         // should have — not against the records' own shape, which is often the file's shape plus a
         // stale row from an earlier era (a flat value a person typed while the file was flat, a

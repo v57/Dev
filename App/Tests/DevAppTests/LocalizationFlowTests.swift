@@ -120,8 +120,8 @@ import Testing
     try await until { !store.isAddingLanguage }
     let fr = data.records(project: project.id, key: "hello").filter { $0.language == "fr" }
     #expect(fr.count == 1)
-    // A plural source gets its forms straight away.
-    #expect(data.records(project: project.id, key: "%lld files").filter { $0.language == "fr" }.count == 2)
+    // A plural source gets its forms straight away: French's one, many and other.
+    #expect(data.records(project: project.id, key: "%lld files").filter { $0.language == "fr" }.count == 3)
     try await until { store.browserLanguages.contains("fr") }
   }
 
