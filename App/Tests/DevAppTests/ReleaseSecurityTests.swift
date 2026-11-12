@@ -116,6 +116,43 @@ import UpdateKit
     #expect(AppStoreConnectKey.loadMachineValues(from: machine) == ["ASC_KEY_ID": "CHANGED"])
   }
 
+  // MARK: H2: the packages a release builds from
+
+  @Test func branchPinsReleaseOnlyAtTheCommittedRevisions() throws {
+    let project = try Project("SCHEME=App\nPROJECT=App.xcodeproj\nVERSION=1.0\nDIRECT_DOWNLOAD=\n")
+    let resolved = project.root.appendingPathComponent("App.xcodeproj/project.xcworkspace/xcshareddata/swiftpm")
+    try FileManager.default.createDirectory(at: resolved, withIntermediateDirectories: true)
+    try """
+      {"pins":[{"identity":"kit","kind":"remoteSourceControl","location":"https://github.com/v57/Kit.git",
+      "state":{"branch":"main","revision":"0123456789012345678901234567890123456789"}}],"version":3}
+      """.write(to: resolved.appendingPathComponent("Package.resolved"), atomically: true, encoding: .utf8)
+    let tools = project.root.appendingPathComponent("tools")
+    try FileManager.default.createDirectory(at: tools, withIntermediateDirectories: true)
+    try "#!/bin/sh\n".write(to: tools.appendingPathComponent("xcodebuild-release"), atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tools.path + "/xcodebuild-release")
+    for git in [["init", "-q"], ["add", "."], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "t"]] {
+      let process = Process()
+      process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+      process.arguments = ["-C", project.root.path] + git
+      try process.run()
+      process.waitUntilExit()
+      #expect(process.terminationStatus == 0)
+    }
+    let refused = try project.run(["--dry-run", "check"])
+    #expect(refused.status != 0)
+    #expect(refused.output.contains("pins branches: tag the libraries"), "\(refused.output)")
+
+    // RELEASE_PINS=revision takes the branch pins, and the archive still builds from the committed file alone.
+    try "SCHEME=App\nPROJECT=App.xcodeproj\nVERSION=1.0\nDIRECT_DOWNLOAD=\nRELEASE_PINS=revision\n"
+      .write(to: project.root.appendingPathComponent("release.env"), atomically: true, encoding: .utf8)
+    let taken = try project.run(["--dry-run", "check"])
+    #expect(taken.status == 0, "\(taken.output)")
+    #expect(taken.output.contains("at the revisions it names (RELEASE_PINS=revision)"), "\(taken.output)")
+    let archive = try project.run(["--dry-run", "archive"], environment: ["RELEASE_TOOLS": tools.path])
+    #expect(archive.output.contains("-onlyUsePackageVersionsFromResolvedFile -disableAutomaticPackageResolution"),
+      "\(archive.output)")
+  }
+
   // MARK: H1: no token in the script; the publish request
 
   @Test func releaseScriptsGetNoGitHubToken() {

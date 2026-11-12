@@ -23,7 +23,7 @@
 # Steps, in the order `all` runs them (a step that doesn't apply to the platform is skipped):
 #   check        tools, signing identity, notary profile, the build host, release.env holds no ASC_* values, the
 #                package pins (a committed Package.resolved, no -Local workspace, no branch pins unless
-#                RELEASE_PINS=branch; Windows/Linux: clean checkouts)
+#                RELEASE_PINS=revision or branch; Windows/Linux: clean checkouts)
 #   build        a build (xcodebuild; swift build on Windows and Linux)
 #   test         xcodebuild test (skipped when TEST_SCHEME is empty)
 #   screenshots  the scenes in .dev/screenshots.json (dev-screenshots; pictures in its output folder),
@@ -648,8 +648,10 @@ check_asc_values() {
 
 # The packages a release builds from, pinned (security audit H2): Apple platforms build from the project's committed
 # Package.resolved and nothing else (archive passes -onlyUsePackageVersionsFromResolvedFile), never from a -Local
-# workspace's sibling checkouts, and with tags rather than branches unless RELEASE_PINS=branch (until the libraries'
-# tags are pushed). Windows and Linux build from this Mac's checkouts (V57_LOCAL=1): each must be clean, and its
+# workspace's sibling checkouts, and with tags rather than branches unless RELEASE_PINS says otherwise: revision takes
+# branch pins at the revisions the committed file names (a release of libraries that have no tags yet: the archive
+# still builds from that file alone), branch is a test build (branch pins, an uncommitted file, a -Local workspace,
+# uncommitted checkouts). Windows and Linux build from this Mac's checkouts (V57_LOCAL=1): each must be clean, and its
 # commit is printed for the record.
 check_pins() {
   if [ "$PLATFORM" = windows ] || [ "$PLATFORM" = linux ]; then
@@ -676,8 +678,10 @@ check_pins() {
   fi
   [ -z "$(git status --porcelain -- "$resolved")" ] || fail "$resolved has uncommitted changes"
   if grep -q '"branch"' "$resolved"; then
-    [ "$RELEASE_PINS" = branch ] || fail "$resolved pins branches: tag the libraries and resolve against the tags (or RELEASE_PINS=branch)"
-    echo "note: $resolved pins branches at the revisions it names (RELEASE_PINS=branch)"
+    case "$RELEASE_PINS" in
+      revision|branch) echo "note: $resolved pins branches at the revisions it names (RELEASE_PINS=$RELEASE_PINS)" ;;
+      *) fail "$resolved pins branches: tag the libraries and resolve against the tags (or RELEASE_PINS=revision to release at the revisions it names)" ;;
+    esac
   fi
   echo "packages: $resolved"
 }
