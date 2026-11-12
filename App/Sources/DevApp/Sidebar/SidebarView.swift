@@ -90,14 +90,14 @@ struct SidebarView: View {
         }
       }
     }
-    // First sight of the sidebar: build the rows, then ask every server how it
-    // is doing. Nothing polls after this — a check is a reader action.
+    // First sight of the sidebar: build the rows. No server is contacted here:
+    // the dots say "not checked" until the reader opens a server's pane or asks
+    // for a check (Check All, a row's Check Now).
     .task {
       await TranslationData.shared.start()
       servers.refresh()
       // Design checks: the Add Connection sheet.
       if LaunchOptions.isScreenshotMode, LaunchOptions.open == "addServer" { serverSheet = .add }
-      await servers.checkAll()
     }
     .dropDestination(for: URL.self) { urls, _ in
       // Import searches a dropped directory for its catalog, so it is async.

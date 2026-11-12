@@ -27,6 +27,8 @@ enum ServerSheet: Identifiable {
 /// the detail pane with that server's own pane. The context menu carries the two
 /// per-server actions that do not belong in the pane's own buttons: a manual
 /// check and the removal (which is destructive and therefore asks first).
+/// Nothing here contacts a server until the reader asks: launch leaves every
+/// dot "not checked"; Check All in the header and opening a row check.
 struct ServersSidebarSection: View {
   let store: ServerStore
   @Binding var selection: SidebarSelection?
@@ -36,12 +38,9 @@ struct ServersSidebarSection: View {
   /// Asks before removing a server that has its own stored key.
   @State private var pendingRemoval: ServerRow?
 
-  /// "2 servers · 1 online", or "None connected".
+  /// "2 servers · 1 online", "2 servers · not checked", or "None connected".
   private var meta: [String] {
-    let count = store.servers.count
-    guard count > 0 else { return [String(localized: "None connected")] }
-    let online = store.servers.filter { store.statuses[$0.id]?.isOnline == true }.count
-    return [String(localized: "\(count) server\(count == 1 ? "" : "s")"), String(localized: "\(online) online")]
+    ServerStore.meta(serverIDs: store.servers.map(\.id), statuses: store.statuses)
   }
 
   var body: some View {
@@ -70,6 +69,11 @@ struct ServersSidebarSection: View {
         }
       }
     } accessory: {
+      if !store.servers.isEmpty {
+        Button("Check All", systemImage: "arrow.clockwise") { Task { await store.checkAll() } }
+          .buttonStyle(.kitIcon)
+          .kitHelp("Check All", meta: "Contacts every server now to see whether it's online", systemImage: "arrow.clockwise")
+      }
       Button("Add Localization Server…", systemImage: "plus") { onEdit(.add) }
         .buttonStyle(.kitIcon)
         .kitHelp("Add Localization Server", systemImage: "plus")

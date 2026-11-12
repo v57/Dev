@@ -55,9 +55,9 @@ enum ServerStatus: Hashable {
 /// the same way `SidebarViewModel` owns the project list — one source of truth
 /// for 'which servers exist' and 'what did the last check find'.
 ///
-/// Nothing here polls: a check runs when the app appears, when a server is
-/// added or edited, and when the reader asks for one. A dot that refreshed on a
-/// timer would put background traffic on every configured server for no gain.
+/// Nothing here runs on its own: a check runs when the reader opens a server's
+/// pane, adds or edits a server, or asks for one (Check All, Check Now). Launch
+/// contacts no server, so every dot starts as "not checked" — never as offline.
 @Observable
 final class ServerStore {
   /// Fresh rows, rebuilt by `refresh()`.
@@ -76,6 +76,26 @@ final class ServerStore {
   private var data: TranslationData { .shared }
 
   // MARK: - reading
+
+  /// The sidebar section's meta: "2 servers · 1 online", "2 servers · not
+  /// checked" before any check has answered (a server nobody asked isn't
+  /// offline), or "None connected".
+  static func meta(serverIDs: [String], statuses: [String: ServerStatus]) -> [String] {
+    let count = serverIDs.count
+    guard count > 0 else { return [String(localized: "None connected")] }
+    var meta = [String(localized: "\(count) server\(count == 1 ? "" : "s")")]
+    let unchecked = serverIDs.filter { (statuses[$0] ?? .unknown) == .unknown }.count
+    if unchecked < count {
+      let online = serverIDs.filter { statuses[$0]?.isOnline == true }.count
+      meta.append(String(localized: "\(online) online"))
+    }
+    if unchecked == count {
+      meta.append(String(localized: "not checked"))
+    } else if unchecked > 0 {
+      meta.append(String(localized: "\(unchecked) not checked"))
+    }
+    return meta
+  }
 
   func row(id: String) -> ServerRow? { servers.first { $0.id == id } }
 
@@ -184,9 +204,9 @@ final class ServerStore {
     checkedAt[id] = Date()
   }
 
-  /// Checks every configured server — the launch pass and the sidebar's
-  /// "Check All" affordance. Concurrent on purpose: the rows are independent
-  /// and one slow host must not hold up the others.
+  /// Checks every configured server: the sidebar section's Check All.
+  /// Concurrent on purpose: the rows are independent and one slow host must
+  /// not hold up the others.
   func checkAll() async {
     let ids = servers.map(\.id)
     await withTaskGroup(of: Void.self) { group in
