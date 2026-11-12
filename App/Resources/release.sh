@@ -481,6 +481,10 @@ open(out, "wb").write(struct.pack("<HHH", 0, 1, len(pngs)) + entries + b"".join(
 # The VM build of this platform: swift build (build), or the release build packaged (archive).
 remote_build() {
   local kind="$1"
+  # The app's Info.plist there names this release's version and build (else the Xcode project's MARKETING_VERSION):
+  # passed into the host's script, so only plain ones.
+  [[ "$VERSION" =~ ^[0-9A-Za-z.+-]+$ && "$BUILD_NUMBER" =~ ^[0-9A-Za-z.]+$ ]] \
+    || fail "the version ($VERSION) and build ($BUILD_NUMBER) take letters, digits and . + - only"
   build_host
   swift_package
   local_folders
@@ -513,7 +517,7 @@ exit \$LASTEXITCODE" || fail "the Windows build failed (log: $OUT/remote-$CURREN
       [ -n "$WINDOWS_ICON" ] && icon_option="-Icon '$WINDOWS_ICON'"
       remote_run "\$ErrorActionPreference = 'Stop'
 \$env:V57_LOCAL = '1'
-& '$swiftui\\Windows\\scripts\\build-app.ps1' -PackagePath '$package' -Product '$product' -Configuration release $icon_option
+& '$swiftui\\Windows\\scripts\\build-app.ps1' -PackagePath '$package' -Product '$product' -Configuration release -Version '$VERSION' -Build '$BUILD_NUMBER' $icon_option
 \$arch = if (\$env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x64' }
 \$out = '$REMOTE_TREE\\out'
 if (Test-Path \$out) { Remove-Item -Recurse -Force \$out }
@@ -551,7 +555,7 @@ swift build --package-path \"$package\" --product '$product' -j $LINUX_JOBS" \
       remote_run "set -eo pipefail
 export V57_LOCAL=1
 cd \"$swiftui\"
-Linux/scripts/build-app --package \"$package\" -c release $static --jobs $LINUX_JOBS '$product'
+Linux/scripts/build-app --package \"$package\" -c release $static --jobs $LINUX_JOBS --version '$VERSION' --build '$BUILD_NUMBER' '$product'
 case \$(uname -m) in aarch64|arm64) arch=arm64 ;; *) arch=x64 ;; esac
 out=\"\$HOME/$REMOTE_TREE/out\"
 rm -rf \"\$out\" && mkdir -p \"\$out\"
