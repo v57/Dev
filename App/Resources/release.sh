@@ -419,11 +419,11 @@ remote_run() {
   done < <(sed -n 's/^dev-release-file: //p' "$log")
 }
 
-# linux_icon NAME: the app's icon as a 512-pixel PNG for the Linux .desktop file, made on this Mac (actool and sips)
-# from the project's Icon Composer icon (AppIcon.icon first) and copied to the build host as <tree>/<NAME>.png.
-# Without one, build-app's own (the largest AppIcon.appiconset PNG, if any) stays.
-linux_icon() {
-  local name="$1" icon work
+# render_icon: the project's Icon Composer icon (AppIcon.icon first) rendered on this Mac by actool, as ICON_ICNS
+# (empty without one, or when it doesn't render).
+render_icon() {
+  local icon work
+  ICON_ICNS=""
   icon=$(find "$PROJECT_DIR" \( -name .build -o -name build -o -name DerivedData -o -name .git \) -prune -o \
     -type d -name '*.icon' -print 2>/dev/null | awk '{ print (index($0, "/AppIcon.icon") ? 0 : 1) "\t" $0 }' \
     | sort | head -1 | cut -f2)
@@ -432,11 +432,50 @@ linux_icon() {
   [ "$DRY_RUN" = 1 ] && return 0
   work="$OUT/icon"
   rm -rf "$work" && mkdir -p "$work"
-  xcrun actool "$icon" --compile "$work" --app-icon "$(basename "$icon" .icon)" --platform macosx \
-    --minimum-deployment-target 15.0 --output-partial-info-plist "$work/partial.plist" >/dev/null 2>&1 \
-    && sips -s format png -Z 512 "$work/$(basename "$icon" .icon).icns" --out "$work/$name.png" >/dev/null 2>&1 \
-    || { echo "note: the icon didn't render (actool), the .desktop file has none"; return 0; }
-  scp -q "${SSH_OPTS[@]}" "$work/$name.png" "$HOST:$REMOTE_TREE/$name.png" || fail "copying the icon to $HOST failed"
+  if xcrun actool "$icon" --compile "$work" --app-icon "$(basename "$icon" .icon)" --platform macosx \
+    --minimum-deployment-target 15.0 --output-partial-info-plist "$work/partial.plist" >/dev/null 2>&1; then
+    ICON_ICNS="$work/$(basename "$icon" .icon).icns"
+  fi
+  [ -f "$ICON_ICNS" ] || { ICON_ICNS=""; echo "note: the icon didn't render (actool), the app has none"; }
+}
+
+# linux_icon NAME: the app's icon as a 512-pixel PNG for the Linux .desktop file, copied to the build host as
+# <tree>/<NAME>.png. Without one, build-app's own (the largest AppIcon.appiconset PNG, if any) stays.
+linux_icon() {
+  local name="$1"
+  render_icon
+  [ -n "$ICON_ICNS" ] || return 0
+  sips -s format png -Z 512 "$ICON_ICNS" --out "$OUT/icon/$name.png" >/dev/null 2>&1 \
+    || { echo "note: the icon didn't convert (sips), the .desktop file has none"; return 0; }
+  scp -q "${SSH_OPTS[@]}" "$OUT/icon/$name.png" "$HOST:$REMOTE_TREE/$name.png" || fail "copying the icon to $HOST failed"
+}
+
+# windows_icon NAME: the app's icon as a multi-size .ico (16 to 256 pixels, PNG entries, as Windows 10 and 11 read
+# them), copied to the build host as <tree>\<NAME>.ico; WINDOWS_ICON is its path there, which build-app.ps1 -Icon
+# puts into the exe and beside it (the windows' icon). Empty without one: the exe keeps the default icon.
+windows_icon() {
+  local name="$1" size pngs=()
+  WINDOWS_ICON=""
+  render_icon
+  [ -n "$ICON_ICNS" ] || return 0
+  for size in 16 20 24 32 40 48 64 256; do
+    sips -s format png -Z "$size" "$ICON_ICNS" --out "$OUT/icon/$size.png" >/dev/null 2>&1 \
+      || { echo "note: the icon didn't convert (sips), the exe has none"; return 0; }
+    pngs+=("$OUT/icon/$size.png")
+  done
+  # ICONDIR, one ICONDIRENTRY per size (0 means 256), then the PNG files as they are.
+  python3 -I -c '
+import struct, sys
+out, pngs = sys.argv[1], [open(p, "rb").read() for p in sys.argv[2:]]
+offset, entries = 6 + 16 * len(pngs), b""
+for png in pngs:
+    width, height = struct.unpack(">II", png[16:24])
+    entries += struct.pack("<BBBBHHII", width % 256, height % 256, 0, 0, 1, 32, len(png), offset)
+    offset += len(png)
+open(out, "wb").write(struct.pack("<HHH", 0, 1, len(pngs)) + entries + b"".join(pngs))
+' "$OUT/icon/$name.ico" "${pngs[@]}" || { echo "note: the .ico wasn't written, the exe has none"; return 0; }
+  scp -q "${SSH_OPTS[@]}" "$OUT/icon/$name.ico" "$HOST:${REMOTE_TREE//\\//}/$name.ico" || fail "copying the icon to $HOST failed"
+  WINDOWS_ICON="$REMOTE_TREE\\$name.ico"
 }
 
 # The VM build of this platform: swift build (build), or the release build packaged (archive).
@@ -467,10 +506,14 @@ exit \$LASTEXITCODE" || fail "the Windows build failed (log: $OUT/remote-$CURREN
     else
       # build-app.ps1 stages the app DLL, its DLLs, the Swift runtime and the WinUI host in .build\winui\<product>;
       # the zip holds that folder as <App>\, without the PDBs, and the host takes the app's name as SwiftUI's
-      # install-apps.ps1 does: WinUI reads <exe name>.pri, and SwiftUIHost.exe opens no window.
+      # install-apps.ps1 does: WinUI reads <exe name>.pri, and SwiftUIHost.exe opens no window. The exe and the
+      # windows get the app's icon (-Icon, rendered here from its AppIcon.icon).
+      windows_icon "$name"
+      local icon_option=""
+      [ -n "$WINDOWS_ICON" ] && icon_option="-Icon '$WINDOWS_ICON'"
       remote_run "\$ErrorActionPreference = 'Stop'
 \$env:V57_LOCAL = '1'
-& '$swiftui\\Windows\\scripts\\build-app.ps1' -PackagePath '$package' -Product '$product' -Configuration release
+& '$swiftui\\Windows\\scripts\\build-app.ps1' -PackagePath '$package' -Product '$product' -Configuration release $icon_option
 \$arch = if (\$env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x64' }
 \$out = '$REMOTE_TREE\\out'
 if (Test-Path \$out) { Remove-Item -Recurse -Force \$out }

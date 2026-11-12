@@ -96,7 +96,7 @@ the Trash (Delete Run… trashes the whole folder).
 |---|---|---|
 | macOS | `<App>.xcarchive` (xcodebuild-release), `<App>.zip` + `<App>.dmg` (Developer ID signed; `direct` notarizes them; `DIRECT_ARCHS=arm64` archives Apple silicon only) | this Mac |
 | iOS | `<App>.xcarchive` | this Mac |
-| Windows | `<App>-Windows-<arch>.zip` (`<App>\`: the WinUI host as `<App>.exe`, the app DLL, the Swift and .NET runtimes) | a Windows VM |
+| Windows | `<App>-Windows-<arch>.zip` (`<App>\`: the WinUI host as `<App>.exe` with the app's icon, rendered on this Mac from its `AppIcon.icon` as a multi-size `.ico` (also `AppIcon.ico`, the windows' icon), the app DLL, the Swift and .NET runtimes) | a Windows VM |
 | Linux | `<App>-Linux-<arch>.tar.gz` (`<App>/` for `/opt/<App>`: the executable with the Swift runtime linked in, resources, a `.desktop` file with `LINUX_CATEGORIES` and the app's icon, rendered on this Mac from its `AppIcon.icon`) | a Linux VM |
 | Android | `<App>-Android.apk`, release-signed (not built yet) | this Mac |
 
