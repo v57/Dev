@@ -51,7 +51,7 @@ struct SidebarView: View {
     @Bindable var model = model
     KitSidebar(selection: $model.selection, searchText: $search, searchPrompt: "Search Projects") {
       // The window's account (hidden while Personal is the only one).
-      VaultAccountPicker(meta: String(localized: "\(model.projects.count) project\(model.projects.count == 1 ? "" : "s")"))
+      VaultAccountPicker(meta: String(localized: "\(model.projects.count) projects"))
       // A long Projects list keeps its title in view (the section does it), and the sections it pushes off wait as
       // titles at the bottom.
       projectsSection

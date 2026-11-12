@@ -349,11 +349,11 @@ extension Translation {
     /// can read instead of a sentence only a window can produce.
     static func tally(_ run: Run) -> String {
       var parts = [
-        String(localized: "\(run.tally.batchesDone)/\(run.tally.batches) batches"),
-        String(localized: "\(run.tally.itemsDone)/\(run.tally.items) strings"),
+        String(localized: "\(run.tally.batchesDone.formatted())/\(run.tally.batches) batches"),
+        String(localized: "\(run.tally.itemsDone.formatted())/\(run.tally.items) strings"),
         run.tally.sends == run.tally.requests
           ? String(localized: "\(run.tally.requests) requests")
-          : String(localized: "\(run.tally.sends) requests (\(run.tally.requests) answered)"),
+          : String(localized: "\(run.tally.sends) requests") + " (" + String(localized: "\(run.tally.requests) answered") + ")",
         String(localized: "cache \(run.tally.cachedShare.formatted(.percent.precision(.fractionLength(0))))"),
       ]
       if let reask = run.reasking {

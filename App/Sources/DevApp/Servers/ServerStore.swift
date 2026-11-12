@@ -40,7 +40,8 @@ enum ServerStatus: Hashable {
     switch self {
     case .unknown: return String(localized: "not checked")
     case .checking: return String(localized: "checking…")
-    case .online(let messages, let commented): return String(localized: "\(messages) sentences, \(commented) commented")
+    case .online(let messages, let commented):
+      return String(localized: "\(messages) sentences") + ", " + String(localized: "\(commented) commented")
     case .offline(let detail): return detail
     case .notConfigured(let detail): return detail
     }
@@ -83,7 +84,7 @@ final class ServerStore {
   static func meta(serverIDs: [String], statuses: [String: ServerStatus]) -> [String] {
     let count = serverIDs.count
     guard count > 0 else { return [String(localized: "None connected")] }
-    var meta = [String(localized: "\(count) server\(count == 1 ? "" : "s")")]
+    var meta = [String(localized: "\(count) servers")]
     let unchecked = serverIDs.filter { (statuses[$0] ?? .unknown) == .unknown }.count
     if unchecked < count {
       let online = serverIDs.filter { statuses[$0]?.isOnline == true }.count

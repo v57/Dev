@@ -484,7 +484,7 @@ final class LocalizationsStore {
       }
       say("\(source.name): \(counts.total) keys (+\(counts.added), stale \(counts.staled))")
     }
-    summary = written == 0 ? String(localized: "Every catalog is current") : String(localized: "Wrote \(written) catalog\(written == 1 ? "" : "s")")
+    summary = written == 0 ? String(localized: "Every catalog is current") : String(localized: "Wrote \(written) catalogs")
   }
 
   // MARK: translate
@@ -526,7 +526,7 @@ final class LocalizationsStore {
         }
         refreshProgress()
       }
-      summary = String(localized: "Translated \(done) of \(sources.count) source\(sources.count == 1 ? "" : "s")")
+      summary = String(localized: "Translated \(done.formatted()) of \(sources.count) sources")
     }
   }
 
@@ -569,7 +569,7 @@ final class LocalizationsStore {
         _ = await git(["commit", "-q", "-m", "Rebuilt manifest.json", "--", "manifest.json"], in: repoURL)
         commits += 1
       }
-      summary = commits == 0 ? String(localized: "Nothing to commit") : String(localized: "Made \(commits) commit\(commits == 1 ? "" : "s")")
+      summary = commits == 0 ? String(localized: "Nothing to commit") : String(localized: "Made \(commits) commits")
     }
   }
 

@@ -514,7 +514,7 @@ private struct ScratchPicker: View {
         Text("Scratch and temp folders · \(items.reduce(0) { $0 + $1.bytes }.byteString)").fontWeight(.semibold)
         Text(picked.isEmpty
           ? "Agent scratchpads and temp files, \(items.count) folders. Some may be in use, so pick by age."
-          : "\(picked.count) of \(items.count) folders picked · \(picked.reduce(0) { $0 + $1.bytes }.byteString)")
+          : "\(picked.count.formatted()) of \(items.count) folders picked · \(picked.reduce(0) { $0 + $1.bytes }.byteString)")
           .kitFont(.callout)
           .foregroundStyle(.kitSecondary)
           .lineLimit(1)
@@ -607,7 +607,7 @@ private struct GroupsPage: View {
           Tile(systemImage: category.systemImage, hue: category.hue, size: 36, style: .solid)
           VStack(alignment: .leading, spacing: 2) {
             Text(group.name).fontWeight(selected ? .semibold : .medium).lineLimit(1)
-            Text("\(safety.title) · \(group.items.count) item\(group.items.count == 1 ? "" : "s")")
+            Text("\(safety.title) · \(group.items.count) items")
               .kitFont(.caption)
               .foregroundStyle(.kitSecondary)
           }
@@ -641,7 +641,7 @@ private struct GroupsPage: View {
       }
       .padding(20)
       HStack {
-        Text("\(group.items.count) item\(group.items.count == 1 ? "" : "s")")
+        Text("\(group.items.count) items")
         Spacer()
         Text("Sort by Size")
       }
@@ -799,7 +799,10 @@ private struct UninstallerPage: View {
         VStack(alignment: .leading, spacing: 4) {
           Text("Uninstaller").kitFont(.title2).fontWeight(.bold)
           let unused = store.items(in: .applications).filter { infos[$0.id]?.isUnused == true }.count
-          Text("\(store.items(in: .applications).count) apps · \(unused) unused for 6 months or more")
+          Text(verbatim: [
+            String(localized: "\(store.items(in: .applications).count) apps"),
+            String(localized: "\(unused) unused for 6 months or more"),
+          ].joined(separator: " · "))
             .kitFont(.callout).foregroundStyle(.kitSecondary)
         }
         .padding(16)
@@ -1082,7 +1085,7 @@ private struct LanguagesPage: View {
           Tile(letters: language.mono, hue: .orange, size: 36, style: .solid)
           VStack(alignment: .leading, spacing: 2) {
             Text(language.name).fontWeight(selected ? .semibold : .medium)
-            Text("\(language.versions.count == 1 ? "1 version" : "\(language.versions.count) versions")\(unused > 0 ? " · \(unused) unused" : "") · \(language.caches.reduce(0) { $0 + $1.bytes }.byteString) caches")
+            Text("\(String(localized: "\(language.versions.count) versions"))\(unused > 0 ? " · " + String(localized: "\(unused) unused") : "") · \(language.caches.reduce(0) { $0 + $1.bytes }.byteString) caches")
               .kitFont(.caption)
               .foregroundStyle(unused > 0 ? AnyShapeStyle(Hue.orange.text) : AnyShapeStyle(.kitSecondary))
           }
@@ -1110,7 +1113,7 @@ private struct LanguageDetail: View {
           Tile(letters: language.mono, hue: .orange, size: 56, style: .solid)
           VStack(alignment: .leading, spacing: 3) {
             Text(language.name).kitFont(.title1).fontWeight(.bold)
-            Text("\(language.versions.count == 1 ? "1 version" : "\(language.versions.count) versions") · \(language.caches.count) caches and downloads")
+            Text("\(String(localized: "\(language.versions.count) versions")) · \(language.caches.count) caches and downloads")
               .foregroundStyle(.kitSecondary)
           }
           Spacer()

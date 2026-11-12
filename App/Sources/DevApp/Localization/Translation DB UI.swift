@@ -128,7 +128,10 @@ private struct ImportedDBInfoView: View {
   private func statsSection(db: ImportedTranslationDB) -> some View {
     if let stats = db.stats {
       VStack(alignment: .leading, spacing: 6) {
-        Text("\(stats.totalRows.formatted()) translations · \(stats.languages.count.formatted()) language codes · \(stats.apps.count.formatted()) apps")
+        Text(verbatim: [
+          String(localized: "\(stats.totalRows) translations"), String(localized: "\(stats.languages.count) language codes"),
+          String(localized: "\(stats.apps.count) apps"),
+        ].joined(separator: " · "))
           .kitFont(.caption)
           .foregroundStyle(.kitSecondary)
         if store.isLoaded {

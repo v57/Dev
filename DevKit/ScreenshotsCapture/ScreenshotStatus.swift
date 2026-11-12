@@ -40,7 +40,7 @@
       if scenes.isEmpty { return String(localized: "No scenes") }
       if stale == 0 { return oldestBuild.map { String(localized: "Up to date (build \($0))") } ?? String(localized: "Up to date") }
       if scenes.allSatisfy({ $0.state == .missing }) { return String(localized: "Not captured yet") }
-      return String(localized: "\(stale) of \(scenes.count) scenes need a new capture")
+      return String(localized: "\(stale.formatted()) of \(scenes.count) scenes need a new capture")
     }
 
     /// nil when the project has no `.dev/screenshots.json`.

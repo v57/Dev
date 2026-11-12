@@ -1752,7 +1752,7 @@ final class LocalizationStore {
     let named = pendingDifferences.prefix(3)
     let names = named.map(\.label).joined(separator: ", ")
     var text = String(
-      localized: "One side is a value a person confirmed and the two disagree, for \(count) \(count == 1 ? "slot" : "slots") — \(names)")
+      localized: "One side is a value a person confirmed and the two disagree, for \(count) slots — \(names)")
     if count > named.count { text += String(localized: " (and \(count - named.count) more)") }
     text += "."
     text += "\n\n" + String(

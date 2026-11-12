@@ -185,7 +185,7 @@ struct ProjectOverviewView: View {
           .foregroundStyle(.kitSecondary)
           .frame(maxWidth: .infinity, alignment: .leading)
       } else {
-        Text("\(row.keyCount) strings · \(row.languages.count) languages")
+        Text(verbatim: String(localized: "\(row.keyCount) strings") + " · " + String(localized: "\(row.languages.count) languages"))
           .kitFont(.callout)
           .foregroundStyle(.kitSecondary)
         VStack(spacing: 7) {

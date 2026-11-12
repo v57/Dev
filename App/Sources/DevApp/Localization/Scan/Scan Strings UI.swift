@@ -349,12 +349,13 @@ struct ScanStringsView: View {
       SheetStatus(
         applied == 0
           ? "Nothing new to merge"
-          : "Merged \(applied) new key\(applied == 1 ? "" : "s") into the catalog",
+          : "Merged \(applied) new keys into the catalog",
         systemImage: applied == 0 ? "info.circle" : "checkmark", hue: applied == 0 ? .gray : .green,
         status: applied == 0 ? .idle : .done)
     } else if let plan = store.scan.plan {
       SheetStatus(
-        "\(plan.addedCount) new · \(plan.existingKeyCount) already present", systemImage: "text.magnifyingglass")
+        String(localized: "\(plan.addedCount) new") + " · " + String(localized: "\(plan.existingKeyCount) already present"),
+        systemImage: "text.magnifyingglass")
     } else {
       SheetStatus(store.scan.isRunning ? store.scan.phase : "", systemImage: "text.magnifyingglass", status: scanStatus)
     }
@@ -384,7 +385,7 @@ struct ScanStringsView: View {
 
   private var mergeLabel: String {
     let count = store.scan.plan?.addedCount ?? 0
-    return count == 0 ? String(localized: "Merge") : String(localized: "Merge \(count) New Key\(count == 1 ? "" : "s")")
+    return count == 0 ? String(localized: "Merge") : String(localized: "Merge \(count) New Keys")
   }
 
   private var mergeDisabled: Bool {

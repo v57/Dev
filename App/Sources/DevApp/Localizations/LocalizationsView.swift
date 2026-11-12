@@ -252,11 +252,10 @@ private struct LocalizationsSourcePage: View {
           ForEach(store.languages, id: \.self) { code in
             let done = progress.translated[code] ?? 0
             let review = progress.needsReview[code] ?? 0
+            let shown = String(localized: "\(code) · \(done) of \(progress.keys)")
             FormRow(
               "\(Locale.current.localizedString(forIdentifier: code) ?? code)",
-              help: review > 0
-                ? "\(code) · \(done) of \(progress.keys) · \(review) to review"
-                : "\(code) · \(done) of \(progress.keys)",
+              help: review > 0 ? shown + " · " + String(localized: "\(review) to review") : shown,
               systemImage: "globe", hue: done >= progress.keys && progress.keys > 0 ? .green : .accent
             ) {
               MicroBar(value: progress.fraction(code), hue: done >= progress.keys ? .green : .accent, width: 120)

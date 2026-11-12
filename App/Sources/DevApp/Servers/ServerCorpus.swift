@@ -286,19 +286,22 @@ final class ServerCorpus {
     if !more {
       return visibleRows.isEmpty
         ? String(localized: "no match in this server's \(rows.count) lines")
-        : String(localized: "\(visibleRows.count) matching line\(visibleRows.count == 1 ? "" : "s") in the whole corpus (\(rows.count) lines)")
+        : String(localized: "\(visibleRows.count) matching lines in the whole corpus (\(linesLabel))")
     }
     if visibleRows.isEmpty {
       return String(localized: "no match in the \(rows.count) lines read so far, and the server has more")
     }
-    return String(localized: "\(visibleRows.count) matching line\(visibleRows.count == 1 ? "" : "s") in the \(rows.count) lines read so far — the server has more, keep typing to read on")
+    return String(localized: "\(visibleRows.count) matching lines in the \(linesLabel) read so far — the server has more, keep typing to read on")
   }
+
+  /// The lines in hand, counted ("1 line", "300 lines").
+  private var linesLabel: String { String(localized: "\(rows.count) lines") }
 
   /// The footer's own line: how much of the corpus is in hand.
   var footerLine: String {
-    let lines = String(localized: "\(rows.count) line\(rows.count == 1 ? "" : "s")")
+    let lines = linesLabel
     var parts = [isEmptyQuery ? lines : String(localized: "\(visibleRows.count) of \(lines) shown")]
-    if pagesRead > 0 { parts.append(String(localized: "\(pagesRead) page\(pagesRead == 1 ? "" : "s")")) }
+    if pagesRead > 0 { parts.append(String(localized: "\(pagesRead) pages")) }
     parts.append(more ? String(localized: "more on the server") : String(localized: "the whole corpus is read"))
     return parts.joined(separator: " · ")
   }

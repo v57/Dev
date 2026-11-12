@@ -475,8 +475,10 @@ private struct AddLanguagesView: View {
 
   var body: some View {
     KitSheet(
-      title: "Add Languages",
-      meta: "\(store.browserLanguages.count) in this catalog · \(addable.count) to add. Every language Apple ships as a keyboard or UI language. Picked ones get a column now and are ready for a run; the catalog file only gains a language where a translation exists to save.",
+      title: String(localized: "Add Languages"),
+      meta: String(localized: "\(store.browserLanguages.count) in this catalog") + " · "
+        + String(localized: "\(addable.count) to add") + ". "
+        + String(localized: "Every language Apple ships as a keyboard or UI language. Picked ones get a column now and are ready for a run; the catalog file only gains a language where a translation exists to save."),
       systemImage: "globe", width: 680
     ) {
       ScrollView {
@@ -546,7 +548,7 @@ private struct AddLanguagesView: View {
   private var addTitle: String {
     selection.isEmpty
       ? String(localized: "Add Languages")
-      : String(localized: "Add \(selection.count) Language\(selection.count == 1 ? "" : "s")")
+      : String(localized: "Add \(selection.count) Languages")
   }
 
   /// English name of a code, for the tooltip ("brx" alone says little).
@@ -664,8 +666,8 @@ private struct RowInspector: View {
   private var translationsMeta: [String] {
     let languages = store.pickerLanguages
     let waiting = languages.filter { Self.state(of: cell(for: $0)) == .needsReview }.count
-    var parts = [String(localized: "\(languages.count) language\(languages.count == 1 ? "" : "s")")]
-    if waiting > 0 { parts.append(String(localized: "\(waiting) need\(waiting == 1 ? "s" : "") review")) }
+    var parts = [String(localized: "\(languages.count) languages")]
+    if waiting > 0 { parts.append(String(localized: "\(waiting) need review")) }
     return parts
   }
 
@@ -995,9 +997,13 @@ private struct WidthBadge: View {
     Image(systemName: "arrow.left.and.right")
       .kitFont(.caption)
       .foregroundStyle(Hue.orange.text)
-      .help(sourceChars > 0
-        ? "\(chars) chars — over the \(limit)-char limit (source \(sourceChars))"
-        : "\(chars) chars — over the \(limit)-char limit")
+      .help(helpText)
+  }
+
+  /// "1,200 chars — over the 1,000-char limit (source 800)": each count its own phrase, so each takes its plural.
+  private var helpText: String {
+    let over = String(localized: "\(chars) chars") + " — " + String(localized: "over the \(limit)-char limit")
+    return sourceChars > 0 ? over + " (" + String(localized: "source \(sourceChars)") + ")" : over
   }
 }
 
@@ -1474,7 +1480,7 @@ private struct FooterBar: View {
       ForEach(store.selectedLanguages, id: \.self) { language in
         Text("\(language): \(store.missingCount(for: language)) missing")
       }
-      Text("\(store.totalKeyCount) keys, showing \(store.visibleRows.count)")
+      Text(verbatim: String(localized: "\(store.totalKeyCount) keys") + ", " + String(localized: "showing \(store.visibleRows.count)"))
         .monospacedDigit()
     }
     .lineLimit(1)

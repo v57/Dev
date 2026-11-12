@@ -104,7 +104,7 @@ struct ScreenshotsView: View {
     guard let library, let date = library.capturedAt else { return String(localized: "Not captured yet") }
     let when = String(localized: "Captured \(date.formatted(.relative(presentation: .named)))")
     let outdated = library.outdated.count
-    return outdated == 0 ? when : String(localized: "\(outdated) of \(library.status?.scenes.count ?? 0) scenes outdated")
+    return outdated == 0 ? when : String(localized: "\(outdated.formatted()) of \(library.status?.scenes.count ?? 0) scenes outdated")
   }
 
   private func stage(

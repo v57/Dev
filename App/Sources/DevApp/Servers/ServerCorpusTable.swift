@@ -162,7 +162,7 @@ struct ServerCorpusTable: View {
     } else if !corpus.isEmptyQuery {
       EmptyState(
         systemImage: "magnifyingglass", title: "No Matches",
-        message: "No line matches this search in the \(corpus.rows.count) line\(corpus.rows.count == 1 ? "" : "s") read so far."
+        message: "No line matches this search in the \(corpus.rows.count) lines read so far."
       ) {
         if corpus.more {
           Button("Read On") { Task { await corpus.loadNextPage() } }

@@ -137,8 +137,8 @@ struct ServerDetailView: View {
   private var statusBlock: some View {
     HStack(spacing: 8) {
       switch status {
-      case .online(let messages, let commented):
-        Label("\(messages) sentences, \(commented) commented", systemImage: "checkmark.circle.fill")
+      case .online:
+        Label(status.short, systemImage: "checkmark.circle.fill")
           .foregroundStyle(Hue.green.text)
       case .checking:
         Label("checking…", systemImage: "clock")

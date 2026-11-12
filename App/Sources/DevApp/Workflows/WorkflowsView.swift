@@ -213,7 +213,7 @@ struct WorkflowsView: View {
       if let selected {
         let runs = store.runs(for: root).filter { $0.workflowID == selected.id }
         KitSection(
-          "Runs", meta: runs.isEmpty ? String(localized: "None yet") : String(localized: "\(runs.count) run\(runs.count == 1 ? "" : "s")"),
+          "Runs", meta: runs.isEmpty ? String(localized: "None yet") : String(localized: "\(runs.count) runs"),
           systemImage: "clock", hue: .gray, status: runs.first?.state == .running ? .working : .idle
         ) {
           if runs.isEmpty {
