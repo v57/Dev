@@ -180,7 +180,7 @@ extension StoreTexts {
         }
         let liveLocale = locale.flatMap { StoreLocale.match($0, in: live.locales) }
         let old = live.texts[StoreLive.Key(field: field, locale: locale == nil ? nil : liveLocale)]
-        if let old, destination.isSame(old, new, field: field) { continue }
+        if let old, destination.matches(live: old, local: new, field: field) { continue }
         plan.changes.append(StoreChange(
           field: field, title: slot.title, locale: locale, liveLocale: liveLocale ?? locale, old: old, new: new))
       }
@@ -207,8 +207,8 @@ extension StoreTexts {
       let scope = locale.map { " · \($0)" } ?? ""
       let base = entry(StoreAddress(field: field, locale: locale, version: version))?.text
       let override = entry(StoreAddress(field: field, destination: destination, locale: locale, version: version))?.text
-      if let base, destination.isSame(base, value, field: field) { continue }
-      if let override, destination.isSame(override, value, field: field) { continue }
+      if let base, destination.matches(live: value, local: base, field: field) { continue }
+      if let override, destination.matches(live: value, local: override, field: field) { continue }
       if base == nil {
         items.append(StoreImportItem(
           address: StoreAddress(field: field, locale: locale, version: version), title: "\(slot.title)\(scope)",

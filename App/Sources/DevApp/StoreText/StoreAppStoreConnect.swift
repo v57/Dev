@@ -14,8 +14,10 @@ private let editableVersionStates: Set<String> = [
 
 /// The app's text in App Store Connect: `appInfoLocalizations` (name, subtitle, privacy URL), the platform version's
 /// `appStoreVersionLocalizations` (description, keywords, promotional text, What's New, URLs), its copyright and review
-/// notes, the primary category, and the build's `betaBuildLocalizations` (TestFlight's What to Test). Publishing changes
-/// text only: it never submits a version for review.
+/// notes and contact (`appStoreReviewDetails`, never the demo account's name or password), the primary and secondary
+/// categories, the age rating (`ageRatingDeclarations`), and the build's `betaBuildLocalizations` (TestFlight's What to
+/// Test). App Privacy and review attachments aren't sent: App Privacy has no API, and an attachment is a file to upload
+/// by hand. Publishing changes text only: it never submits a version for review.
 nonisolated struct AppStoreConnectText: StoreService {
   let api: AppStoreConnectAPI
   let bundleID: String
@@ -31,8 +33,12 @@ nonisolated struct AppStoreConnectText: StoreService {
     var versionLocalizations: [[String: Any]] = []
     var reviewDetailID: String?
     var reviewNotes: String?
+    var reviewContact: String?
     var copyright: String?
     var category: String?
+    var secondaryCategory: String?
+    var ageRatingID: String?
+    var ageRating: String?
     var buildID: String?
     var betaLocalizations: [[String: Any]] = []
     var summary = ""
@@ -61,6 +67,14 @@ nonisolated struct AppStoreConnectText: StoreService {
     if let category = await optional("/v1/appInfos/\(appInfoID)/primaryCategory") {
       context.category = AppStoreConnectAPI.data(category).first?["id"] as? String
     }
+    if let category = await optional("/v1/appInfos/\(appInfoID)/secondaryCategory") {
+      context.secondaryCategory = AppStoreConnectAPI.data(category).first?["id"] as? String
+    }
+    if let rating = await optional("/v1/appInfos/\(appInfoID)/ageRatingDeclaration"),
+       let declaration = AppStoreConnectAPI.data(rating).first {
+      context.ageRatingID = declaration["id"] as? String
+      context.ageRating = StoreAgeRating.json(fromAttributes: declaration["attributes"] as? [String: Any] ?? [:])
+    }
 
     let ascPlatform = platform == "macos" ? "MAC_OS" : "IOS"
     let versions = AppStoreConnectAPI.data(try await api.request(
@@ -87,6 +101,7 @@ nonisolated struct AppStoreConnectText: StoreService {
          let detail = AppStoreConnectAPI.data(review).first {
         context.reviewDetailID = detail["id"] as? String
         context.reviewNotes = AppStoreConnectAPI.attribute(detail, "notes") as? String
+        context.reviewContact = StoreReviewContact.json(fromAttributes: detail["attributes"] as? [String: Any] ?? [:])
       }
     }
 
@@ -135,19 +150,27 @@ nonisolated struct AppStoreConnectText: StoreService {
       add(.init(field: .testers, locale: code), AppStoreConnectAPI.attribute(item, "whatsNew"))
     }
     add(.init(field: .category, locale: nil), context.category)
+    add(.init(field: .secondaryCategory, locale: nil), context.secondaryCategory)
     add(.init(field: .copyright, locale: nil), context.copyright)
     add(.init(field: .reviewNotes, locale: nil), context.reviewNotes)
+    add(.init(field: .reviewContact, locale: nil), context.reviewContact)
+    add(.init(field: .ageRating, locale: nil), context.ageRating)
     live.locales = locales.sorted()
 
     let name = version.map { "version \($0)" } ?? "a version"
     if context.versionID == nil {
       let reason = "App Store Connect has no \(name) yet: create it first"
-      for field in [StoreField.description, .keywords, .promotionalText, .changelog, .supportURL, .marketingURL, .copyright, .reviewNotes] {
+      for field in [
+        StoreField.description, .keywords, .promotionalText, .changelog, .supportURL, .marketingURL, .copyright, .reviewNotes,
+        .reviewContact,
+      ] {
         live.readOnly[field] = reason
       }
     } else if !context.versionEditable {
       let reason = "\(context.summary) can't change"
-      for field in [StoreField.description, .keywords, .changelog, .supportURL, .marketingURL, .copyright, .reviewNotes] {
+      for field in [
+        StoreField.description, .keywords, .changelog, .supportURL, .marketingURL, .copyright, .reviewNotes, .reviewContact,
+      ] {
         live.readOnly[field] = reason
       }
     }
@@ -218,14 +241,27 @@ nonisolated struct AppStoreConnectText: StoreService {
         type: "betaBuildLocalizations", parent: ("build", "builds", buildID), locale: locale, attributes: attributes,
         in: context.betaLocalizations)
     }
+    var categories: [String: Any] = [:]
     if let change = changes.first(where: { $0.field == .category }) {
+      categories["primaryCategory"] = ["data": ["type": "appCategories", "id": change.new]]
+    }
+    if let change = changes.first(where: { $0.field == .secondaryCategory }) {
+      categories["secondaryCategory"] = ["data": ["type": "appCategories", "id": change.new]]
+    }
+    if !categories.isEmpty {
       _ = try await api.request("PATCH", "/v1/appInfos/\(context.appInfoID)", body: [
-        "data": [
-          "type": "appInfos", "id": context.appInfoID,
-          "relationships": ["primaryCategory": ["data": ["type": "appCategories", "id": change.new]]],
-        ],
+        "data": ["type": "appInfos", "id": context.appInfoID, "relationships": categories],
       ])
       progress("Category")
+    }
+    if let change = changes.first(where: { $0.field == .ageRating }) {
+      // Every app info has a declaration; the answers left open stay as App Store Connect has them.
+      guard let id = context.ageRatingID else { throw StoreTextError("App Store Connect has no age rating declaration for this app yet.") }
+      let answers = try StoreStructured.object(change.new, field: .ageRating).filter { $0.key != "notes" }
+      _ = try await api.request("PATCH", "/v1/ageRatingDeclarations/\(id)", body: [
+        "data": ["type": "ageRatingDeclarations", "id": id, "attributes": answers],
+      ])
+      progress("Age rating")
     }
     if let change = changes.first(where: { $0.field == .copyright }), let versionID = context.versionID {
       _ = try await api.request("PATCH", "/v1/appStoreVersions/\(versionID)", body: [
@@ -233,20 +269,26 @@ nonisolated struct AppStoreConnectText: StoreService {
       ])
       progress("Copyright")
     }
-    if let change = changes.first(where: { $0.field == .reviewNotes }), let versionID = context.versionID {
+    // Review notes and the contact are one review detail. The demo account's name and password are never among them.
+    var review: [String: Any] = [:]
+    if let change = changes.first(where: { $0.field == .reviewNotes }) { review["notes"] = change.new }
+    if let change = changes.first(where: { $0.field == .reviewContact }) {
+      review.merge(try StoreReviewContact.attributes(fromSent: change.new)) { _, contact in contact }
+    }
+    if !review.isEmpty, let versionID = context.versionID {
       if let id = context.reviewDetailID {
         _ = try await api.request("PATCH", "/v1/appStoreReviewDetails/\(id)", body: [
-          "data": ["type": "appStoreReviewDetails", "id": id, "attributes": ["notes": change.new]],
+          "data": ["type": "appStoreReviewDetails", "id": id, "attributes": review],
         ])
       } else {
         _ = try await api.request("POST", "/v1/appStoreReviewDetails", body: [
           "data": [
-            "type": "appStoreReviewDetails", "attributes": ["notes": change.new],
+            "type": "appStoreReviewDetails", "attributes": review,
             "relationships": ["appStoreVersion": ["data": ["type": "appStoreVersions", "id": versionID]]],
           ],
         ])
       }
-      progress("Review notes")
+      progress("App Review information")
     }
   }
 }

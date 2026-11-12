@@ -141,8 +141,11 @@ struct StoreTextView: View {
       KitSection("Links", systemImage: "link", hue: .gray) {
         ForEach(StoreField.links) { fieldRow($0) }
       }
+      KitSection("Rating and Privacy", systemImage: "hand.raised", hue: .purple) {
+        ForEach(StoreField.ratings) { fieldRow($0) }
+      }
       KitSection("Review", systemImage: "checkmark.seal", hue: .green) {
-        fieldRow(.reviewNotes)
+        ForEach(StoreField.review) { fieldRow($0) }
       }
       KitSection("Version", meta: version ?? String(localized: "None yet"), systemImage: "number", hue: .orange) {
         if !versions.isEmpty {
@@ -182,7 +185,10 @@ struct StoreTextView: View {
       version: field.isPerVersion ? version : nil)
   }
 
-  private var scopes: [StoreDestination] { settings.used.filter { $0.slot(field) != nil } }
+  /// The destinations that may have their own text. Answers are App Store Connect's alone: one file, no overrides.
+  private var scopes: [StoreDestination] {
+    field.isStructured ? [] : settings.used.filter { $0.slot(field) != nil }
+  }
 
   @ViewBuilder
   private var editor: some View {
@@ -287,7 +293,10 @@ struct StoreTextView: View {
 
   @ViewBuilder
   private var textField: some View {
-    if field.isSingleLine {
+    if field.isStructured {
+      StoreAnswersEditor(field: field, text: $buffer)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    } else if field.isSingleLine {
       TextField(field.title, text: $buffer, prompt: Text(prompt))
         .labelsHidden()
         .kitField()
@@ -306,6 +315,8 @@ struct StoreTextView: View {
   private var prompt: String {
     switch field {
     case .category: "DEVELOPER_TOOLS"
+    case .secondaryCategory: "PRODUCTIVITY"
+    case .reviewAttachment: String(localized: "A file on this Mac, such as ~/Movies/Review.mov")
     case .copyright: String(localized: "2026 Your Name")
     case .supportURL, .marketingURL, .privacyURL: "https://"
     default: field.title
@@ -387,6 +398,8 @@ struct StoreTextView: View {
     var notes: [String] = []
     if let count {
       notes.append(count.text)
+    } else if row.slot.field.isStructured, !text.isEmpty {
+      notes.append(StoreStructured.summary(text, field: row.slot.field))
     } else if row.slot.limit == nil, !text.isEmpty {
       notes.append(String(localized: "\(text.count) characters"))
     }
@@ -409,7 +422,7 @@ struct StoreTextView: View {
     ) {
       HStack(spacing: 8) {
         if let count { MicroBar(value: min(count.fraction, 1), hue: hue) }
-        if !row.slot.isSent, !text.isEmpty { KitCopyButton(value: text) }
+        if !row.slot.isSent, !text.isEmpty { KitCopyButton(value: StoreStructured.copyText(text, field: row.slot.field)) }
       }
     }
   }
@@ -454,6 +467,7 @@ struct StoreTextView: View {
     settings = opened.settings()
     locale = settings.baseLocale
     if LaunchOptions.isScreenshotMode, LaunchOptions.open == "storeSetup" { showsSetup = true }
+    if let picked = LaunchOptions.storeField.flatMap(StoreField.init(rawValue:)) { field = picked }
     reload()
     await syncVault()
   }

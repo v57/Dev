@@ -54,6 +54,8 @@ nonisolated struct StoreTextError: LocalizedError {
 ///       en-US/description.txt        the base text
 ///       en-US/description.appstore.txt   the override for one destination
 ///       en-US/versions/1.2.0/changelog.txt
+///       en-US/age-rating.json        answers rather than text (`StoreStructured`): age rating, App Privacy,
+///                                    the App Review contact
 ///       de-DE/description.txt        the text in another locale
 ///       translations.json            what each translation was made from
 ///       private/...                  the same layout, never committed
@@ -129,7 +131,7 @@ nonisolated struct StoreTexts: Sendable {
     var parts = [address.locale ?? baseLocale]
     if address.field.isPerVersion, let version = address.version { parts += ["versions", version] }
     let override = address.destination.map { ".\($0.rawValue)" } ?? ""
-    parts.append("\(address.field.rawValue)\(override).txt")
+    parts.append("\(address.field.rawValue)\(override).\(address.field.fileExtension)")
     return parts.joined(separator: "/")
   }
 
@@ -233,7 +235,8 @@ nonisolated struct StoreTexts: Sendable {
   func write(_ text: String, at address: StoreAddress, ready: Bool? = nil) throws {
     try check(address)
     try prepareFolder()
-    let clean = Self.normalized(text, field: address.field)
+    let clean = address.field.isStructured
+      ? try StoreStructured.canonical(text, field: address.field) : Self.normalized(text, field: address.field)
     let path = relativePath(address)
     let publicURL = folder.appendingPathComponent(path)
     let privateURL = privateFolder.appendingPathComponent(path)
@@ -275,6 +278,9 @@ nonisolated struct StoreTexts: Sendable {
 
   /// Files end in one newline; single lines have no others; lists have one item per line.
   static func normalized(_ text: String, field: StoreField) -> String {
+    if field.isStructured {
+      return (try? StoreStructured.canonical(text, field: field)) ?? text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
     if field.isList { return StoreLists.text(StoreLists.items(in: text)) }
     let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
     if field.isSingleLine { return trimmed.replacingOccurrences(of: "\n", with: " ") }
@@ -410,8 +416,15 @@ nonisolated struct StoreTexts: Sendable {
   func privateFileCount() -> Int {
     guard let walker = manager.enumerator(at: privateFolder, includingPropertiesForKeys: nil) else { return 0 }
     var count = 0
-    for case let url as URL in walker where url.pathExtension == "txt" { count += 1 }
+    for case let url as URL in walker where url.pathExtension == "txt" || Self.isAnswersFile(url.lastPathComponent) {
+      count += 1
+    }
     return count
+  }
+
+  /// A structured field's file (`age-rating.json`), as opposed to Dev's own records (`translations.json`).
+  static func isAnswersFile(_ name: String) -> Bool {
+    StoreField.allCases.contains { $0.isStructured && name == "\($0.rawValue).json" }
   }
 
   /// Files in `private/` git already tracks, which the ignore rule can't hide: someone forced them in, or they were
@@ -463,6 +476,10 @@ nonisolated enum StoreMCP {
         guard let entry = texts.entry(address) else { continue }
         var item: [String: Any] = ["field": candidate.rawValue, "locale": locale, "text": entry.text, "private": entry.isPrivate]
         if let version = address.version { item["version"] = version }
+        if candidate.isStructured {
+          item["value"] = (try? StoreStructured.object(entry.text, field: candidate)) ?? [:]
+          item["summary"] = StoreStructured.summary(entry.text, field: candidate)
+        }
         items.append(item)
       }
     }

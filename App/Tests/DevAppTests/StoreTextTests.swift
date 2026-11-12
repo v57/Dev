@@ -592,6 +592,150 @@ import Testing
     #expect(!stub.sent.contains { $0.line.contains("/commit") })
   }
 
+  // MARK: Answers: age rating, App Privacy, the review contact
+
+  @Test func answersAreSortedJSONFilesAndTheReviewContactStaysPrivate() throws {
+    let root = try project()
+    let texts = StoreTexts(root: root)
+    try texts.write(#"{"violenceRealistic": "NONE", "unrestrictedWebAccess": false, "notes": "Nothing to rate"}"#,
+                    at: StoreAddress(field: .ageRating))
+    let rating = file(root, "private/en-US/age-rating.json") ?? ""
+    #expect(rating.hasSuffix("}\n"))
+    let keys = ["notes", "unrestrictedWebAccess", "violenceRealistic"].map { rating.range(of: "\"\($0)\"")?.lowerBound }
+    #expect(keys.allSatisfy { $0 != nil })
+    #expect(keys.compactMap { $0 } == keys.compactMap { $0 }.sorted())
+
+    try texts.setReady(true, field: .ageRating)
+    #expect(file(root, "en-US/age-rating.json") != nil)
+
+    try texts.write(#"{"firstName": "Ann", "signInRequired": true}"#, at: StoreAddress(field: .reviewContact), ready: true)
+    try texts.write("~/Movies/Review.mov", at: StoreAddress(field: .reviewAttachment), ready: true)
+    #expect(file(root, "private/en-US/review-contact.json") != nil)
+    #expect(file(root, "en-US/review-contact.json") == nil)
+    #expect(file(root, "private/en-US/review-attachment.txt") == "~/Movies/Review.mov\n")
+    #expect(throws: StoreTextError.self) { try texts.setReady(true, field: .reviewContact) }
+    #expect(texts.privateFileCount() == 2)
+    #expect(StoreVaultMirror.isMirrored("en-US/review-contact.json"))
+    #expect(StoreVaultMirror.isMirrored("en-US/age-rating.json"))
+    #expect(!StoreVaultMirror.isMirrored("en-US/other.json"))
+  }
+
+  @Test func answersRefuseWhatIsntAnAnswerAndAnyCredential() throws {
+    let texts = StoreTexts(root: try project())
+    let rating = StoreAddress(field: .ageRating)
+    #expect(throws: StoreTextError.self) { try texts.write(#"{"violenceRealistic": "SOMETIMES"}"#, at: rating) }
+    #expect(throws: StoreTextError.self) { try texts.write(#"{"violence": "NONE"}"#, at: rating) }
+    #expect(throws: StoreTextError.self) { try texts.write(#"{"unrestrictedWebAccess": 1}"#, at: rating) }
+    #expect(throws: StoreTextError.self) { try texts.write("not json", at: rating) }
+    let contact = StoreAddress(field: .reviewContact)
+    #expect(throws: StoreTextError.self) { try texts.write(#"{"demoAccountPassword": "hunter2"}"#, at: contact) }
+    #expect(throws: StoreTextError.self) { try texts.write(#"{"password": "hunter2"}"#, at: contact) }
+    #expect(throws: StoreTextError.self) { try texts.write(#"{"username": "demo"}"#, at: contact) }
+    let privacy = StoreAddress(field: .appPrivacy)
+    #expect(throws: StoreTextError.self) {
+      try texts.write(#"{"collectsData": true, "dataTypes": [{"type": "shoe-size"}]}"#, at: privacy)
+    }
+    #expect(throws: StoreTextError.self) {
+      try texts.write(#"{"dataTypes": [{"type": "crash-data", "purposes": ["fun"]}]}"#, at: privacy)
+    }
+    #expect(texts.entry(rating) == nil)
+    #expect(texts.entry(contact) == nil)
+  }
+
+  @Test func appPrivacyIsAChecklistNeverAPublish() throws {
+    let texts = StoreTexts(root: try project())
+    var privacy = StoreAppPrivacy()
+    privacy.collectsData = true
+    privacy.dataTypes = [.init(type: .crashData, purposes: [.appFunctionality, .analytics], linkedToUser: false)]
+    try texts.write(privacy.json, at: StoreAddress(field: .appPrivacy))
+    let read = try StoreStructured.object(texts.entry(StoreAddress(field: .appPrivacy))?.text ?? "", field: .appPrivacy)
+    #expect(StoreAppPrivacy(read) == StoreAppPrivacy(try StoreStructured.object(privacy.json, field: .appPrivacy)))
+    let checklist = StoreStructured.copyText(privacy.json, field: .appPrivacy)
+    #expect(checklist.contains("Diagnostics ▸ Crash Data"))
+    #expect(checklist.contains("Used for tracking: No"))
+
+    let plan = texts.publishPlan(destination: .appStore, live: StoreLive(), version: nil)
+    #expect(!plan.changes.contains { $0.field == .appPrivacy })
+    #expect(plan.manual.map(\.field) == [.appPrivacy])
+
+    var none = StoreAppPrivacy()
+    none.collectsData = false
+    #expect(StoreStructured.summary(none.json, field: .appPrivacy) == "Data Not Collected")
+  }
+
+  @Test func anAgeRatingPublishesOnlyWhatItAnswersDifferently() throws {
+    let texts = StoreTexts(root: try project())
+    try texts.write(#"{"violenceRealistic": "NONE", "unrestrictedWebAccess": true, "notes": "Web Sessions"}"#,
+                    at: StoreAddress(field: .ageRating))
+    var live = StoreLive()
+    // App Store Connect answers every question; the file's open ones don't count.
+    live.texts[.init(field: .ageRating)] = #"{"violenceRealistic": "NONE", "unrestrictedWebAccess": true, "contests": "NONE"}"#
+    #expect(texts.publishPlan(destination: .appStore, live: live, version: nil).changes.isEmpty)
+
+    live.texts[.init(field: .ageRating)] = #"{"violenceRealistic": "NONE", "unrestrictedWebAccess": false}"#
+    let change = texts.publishPlan(destination: .appStore, live: live, version: nil).changes.first { $0.field == .ageRating }
+    // Dev's notes stay home.
+    #expect(change?.new.contains("notes") == false)
+    #expect(change?.new.contains("unrestrictedWebAccess") == true)
+  }
+
+  @Test func appStoreConnectReadsAndSendsTheNewFieldsWithoutCredentials() async throws {
+    let stub = appStoreStub()
+    stub.answers["GET /v1/appInfos/I1/secondaryCategory"] = (200, ["data": ["id": "PRODUCTIVITY"]])
+    stub.answers["GET /v1/appInfos/I1/ageRatingDeclaration"] = (200, ["data": attributes("AR1", [
+      "violenceRealistic": "NONE", "unrestrictedWebAccess": false, "gamblingAndContests": false, "kidsAgeBand": NSNull(),
+    ])])
+    stub.answers["GET /v1/appStoreVersions/V2/appStoreReviewDetail"] = (200, ["data": attributes("R1", [
+      "notes": "Old notes for review", "contactFirstName": "Ann", "contactEmail": "ann@example.com",
+      "demoAccountRequired": true, "demoAccountName": "demo", "demoAccountPassword": "hunter2",
+    ])])
+    stub.answers["PATCH /v1/ageRatingDeclarations/AR1"] = (200, ["data": []])
+    let service = appStore(stub)
+    let live = try await service.fetch(version: "1.2")
+    #expect(live.texts[.init(field: .secondaryCategory)] == "PRODUCTIVITY")
+    let rating = try StoreStructured.object(live.texts[.init(field: .ageRating)] ?? "", field: .ageRating)
+    #expect(rating["violenceRealistic"] as? String == "NONE")
+    #expect(rating["gamblingAndContests"] == nil)
+    let contact = live.texts[.init(field: .reviewContact)] ?? ""
+    #expect(contact.contains("Ann"))
+    #expect(!contact.contains("hunter2"))
+    #expect(!contact.contains("demo\""))
+
+    stub.sent = []
+    let sentContact = StoreStructured.sentForm(
+      #"{"firstName": "Bo", "lastName": "Lee", "email": "bo@example.com", "phone": "+1 555 0100", "signInRequired": true}"#,
+      field: .reviewContact)
+    try await service.publish([
+      StoreChange(field: .category, title: "", new: "DEVELOPER_TOOLS"),
+      StoreChange(field: .secondaryCategory, title: "", new: "PRODUCTIVITY"),
+      StoreChange(field: .ageRating, title: "", new: #"{"unrestrictedWebAccess": true, "violenceRealistic": "NONE"}"#),
+      StoreChange(field: .reviewNotes, title: "", new: "Notes"),
+      StoreChange(field: .reviewContact, title: "", new: sentContact),
+    ], version: "1.2") { _ in }
+    let writes = Dictionary(stub.writes().map { ($0.line, $0.body) }, uniquingKeysWith: { first, _ in first })
+    #expect(writes.count == 3)
+    let relationships = (writes["PATCH /v1/appInfos/I1"]?["data"] as? [String: Any])?["relationships"] as? [String: Any]
+    #expect(((relationships?["secondaryCategory"] as? [String: Any])?["data"] as? [String: Any])?["id"] as? String == "PRODUCTIVITY")
+    #expect(((relationships?["primaryCategory"] as? [String: Any])?["data"] as? [String: Any])?["id"] as? String == "DEVELOPER_TOOLS")
+    let ratingSent = (writes["PATCH /v1/ageRatingDeclarations/AR1"]?["data"] as? [String: Any])?["attributes"] as? [String: Any]
+    #expect(ratingSent?["unrestrictedWebAccess"] as? Bool == true)
+    #expect(ratingSent?.count == 2)
+    let review = (writes["PATCH /v1/appStoreReviewDetails/R1"]?["data"] as? [String: Any])?["attributes"] as? [String: Any]
+    #expect(review?["notes"] as? String == "Notes")
+    #expect(review?["contactLastName"] as? String == "Lee")
+    #expect(review?["contactPhone"] as? String == "+1 555 0100")
+    #expect(review?["demoAccountRequired"] as? Bool == true)
+    #expect(review?.keys.contains { $0.hasPrefix("demoAccountName") || $0.hasPrefix("demoAccountPassword") } == false)
+  }
+
+  @Test func aReviewContactCantChangeOnALiveVersion() async throws {
+    let stub = appStoreStub()
+    stub.answers["GET /v1/builds?filter[app]=A1&filter[preReleaseVersion.version]=1.1&sort=-uploadedDate&limit=1"] = (200, ["data": []])
+    let live = try await appStore(stub).fetch(version: "1.1")
+    #expect(live.readOnly[.reviewContact] != nil)
+    #expect(live.readOnly[.ageRating] == nil)
+  }
+
   // MARK: Credentials
 
   @Test func noCredentialsMeansAClearMessageAndNoRequest() {

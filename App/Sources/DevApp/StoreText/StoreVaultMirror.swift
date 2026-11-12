@@ -94,7 +94,8 @@ nonisolated struct StoreVaultMirror: Sendable {
           report.sent += 1
           state[path] = file
         } else {
-          // `translations.json` is a list of hashes: the vault's copy at worst marks a translation out of date.
+          // `translations.json` is a list of hashes: the vault's copy at worst marks a translation out of date. Answers
+          // files (`age-rating.json`) are small: the vault's copy wins rather than a merge that could break the JSON.
           let merge = path.hasSuffix(".txt") ? TextMerge.merge(base: base ?? "", ours: file, theirs: vault) : nil
           let merged = merge?.text ?? vault
           if merged != file { try writeFile(merged, path) }
@@ -135,7 +136,10 @@ nonisolated struct StoreVaultMirror: Sendable {
   /// What a pass carries: the store's texts and their translation records, never a hidden file or anything that would
   /// leave the folder, whatever a record claims.
   static func isMirrored(_ path: String) -> Bool {
-    guard !path.isEmpty, !path.hasPrefix("/"), path.hasSuffix(".txt") || path == "translations.json" else { return false }
+    let name = path.split(separator: "/").last.map(String.init) ?? ""
+    guard !path.isEmpty, !path.hasPrefix("/"),
+          path.hasSuffix(".txt") || path == "translations.json" || StoreTexts.isAnswersFile(name)
+    else { return false }
     return path.split(separator: "/", omittingEmptySubsequences: false).allSatisfy { !$0.isEmpty && !$0.hasPrefix(".") }
   }
 

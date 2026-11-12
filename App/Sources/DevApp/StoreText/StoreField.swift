@@ -14,8 +14,17 @@ nonisolated enum StoreField: String, CaseIterable, Identifiable, Codable, Sendab
   case marketingURL = "url-marketing"
   case privacyURL = "url-privacy"
   case category, copyright
+  case secondaryCategory = "category-secondary"
   case reviewNotes = "review-notes"
   case changelog, testers
+  /// App Store Connect's age rating questionnaire, as JSON (`StoreAgeRating`).
+  case ageRating = "age-rating"
+  /// App Store Connect's App Privacy answers, as JSON (`StoreAppPrivacy`): no API sets them.
+  case appPrivacy = "app-privacy"
+  /// Who App Review contacts and whether the app needs a sign-in, as JSON (`StoreReviewContact`). Never credentials.
+  case reviewContact = "review-contact"
+  /// A file App Review should see (a video of the app with a server), by its path on this Mac.
+  case reviewAttachment = "review-attachment"
 
   var id: String { rawValue }
 
@@ -31,9 +40,14 @@ nonisolated enum StoreField: String, CaseIterable, Identifiable, Codable, Sendab
     case .privacyURL: "Privacy Policy URL"
     case .category: "Category"
     case .copyright: "Copyright"
+    case .secondaryCategory: "Secondary Category"
     case .reviewNotes: "Review Notes"
     case .changelog: "Changelog"
     case .testers: "Message to Testers"
+    case .ageRating: "Age Rating"
+    case .appPrivacy: "App Privacy"
+    case .reviewContact: "Review Contact"
+    case .reviewAttachment: "Review Attachment"
     }
   }
 
@@ -45,19 +59,30 @@ nonisolated enum StoreField: String, CaseIterable, Identifiable, Codable, Sendab
     case .keywords: "tag"
     case .promotionalText: "sparkles"
     case .supportURL, .marketingURL, .privacyURL: "link"
-    case .category: "square.grid.2x2"
+    case .category, .secondaryCategory: "square.grid.2x2"
     case .copyright: "seal"
     case .reviewNotes: "checkmark.seal"
     case .changelog: "list.bullet.rectangle"
     case .testers: "testtube.2"
+    case .ageRating: "person.2"
+    case .appPrivacy: "hand.raised"
+    case .reviewContact: "person.crop.circle"
+    case .reviewAttachment: "paperclip"
     }
   }
 
   /// A file per version (`versions/<version>/`), the others hold for the app.
   var isPerVersion: Bool { self == .changelog || self == .testers }
 
-  /// Never reach git, whatever their state: review notes and tester messages are written for one reader.
-  var isAlwaysPrivate: Bool { self == .reviewNotes || self == .testers }
+  /// Never reach git, whatever their state: review notes and tester messages are written for one reader, and the review
+  /// contact names a person and their phone.
+  var isAlwaysPrivate: Bool { [.reviewNotes, .testers, .reviewContact, .reviewAttachment].contains(self) }
+
+  /// A JSON file of answers (`StoreStructured`) instead of a text: the tool shows a form for it.
+  var isStructured: Bool { self == .ageRating || self == .appPrivacy || self == .reviewContact }
+
+  /// The file's extension in `.dev/store/`.
+  var fileExtension: String { isStructured ? "json" : "txt" }
 
   /// Dev's translation fills these per locale. A name stays as it is unless a locale says otherwise, and review notes
   /// are read by one review team.
@@ -68,13 +93,22 @@ nonisolated enum StoreField: String, CaseIterable, Identifiable, Codable, Sendab
     }
   }
 
-  /// Has a text per language at all: these three say one thing whatever the language.
-  var isLocalized: Bool { self != .category && self != .copyright && self != .reviewNotes }
+  /// Has a text per language at all: these say one thing whatever the language.
+  var isLocalized: Bool {
+    switch self {
+    case .category, .secondaryCategory, .copyright, .reviewNotes, .ageRating, .appPrivacy, .reviewContact,
+      .reviewAttachment:
+      false
+    default: true
+    }
+  }
 
   /// One value on one line, edited in a field instead of a text area.
   var isSingleLine: Bool {
     switch self {
-    case .name, .subtitle, .supportURL, .marketingURL, .privacyURL, .category, .copyright: true
+    case .name, .subtitle, .supportURL, .marketingURL, .privacyURL, .category, .secondaryCategory, .copyright,
+      .reviewAttachment:
+      true
     default: false
     }
   }
@@ -84,9 +118,11 @@ nonisolated enum StoreField: String, CaseIterable, Identifiable, Codable, Sendab
 
   /// Listed in this order in the tool.
   static let listing: [StoreField] = [
-    .name, .subtitle, .description, .keywords, .promotionalText, .category, .copyright,
+    .name, .subtitle, .description, .keywords, .promotionalText, .category, .secondaryCategory, .copyright,
   ]
   static let links: [StoreField] = [.supportURL, .marketingURL, .privacyURL]
+  static let ratings: [StoreField] = [.ageRating, .appPrivacy]
+  static let review: [StoreField] = [.reviewNotes, .reviewContact, .reviewAttachment]
   static let perVersion: [StoreField] = [.changelog, .testers]
 }
 
@@ -147,8 +183,15 @@ nonisolated enum StoreDestination: String, CaseIterable, Identifiable, Codable, 
         StoreSlot(.marketingURL, "Marketing URL", nil),
         StoreSlot(.privacyURL, "Privacy Policy URL", nil),
         StoreSlot(.category, "Primary Category", nil, hint: "An ID such as DEVELOPER_TOOLS"),
+        StoreSlot(.secondaryCategory, "Secondary Category", nil, hint: "Optional; an ID such as PRODUCTIVITY"),
         StoreSlot(.copyright, "Copyright", nil),
+        StoreSlot(.ageRating, "Age Rating", nil),
+        // App Store Connect's API has no App Privacy endpoints: the answers are a checklist to enter by hand.
+        StoreSlot(.appPrivacy, "App Privacy", nil, hint: "No API: answer it by hand in App Store Connect", isSent: false),
         StoreSlot(.reviewNotes, "Notes for App Review", .bytes(4000)),
+        StoreSlot(.reviewContact, "App Review Contact", nil, hint: "Sign-in credentials go only into App Store Connect"),
+        // Attachments go up through upload reservations; Dev names the file and leaves the upload to the reader.
+        StoreSlot(.reviewAttachment, "App Review Attachment", nil, hint: "A file on this Mac: attach it in App Store Connect", isSent: false),
         StoreSlot(.changelog, "What's New", .characters(4000)),
         StoreSlot(
           .testers, "TestFlight What to Test", .characters(4000), hint: "Apple documents no limit; 4000 as for What's New",
@@ -203,7 +246,7 @@ nonisolated enum StoreDestination: String, CaseIterable, Identifiable, Codable, 
   func isPerLocale(_ field: StoreField) -> Bool {
     switch self {
     case .github: false
-    case .appStore: field != .category && field != .copyright && field != .reviewNotes
+    case .appStore: field.isLocalized
     case .googlePlay: [.name, .subtitle, .description, .changelog, .testers].contains(field)
     case .microsoftStore: [.name, .subtitle, .description, .keywords, .copyright, .changelog].contains(field)
     }
@@ -211,6 +254,7 @@ nonisolated enum StoreDestination: String, CaseIterable, Identifiable, Codable, 
 
   /// A text as this destination's list wants it: GitHub's topics are lowercase with hyphens.
   func localForm(_ text: String, field: StoreField) -> String {
+    if field.isStructured { return StoreStructured.sentForm(text, field: field) }
     guard field.isList else { return StoreTexts.normalized(text, field: field) }
     let items = StoreLists.items(in: text)
     guard self == .github else { return StoreLists.text(items) }
@@ -222,6 +266,13 @@ nonisolated enum StoreDestination: String, CaseIterable, Identifiable, Codable, 
     let (a, b) = (localForm(first, field: field), localForm(second, field: field))
     guard field.isList, self == .github else { return a == b }
     return StoreLists.items(in: a).sorted() == StoreLists.items(in: b).sorted()
+  }
+
+  /// Whether the service already says what the local text says. Answers compare by what the local file answers: a
+  /// question it leaves open doesn't make a difference.
+  func matches(live: String, local: String, field: StoreField) -> Bool {
+    guard field.isStructured else { return isSame(live, local, field: field) }
+    return StoreStructured.covers(live: live, local: local, field: field)
   }
 }
 

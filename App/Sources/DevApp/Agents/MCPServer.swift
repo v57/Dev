@@ -57,7 +57,7 @@ nonisolated enum MCPServer {
         "protocolVersion": params["protocolVersion"] as? String ?? "2025-06-18",
         "capabilities": ["tools": ["listChanged": false]],
         "serverInfo": ["name": "dev", "title": "Dev", "version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"],
-        "instructions": "Dev is a macOS developer toolbox. Use list_projects first, then read or change how a project's App Store screenshots are framed (the framing section and scene captions of .dev/screenshots.json, whose scenes say how the app opens each screen) and its CI workflows (.dev/workflows), and its store and release text (.dev/store: name, subtitle, description, keywords, URLs, per-version changelog and message to testers, with a base text, an override per destination and a text per locale). New store text is a draft kept out of git until marked ready; review notes and messages to testers always stay private. Importing from and publishing to a store is the reader's, in the app. Captions are keys of the project's Screenshots.xcstrings, translated in Dev's Localization tool. Build numbers are the git commit count.",
+        "instructions": "Dev is a macOS developer toolbox. Use list_projects first, then read or change how a project's App Store screenshots are framed (the framing section and scene captions of .dev/screenshots.json, whose scenes say how the app opens each screen) and its CI workflows (.dev/workflows), and its store and release text (.dev/store: name, subtitle, description, keywords, URLs, categories, per-version changelog and message to testers, with a base text, an override per destination and a text per locale; plus answers as JSON: the age rating questionnaire, App Privacy, and the App Review contact with whether a sign-in is needed). New store text is a draft kept out of git until marked ready; review notes, the review contact and attachment, and messages to testers always stay private. Demo account credentials never go in .dev/store. Importing from and publishing to a store is the reader's, in the app. Captions are keys of the project's Screenshots.xcstrings, translated in Dev's Localization tool. Build numbers are the git commit count.",
       ])
     case "ping":
       reply(id, [:])
@@ -137,11 +137,12 @@ nonisolated enum MCPServer {
       tool("get_store_text", "A project's store and release text (.dev/store): settings, versions, the base texts as written (base), and every field as each chosen destination (appstore, github, googleplay, msstore) shows it in each locale, with its origin (override, locale, base-override, base, missing), whether it's private, and its length against that destination's limit. Give field and version to narrow it; version selects the per-version fields (changelog, testers).",
            ["project": projectArg, "field": storeFieldArg, "version": ["type": "string", "description": "A version, for changelog and testers"]],
            required: ["project"]),
-      tool("set_store_text", "Writes one text in .dev/store and answers its length against each destination's limit. Fields: \(StoreField.allCases.map(\.rawValue).joined(separator: ", ")). Without destination it's the base text; with one (appstore, github, googleplay, msstore) it's that destination's override. Without locale it's the base language. version is required for changelog and testers. An empty text removes the file. ready: true puts it in the repository (public once pushed), false keeps it a draft in private/; left out, an existing text stays where it is and a new one starts as a draft. review-notes and testers always stay private. Never put credentials or demo passwords here.",
+      tool("set_store_text", "Writes one text in .dev/store and answers its length against each destination's limit. Fields: \(StoreField.allCases.map(\.rawValue).joined(separator: ", ")). Without destination it's the base text; with one (appstore, github, googleplay, msstore) it's that destination's override. Without locale it's the base language. version is required for changelog and testers. An empty text removes the file. ready: true puts it in the repository (public once pushed), false keeps it a draft in private/; left out, an existing text stays where it is and a new one starts as a draft. review-notes, review-contact, review-attachment (a file path on this Mac) and testers always stay private. Never put credentials or demo passwords here. age-rating, app-privacy and review-contact are JSON objects: give value (an object) instead of text; the whole object replaces the file. \(StoreStructured.format(.ageRating)) \(StoreStructured.format(.appPrivacy)) \(StoreStructured.format(.reviewContact))",
            ["project": projectArg, "field": storeFieldArg, "text": ["type": "string"],
+            "value": ["type": "object", "description": "For age-rating, app-privacy and review-contact: the answers"],
             "destination": ["type": "string", "description": "appstore, github, googleplay or msstore; empty for the base text"],
             "locale": ["type": "string"], "version": ["type": "string"], "ready": ["type": "boolean"]],
-           required: ["project", "field", "text"]),
+           required: ["project", "field"]),
       tool("set_store_settings", "Changes .dev/store/store.json; give only what changes. baseLocale, locales (the other languages), destinations (appstore, github, googleplay, msstore; empty means all), bundleID.",
            ["project": projectArg, "baseLocale": ["type": "string"], "locales": ["type": "array", "items": ["type": "string"]],
             "destinations": ["type": "array", "items": ["type": "string"]], "bundleID": ["type": "string"]],
@@ -287,9 +288,18 @@ nonisolated enum MCPServer {
       let root = try project(arguments)
       try require(.edit, "change the store text of \(root.lastPathComponent)")
       let texts = StoreTexts(root: root)
-      guard let text = arguments["text"] as? String else { throw ToolError(message: "Give text; an empty one removes the file.") }
+      let field = try storeField(arguments["field"] as? String ?? "")
+      let text: String
+      if let value = arguments["value"] as? [String: Any] {
+        guard field.isStructured else { throw ToolError(message: "\(field.title) is a text: give text, not value.") }
+        text = StoreStructured.serialize(value)
+      } else if let given = arguments["text"] as? String {
+        text = given
+      } else {
+        throw ToolError(message: "Give text (value for answers); an empty one removes the file.")
+      }
       let address = StoreAddress(
-        field: try storeField(arguments["field"] as? String ?? ""),
+        field: field,
         destination: try (arguments["destination"] as? String).flatMap { $0.isEmpty ? nil : try storeDestination($0) },
         locale: (arguments["locale"] as? String).flatMap { $0.isEmpty || $0 == texts.baseLocale ? nil : $0 },
         version: arguments["version"] as? String)
@@ -301,11 +311,13 @@ nonisolated enum MCPServer {
       announce(root)
       AgentPermissions.log("Changed the \(address.field.title) of \(root.lastPathComponent)")
       let state = texts.entry(address)
-      return [
+      var answer: [String: Any] = [
         "path": StoreTexts.path + (state?.isPrivate == true ? "/private/" : "/") + texts.relativePath(address),
         "private": state?.isPrivate ?? false, "removed": state == nil,
         "limits": StoreMCP.report(texts, version: address.version, field: address.field),
       ]
+      if field.isStructured, let state { answer["summary"] = StoreStructured.summary(state.text, field: field) }
+      return answer
     case "set_store_settings":
       let root = try project(arguments)
       try require(.edit, "change the store settings of \(root.lastPathComponent)")

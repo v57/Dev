@@ -31,6 +31,9 @@ nonisolated enum LaunchOptions {
   /// workflow's sheet, `addServer` the Add Connection sheet.
   static var open: String? { value(after: "-DevOpen") }
 
+  /// `-DevStoreField <field>` (`age-rating`, `app-privacy`…): the field Store Text opens on, in screenshot mode.
+  static var storeField: String? { isScreenshotMode ? value(after: "-DevStoreField") : nil }
+
   /// `-DevStoragePage smartScan|languages|<category>`: Storage's first page.
   static var storagePage: String? { value(after: "-DevStoragePage") }
 

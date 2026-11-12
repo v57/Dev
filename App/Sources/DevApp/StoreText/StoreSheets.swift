@@ -196,7 +196,9 @@ struct StoreSyncSheet: View {
         ForEach(plan.skipped, id: \.self) { GroupRow($0) }
         ForEach(plan.manual) { slot in
           GroupRow("\(slot.title)", help: "\(destination.title)'s API can't set this: copy it across.") {
-            KitCopyButton(value: texts.resolved(slot.field, destination: destination, version: version).text)
+            KitCopyButton(
+              value: StoreStructured.copyText(
+                texts.resolved(slot.field, destination: destination, version: version).text, field: slot.field))
           }
         }
       }
