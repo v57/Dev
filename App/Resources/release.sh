@@ -31,7 +31,8 @@
 #   archive      the release build with the version and build number, packaged:
 #                macOS <App>.xcarchive + Developer ID signed <App>.zip/.dmg (not notarized), iOS <App>.xcarchive,
 #                Windows <App>-Windows-<arch>.zip, Linux <App>-Linux-<arch>.tar.gz (the app folder for /opt/<App>
-#                with a .desktop file and the app's icon), Android <App>-Android.apk
+#                with a .desktop file and the app's icon, the executable stripped; its debug info in debug/),
+#                Android <App>-Android.apk
 #   direct       macOS: notarize + staple, <App>.zip and <App>.dmg again; with DIRECT_ARCHS="universal arm64"
 #                also <App>-AppleSilicon.zip/.dmg (DIRECT_ARCHS=arm64 alone archives arm64 only)
 #   bundle       one <App>-<version>-<build>.zip with every platform's packages and archives in the output
@@ -387,7 +388,7 @@ linux_sh() {
 }
 
 # What a remote build shows of its output (all of it is in the log): errors, what it fetches, links and stages.
-REMOTE_SHOWN='error:|[Bb]uild complete|^Building |^Staged|^Fetching|^Cloning|^Computing|^Creating working copy|Linking |dev-release-file|^Swift version|^[0-9]+\.[0-9]+\.[0-9]+$'
+REMOTE_SHOWN='error:|[Bb]uild complete|^Building |^Staged|^Fetching|^Cloning|^Computing|^Creating working copy|Linking |dev-release-file|^stripped: |^Swift version|^[0-9]+\.[0-9]+\.[0-9]+$'
 
 # remote_run SCRIPT: the platform's script on HOST, its output in OUT/remote-<step>.log, shown as REMOTE_SHOWN keeps
 # it (the end of the log when it fails); the files it names on "dev-release-file: PATH" lines come back into OUT.
@@ -417,6 +418,12 @@ remote_run() {
     chmod 644 "$OUT/$name"
     REMOTE_FILES+=("$OUT/$name")
   done < <(sed -n 's/^dev-release-file: //p' "$log")
+  # "dev-release-debug: PATH": debug info kept with the run (OUT/debug/), not a download.
+  while IFS= read -r file; do
+    [ -n "$file" ] || continue
+    mkdir -p "$OUT/debug"
+    scp -q "${SSH_OPTS[@]}" "$HOST:$file" "$OUT/debug/" || echo "note: copying $file failed (debug info only)"
+  done < <(sed -n 's/^dev-release-debug: //p' "$log")
 }
 
 # render_icon: the project's Icon Composer icon (AppIcon.icon first) rendered on this Mac by actool, as ICON_ICNS
@@ -551,7 +558,10 @@ swift build --package-path \"$package\" --product '$product' -j $LINUX_JOBS" \
       linux_icon "$name"
       # build-app stages the executable, its resource bundles, the symbol font, Info.plist and a .desktop file in
       # .build/linux/<product>; the tarball holds that folder as <App>/ (the .desktop file names <App> and points
-      # at /opt/<App>).
+      # at /opt/<App>). The executable ships stripped: its symbols and DWARF were half of it (Markdown 181 → 85 MB).
+      # A static build has no .dynsym, so a crash backtrace shows addresses only: its debug info comes back here as
+      # <product>.debug (compressed; the executable names it in .gnu_debuglink and carries the build ID), kept with
+      # the run for symbolicating a crash report, never shipped.
       remote_run "set -eo pipefail
 export V57_LOCAL=1
 cd \"$swiftui\"
@@ -566,8 +576,15 @@ if [ -f \"\$HOME/$REMOTE_TREE/$name.png\" ]; then
   sed -i '/^Icon=/d' \"\$out/$name\"/*.desktop
   echo 'Icon=/opt/$name/$name.png' >>\"\$(ls \"\$out/$name\"/*.desktop | head -1)\"
 fi
+exe=\"\$out/$name/$product\"
+objcopy --only-keep-debug --compress-debug-sections=zlib \"\$exe\" \"\$out/$product.debug\"
+strip --strip-all \"\$exe\"
+objcopy --add-gnu-debuglink=\"\$out/$product.debug\" \"\$exe\"
+find \"\$out/$name\" -type f -name '*.so*' -exec strip --strip-unneeded {} +
+echo \"stripped: \$(du -h \"\$exe\" | cut -f1) (debug info: \$(du -h \"\$out/$product.debug\" | cut -f1))\"
 tar -czf \"\$out/$name-Linux-\$arch.tar.gz\" -C \"\$out\" '$name'
-echo \"dev-release-file: \$out/$name-Linux-\$arch.tar.gz\"" || fail "the Linux release build failed (log: $OUT/remote-$CURRENT.log)"
+echo \"dev-release-file: \$out/$name-Linux-\$arch.tar.gz\"
+echo \"dev-release-debug: \$out/$product.debug\"" || fail "the Linux release build failed (log: $OUT/remote-$CURRENT.log)"
     fi
   fi
 }
