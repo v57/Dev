@@ -357,3 +357,33 @@ nonisolated extension TimeInterval {
     return String(format: "%d:%02d", seconds / 60, seconds % 60)
   }
 }
+
+extension Workflow {
+  /// A hand-written file may leave out what has a default: `id` (the file name sets it), the trigger, the steps and
+  /// continueOnFailure. SSH's Publish libssh2 had no `id`, and Dev listed only the default workflows.
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    id = try container.decodeIfPresent(String.self, forKey: .id) ?? ""
+    name = try container.decode(String.self, forKey: .name)
+    trigger = try container.decodeIfPresent(Trigger.self, forKey: .trigger) ?? Trigger()
+    steps = try container.decodeIfPresent([Step].self, forKey: .steps) ?? []
+    continueOnFailure = try container.decodeIfPresent(Bool.self, forKey: .continueOnFailure) ?? false
+  }
+}
+
+extension Workflow.Step {
+  /// A step may leave out its runner (this Mac) and parallel (false), as Dev's own files never do.
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    id = try container.decode(String.self, forKey: .id)
+    name = try container.decode(String.self, forKey: .name)
+    kind = try container.decode(Kind.self, forKey: .kind)
+    releaseStep = try container.decodeIfPresent(String.self, forKey: .releaseStep)
+    platform = try container.decodeIfPresent(String.self, forKey: .platform)
+    command = try container.decodeIfPresent(String.self, forKey: .command)
+    runner = try container.decodeIfPresent(String.self, forKey: .runner) ?? "mac"
+    parallel = try container.decodeIfPresent(Bool.self, forKey: .parallel) ?? false
+    shards = try container.decodeIfPresent(Int.self, forKey: .shards)
+    requires = try container.decodeIfPresent(RunnerRequirement.self, forKey: .requires)
+  }
+}
