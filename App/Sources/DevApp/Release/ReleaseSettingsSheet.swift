@@ -34,6 +34,7 @@ struct ReleaseSettingsSheet: View {
             options: ReleasePlatform.allCases.map { ("\($0.title)", $0.rawValue) })
         }
         field("Team ID", "TEAM_ID", "ABCDE12345")
+        field("Version", "VERSION", "the project's MARKETING_VERSION")
       }
       FormCard("Tests and screenshots") {
         field("Test scheme", "TEST_SCHEME", "empty skips tests")
@@ -47,7 +48,7 @@ struct ReleaseSettingsSheet: View {
       ) {
         field("Formats", "DIRECT_DOWNLOAD", "zip dmg")
         // Empty means universal to release.sh.
-        GroupRow("Builds", help: "Both ships <App> (universal) and <App>-AppleSilicon, half the size") {
+        GroupRow("Builds", help: "Both ships <App> (universal) and <App>-AppleSilicon, half the size; Apple silicon alone builds arm64 only") {
           KitPicker(
             "Builds",
             selection: Binding(
@@ -71,6 +72,7 @@ struct ReleaseSettingsSheet: View {
         field("Package", "PACKAGE_PATH", "App (its Package.swift)")
         field("Windows product", "WINDOWS_PRODUCT", "\(appName)WinUI")
         field("Linux product", "LINUX_PRODUCT", appName)
+        field("Linux categories", "LINUX_CATEGORIES", "Development;")
         GroupRow("Linux runtime built in", help: "A folder that runs without Swift installed") {
           Toggle("Linux runtime built in", isOn: Binding(
             get: { config["LINUX_STATIC"] != "no" },

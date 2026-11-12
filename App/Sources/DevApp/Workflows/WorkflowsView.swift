@@ -401,7 +401,7 @@ struct WorkflowsView: View {
           TextField("Version", text: $version, prompt: Text("Version for the next run (empty reads the project's)"))
             .kitField()
             .frame(maxWidth: 380)
-            .help("Passed to release.sh as --version; empty reads MARKETING_VERSION")
+            .help("Passed to release.sh as --version; empty reads release.env's VERSION, else MARKETING_VERSION")
         }
         HStack(spacing: 6) {
           if let run {

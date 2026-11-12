@@ -94,10 +94,10 @@ the Trash (Delete Run… trashes the whole folder).
 
 | Platform | `archive` makes | Where it builds |
 |---|---|---|
-| macOS | `<App>.xcarchive` (xcodebuild-release), `<App>.zip` + `<App>.dmg` (Developer ID signed; `direct` notarizes them) | this Mac |
+| macOS | `<App>.xcarchive` (xcodebuild-release), `<App>.zip` + `<App>.dmg` (Developer ID signed; `direct` notarizes them; `DIRECT_ARCHS=arm64` archives Apple silicon only) | this Mac |
 | iOS | `<App>.xcarchive` | this Mac |
 | Windows | `<App>-Windows-<arch>.zip` (`<App>\`: the WinUI host as `<App>.exe`, the app DLL, the Swift and .NET runtimes) | a Windows VM |
-| Linux | `<App>-Linux-<arch>.tar.gz` (`<App>/`: the executable with the Swift runtime linked in, resources, `.desktop`) | a Linux VM |
+| Linux | `<App>-Linux-<arch>.tar.gz` (`<App>/` for `/opt/<App>`: the executable with the Swift runtime linked in, resources, a `.desktop` file with `LINUX_CATEGORIES` and the app's icon, rendered on this Mac from its `AppIcon.icon`) | a Linux VM |
 | Android | `<App>-Android.apk`, release-signed (not built yet) | this Mac |
 
 The names are the ones UpdateKit looks for. `bundle` (Result Archive) zips every platform's archives and packages into
@@ -138,7 +138,7 @@ of the framed platform into `.build/screenshots/framed/` and shows each scene's 
 - Checks: the size must be an App Store Connect size; a caption that needs more than `maxLines` is reported
   (`.build/screenshots/framed/report.json`); scenes that need a new capture are listed.
 - Upload… in the Screenshots tab replaces the screenshots of the app's version in Prepare for Submission with the
-  framed pictures (the first appearance and device) through the App Store Connect API, with the key `release.env` names (`ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_PATH`).
+  framed pictures (the first appearance and device) through the App Store Connect API, with this Mac's key (`ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_PATH` in `~/.appstoreconnect/v57.env`, never in a `release.env`).
 - The key is set up as in Shell's Notarization sheet (Release Settings, or the upload sheet when there is none):
   Choose… takes the `.p8` App Store Connect downloads, reads the key ID from `AuthKey_<KEY ID>.p8` and copies the
   file to `~/.appstoreconnect/private_keys` (mode 600). Check with Apple lists the account's apps. An empty issuer
@@ -185,7 +185,7 @@ one side changed, the other follows; both changed, the text merges by line and a
 an edit beats a delete. A file is removed only when the vault says its record was deleted, so a wiped vault gets its text back. A
 project that isn't in a vault keeps them on this device only, and the tab says so. `Dev --mcp` writes files only; the app carries
 them to the vault at its next pass. Credentials never go in any
-of it: release.env names key files (`ASC_KEY_PATH`, `GOOGLE_PLAY_KEY_PATH`), the keychain holds the Microsoft client
+of it: release.env names key files (`GOOGLE_PLAY_KEY_PATH`; the App Store Connect key is this Mac's `~/.appstoreconnect/v57.env`), the keychain holds the Microsoft client
 secret, and the GitHub sign-in is the app's. Demo passwords for reviewers go in App Store Connect's review fields.
 
 **Translate** fills the other locales with the model in Settings, only when pressed. It fills what's missing or
@@ -199,7 +199,7 @@ limit stops it. What each sends:
 
 | Service | Reads and writes | Needs | Publish stops at |
 |---|---|---|---|
-| App Store Connect | name, subtitle, privacy URL; description, keywords, promotional text, What's New, support and marketing URLs; category, copyright, review notes; TestFlight's What to Test | API key in release.env, bundle ID | the text: nothing is submitted for review |
+| App Store Connect | name, subtitle, privacy URL; description, keywords, promotional text, What's New, support and marketing URLs; category, copyright, review notes; TestFlight's What to Test | this Mac's API key (`~/.appstoreconnect/v57.env`), bundle ID | the text: nothing is submitted for review |
 | GitHub | repository description, homepage, topics; a release's notes (drafts included) | `GITHUB_REPO`, the GitHub sign-in | the text; the release itself comes from `release.sh github` |
 | Google Play | title, short and full description, website; release notes on the production track, tester notes on `GOOGLE_PLAY_TRACK` | `GOOGLE_PLAY_KEY_PATH` (needs `openssl` to sign), `GOOGLE_PLAY_PACKAGE` or the bundle ID | a committed edit, which refuses while a review is pending |
 | Microsoft Store | product name, short description, description, search terms, copyright, What's New, certification notes | `MS_STORE_APP_ID`, `MS_STORE_TENANT_ID`, `MS_STORE_CLIENT_ID`, the client secret | a saved draft submission: you commit it in Partner Center |
@@ -210,8 +210,11 @@ offered to copy. A live App Store version only takes its promotional text.
 **Release steps.** `release.sh github` takes its notes from the version's `changelog.github.txt`, else `changelog.txt`
 (drafts first), else GitHub's generated notes. `release.sh --version X bump` (a step of its own, never part of `all`) sets
 `MARKETING_VERSION` in the Xcode project and, when the version has no changelog, drafts one from the commits since the
-last tag. New Version… in the tab starts from the same draft to edit there. Windows, Linux and Android builds take the
-version from `--version` on each run, so bump has nothing else to change for them.
+last tag. New Version… in the tab starts from the same draft to edit there. A run's version is `--version` (the Version
+field above a workflow), else `VERSION` in `release.env`, else the Xcode project's `MARKETING_VERSION`; Windows, Linux and
+Android builds take it from there, so bump has nothing else to change for them. `release.sh --local` makes a test
+release from this Mac's checkouts (the project's `-Local` workspace, branch pins allowed); its `github` and `appstore`
+steps refuse to run.
 
 ## MCP server
 

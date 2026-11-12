@@ -6,10 +6,14 @@
 # this script, so a release from the app and one from a terminal are the same release.
 #
 #   Tools/release/release.sh [--project DIR] [--platform P] [--host USER@HOST] [--output DIR]
-#                            [--version X.Y.Z] [--build N] [--commit REV] [--no-zip] [--dry-run] STEP...
+#                            [--version X.Y.Z] [--build N] [--commit REV] [--no-zip] [--local] [--dry-run] STEP...
 #
+# The version: --version, else VERSION in release.env, else the Xcode project's MARKETING_VERSION.
 # --build and --commit pin the build number (else the commit count) and the commit the manifest names (else HEAD),
 # so every step of one run agrees when the branch moves on while it runs.
+# --local: a test release from this Mac's checkouts (the project's <App>-Local.xcworkspace, RELEASE_PINS=branch,
+# uncommitted changes allowed on Windows and Linux, translations from the sibling v57/Localizations checkout's last
+# commit); github and appstore refuse it.
 #
 # Platforms (--platform, else PLATFORM in release.env): macos and ios build on this Mac; windows and linux build
 # on another machine over SSH (--host, else WINDOWS_HOST / LINUX_HOST: Dev passes its UTM VMs), which gets the
@@ -26,9 +30,10 @@
 #                else UI test SCREENSHOT_TEST per locale, attachments exported as PNGs
 #   archive      the release build with the version and build number, packaged:
 #                macOS <App>.xcarchive + Developer ID signed <App>.zip/.dmg (not notarized), iOS <App>.xcarchive,
-#                Windows <App>-Windows-<arch>.zip, Linux <App>-Linux-<arch>.tar.gz, Android <App>-Android.apk
+#                Windows <App>-Windows-<arch>.zip, Linux <App>-Linux-<arch>.tar.gz (the app folder for /opt/<App>
+#                with a .desktop file and the app's icon), Android <App>-Android.apk
 #   direct       macOS: notarize + staple, <App>.zip and <App>.dmg again; with DIRECT_ARCHS="universal arm64"
-#                also <App>-AppleSilicon.zip/.dmg
+#                also <App>-AppleSilicon.zip/.dmg (DIRECT_ARCHS=arm64 alone archives arm64 only)
 #   bundle       one <App>-<version>-<build>.zip with every platform's packages and archives in the output
 #                folder, and manifest.json (app, version, build, commit, files with sizes and SHA-256); with
 #                --no-zip the folder <App>-<version>-<build>/ instead (files linked, archives cloned)
@@ -69,6 +74,7 @@ ARG_OUTPUT=""
 ARG_BUILD=""
 ARG_COMMIT=""
 NO_ZIP=0
+LOCAL=0
 
 usage() { sed -n '2,50p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
@@ -82,6 +88,7 @@ while [ $# -gt 0 ]; do
     --build) ARG_BUILD="$2"; shift 2 ;;
     --commit) ARG_COMMIT="$2"; shift 2 ;;
     --no-zip) NO_ZIP=1; shift ;;
+    --local) LOCAL=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h|--help) usage 0 ;;
     all) STEPS="$STEPS_ALL"; shift ;;
@@ -106,7 +113,7 @@ PACKAGE_PATH=""; WINDOWS_PRODUCT=""; WINDOWS_HOST=""; LINUX_PRODUCT=""; LINUX_HO
 LINUX_JOBS=4; SWIFTUI_PATH=""
 ANDROID_PRODUCT=""; ANDROID_KEYSTORE=""; ANDROID_KEY_ALIAS=""; ANDROID_KEYCHAIN_ITEM=""
 GOOGLE_PLAY="no"; GOOGLE_PLAY_TRACK="internal"; GOOGLE_PLAY_KEY_PATH=""
-MS_STORE="no"; MS_STORE_APP_ID=""; RELEASE_PINS="resolved"
+MS_STORE="no"; MS_STORE_APP_ID=""; RELEASE_PINS="resolved"; LINUX_CATEGORIES=""
 
 # read_env FILE KEYS: the KEY=value lines of FILE, read as data, never run: a value is taken as written ('…' or "…"
 # quoted, else up to a " #" comment), nothing in it is expanded or executed (a leading ~/ is your home folder), and
@@ -131,10 +138,10 @@ read_env() {
   done <"$file"
 }
 
-RELEASE_KEYS="APP_NAME SCHEME PROJECT WORKSPACE PLATFORM TEAM_ID CONFIGURATION TEST_SCHEME TEST_DESTINATION
+RELEASE_KEYS="APP_NAME SCHEME PROJECT WORKSPACE PLATFORM TEAM_ID VERSION CONFIGURATION TEST_SCHEME TEST_DESTINATION
   SCREENSHOT_TEST SCREENSHOT_LOCALES SCREENSHOT_DESTINATION DIRECT_DOWNLOAD DIRECT_ARCHS DIRECT_SETTINGS NOTARY_PROFILE
   GITHUB_REPO GITHUB_DRAFT APP_STORE PACKAGE_PATH WINDOWS_PRODUCT WINDOWS_HOST WINDOWS_RELEASE_ROOT LINUX_PRODUCT
-  LINUX_HOST LINUX_STATIC LINUX_JOBS SWIFTUI_PATH ANDROID_PRODUCT ANDROID_KEYSTORE ANDROID_KEY_ALIAS
+  LINUX_HOST LINUX_STATIC LINUX_JOBS LINUX_CATEGORIES SWIFTUI_PATH ANDROID_PRODUCT ANDROID_KEYSTORE ANDROID_KEY_ALIAS
   ANDROID_KEYCHAIN_ITEM GOOGLE_PLAY GOOGLE_PLAY_TRACK GOOGLE_PLAY_KEY_PATH GOOGLE_PLAY_PACKAGE MS_STORE MS_STORE_APP_ID
   MS_STORE_TENANT_ID MS_STORE_CLIENT_ID RELEASE_PINS"
 RELEASE_KEYS="$(echo $RELEASE_KEYS)"
@@ -143,6 +150,20 @@ read_env release.env "$RELEASE_KEYS"
 # repository) that Dev's Release Settings writes. ASC_* lines in a release.env are ignored (check refuses them).
 ASC_CONFIG="${ASC_CONFIG:-$HOME/.appstoreconnect/v57.env}"
 read_env "$ASC_CONFIG" "ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_PATH"
+# --version wins over release.env's VERSION (the version the project releases next).
+VERSION="${ARG_VERSION:-$VERSION}"
+# A local test release builds from the sibling checkouts, as the project's -Local workspace does.
+if [ "$LOCAL" = 1 ]; then
+  RELEASE_PINS=branch
+  for local_workspace in *-Local.xcworkspace; do
+    [ -d "$local_workspace" ] && { WORKSPACE="$local_workspace"; PROJECT=""; break; }
+  done
+  # Translations from the sibling v57/Localizations checkout's last commit (release-languages reads it with git show).
+  local_translations="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || echo "$PWD/.git")")/../Localizations"
+  if [ -z "${V57_LOCALIZATIONS_REF:-}" ] && git -C "$local_translations" rev-parse -q --verify HEAD >/dev/null 2>&1; then
+    export V57_LOCALIZATIONS_REF="$(git -C "$local_translations" rev-parse HEAD)"
+  fi
+fi
 [ -n "$SCHEME" ] || { echo "::fail config SCHEME is not set in release.env"; exit 1; }
 APP_NAME="${APP_NAME:-$SCHEME}"
 PLATFORM="${ARG_PLATFORM:-${PLATFORM:-macos}}"
@@ -227,6 +248,10 @@ artifacts_of() {
 }
 
 apple_only() { [ "$APPLE" = 1 ] || { skip "$1"; return 1; }; }
+
+# Whether the macOS downloads are universal: DIRECT_ARCHS names universal (empty means universal). Without it the
+# archive is arm64 only.
+universal_build() { case " ${DIRECT_ARCHS:-universal} " in *" universal "*) return 0 ;; *) return 1 ;; esac; }
 
 # ── other machines (Windows and Linux) ───────────────────────────────────
 
@@ -394,6 +419,26 @@ remote_run() {
   done < <(sed -n 's/^dev-release-file: //p' "$log")
 }
 
+# linux_icon NAME: the app's icon as a 512-pixel PNG for the Linux .desktop file, made on this Mac (actool and sips)
+# from the project's Icon Composer icon (AppIcon.icon first) and copied to the build host as <tree>/<NAME>.png.
+# Without one, build-app's own (the largest AppIcon.appiconset PNG, if any) stays.
+linux_icon() {
+  local name="$1" icon work
+  icon=$(find "$PROJECT_DIR" \( -name .build -o -name build -o -name DerivedData -o -name .git \) -prune -o \
+    -type d -name '*.icon' -print 2>/dev/null | awk '{ print (index($0, "/AppIcon.icon") ? 0 : 1) "\t" $0 }' \
+    | sort | head -1 | cut -f2)
+  [ -n "$icon" ] || return 0
+  echo "app icon: ${icon#"$PROJECT_DIR"/}"
+  [ "$DRY_RUN" = 1 ] && return 0
+  work="$OUT/icon"
+  rm -rf "$work" && mkdir -p "$work"
+  xcrun actool "$icon" --compile "$work" --app-icon "$(basename "$icon" .icon)" --platform macosx \
+    --minimum-deployment-target 15.0 --output-partial-info-plist "$work/partial.plist" >/dev/null 2>&1 \
+    && sips -s format png -Z 512 "$work/$(basename "$icon" .icon).icns" --out "$work/$name.png" >/dev/null 2>&1 \
+    || { echo "note: the icon didn't render (actool), the .desktop file has none"; return 0; }
+  scp -q "${SSH_OPTS[@]}" "$work/$name.png" "$HOST:$REMOTE_TREE/$name.png" || fail "copying the icon to $HOST failed"
+}
+
 # The VM build of this platform: swift build (build), or the release build packaged (archive).
 remote_build() {
   local kind="$1"
@@ -450,6 +495,13 @@ swift build --package-path \"$package\" --product '$product' -j $LINUX_JOBS" \
     else
       local static=""
       [ "$LINUX_STATIC" = yes ] && static="--static"
+      # The .desktop file's menu categories (freedesktop names, e.g. AudioVideo;Video;): build-app writes Development.
+      local categories=""
+      if [ -n "$LINUX_CATEGORIES" ]; then
+        [[ "$LINUX_CATEGORIES" =~ ^[A-Za-z0-9\;-]+$ ]] || fail "LINUX_CATEGORIES takes category names separated by ;"
+        categories="-e 's|^Categories=.*|Categories=$LINUX_CATEGORIES|'"
+      fi
+      linux_icon "$name"
       # build-app stages the executable, its resource bundles, the symbol font, Info.plist and a .desktop file in
       # .build/linux/<product>; the tarball holds that folder as <App>/ (the .desktop file names <App> and points
       # at /opt/<App>).
@@ -461,7 +513,12 @@ case \$(uname -m) in aarch64|arm64) arch=arm64 ;; *) arch=x64 ;; esac
 out=\"\$HOME/$REMOTE_TREE/out\"
 rm -rf \"\$out\" && mkdir -p \"\$out\"
 cp -a \"$package/.build/linux/$product\" \"\$out/$name\"
-sed -i -e \"s|$package/.build/linux/$product|/opt/$name|g\" -e \"s|^Name=.*|Name=$name|\" \"\$out/$name\"/*.desktop
+sed -i -e \"s|$package/.build/linux/$product|/opt/$name|g\" -e \"s|^Name=.*|Name=$name|\" $categories \"\$out/$name\"/*.desktop
+if [ -f \"\$HOME/$REMOTE_TREE/$name.png\" ]; then
+  cp \"\$HOME/$REMOTE_TREE/$name.png\" \"\$out/$name/$name.png\"
+  sed -i '/^Icon=/d' \"\$out/$name\"/*.desktop
+  echo 'Icon=/opt/$name/$name.png' >>\"\$(ls \"\$out/$name\"/*.desktop | head -1)\"
+fi
 tar -czf \"\$out/$name-Linux-\$arch.tar.gz\" -C \"\$out\" '$name'
 echo \"dev-release-file: \$out/$name-Linux-\$arch.tar.gz\"" || fail "the Linux release build failed (log: $OUT/remote-$CURRENT.log)"
     fi
@@ -703,6 +760,9 @@ do_archive() {
     [ -x "$tool" ] || fail "xcodebuild-release not found at $tool (set RELEASE_TOOLS to Code's Sources/CodeActions/Release)"
     # The build the direct downloads come from (an update check only they have, say).
     if [ -n "$DIRECT_DOWNLOAD" ] && [ -n "$DIRECT_SETTINGS" ]; then settings=("$DIRECT_SETTINGS"); fi
+    # Apple silicon only (DIRECT_ARCHS without universal): an arm64 archive, for apps that link arm64-only binaries
+    # (the prebuilt libssh2 has no x86_64 slice).
+    if [ -n "$DIRECT_DOWNLOAD" ] && ! universal_build; then settings+=(ARCHS=arm64); fi
   fi
   XCB_TOOL="$tool" xcb ${CONTAINER[@]+"${CONTAINER[@]}"} -scheme "$SCHEME" -configuration "$CONFIGURATION" \
     -destination "$DESTINATION" ${DERIVED[@]+"${DERIVED[@]}"} -archivePath "$ARCHIVE" -allowProvisioningUpdates \
@@ -807,14 +867,14 @@ do_direct() {
   local app="$EXPORTED_APP"
 
   # Versionless names keep https://github.com/<repo>/releases/latest/download/<file> stable.
-  # With both variants the universal app is <App>, the Apple silicon one <App>-AppleSilicon.
-  local thin_name="$APP_NAME"
-  case " $DIRECT_ARCHS " in *" universal "*)
-    notarize_app "$app"
-    package "$app" "$APP_NAME" notarize
-    thin_name="$APP_NAME-AppleSilicon" ;;
-  esac
-  case " $DIRECT_ARCHS " in *" arm64 "*)
+  # With both variants the universal app is <App>, the Apple silicon one <App>-AppleSilicon; an arm64-only archive
+  # (DIRECT_ARCHS=arm64) is <App> as it is.
+  notarize_app "$app"
+  package "$app" "$APP_NAME" notarize
+  # With universal: also the arm64 slices alone.
+  local thin_name="$APP_NAME-AppleSilicon" variants="$DIRECT_ARCHS"
+  universal_build || variants=""
+  case " $variants " in *" arm64 "*)
     # A thinned copy is a new binary: it is signed again with the same entitlements
     # and the hardened runtime, then notarized on its own.
     local thin="$OUT/arm64/$APP_NAME.app" entitlements="$OUT/entitlements.plist"
@@ -983,6 +1043,7 @@ do_bump() {
 do_github() {
   step github
   [ -n "$GITHUB_REPO" ] || { skip "GITHUB_REPO is empty"; return; }
+  [ "$LOCAL" = 0 ] || fail "a --local build is a test build from this Mac's checkouts: releases come from the pinned packages"
   # Every platform's download files in the output folder; Windows and Linux files are signed by Dev (minisign) as it
   # publishes them, and UpdateKit refuses an update off the Mac without that signature.
   local files="" count=0 platform kind path sign
@@ -1030,6 +1091,7 @@ JSON
 do_appstore() {
   step appstore
   [ "$APP_STORE" = yes ] || { skip "APP_STORE is not yes"; return; }
+  [ "$LOCAL" = 0 ] || fail "a --local build is a test build from this Mac's checkouts: uploads come from the pinned packages"
   apple_only "App Store Connect takes macOS and iOS archives" || return 0
   [ -d "$ARCHIVE" ] || [ "$DRY_RUN" = 1 ] || fail "no archive at $ARCHIVE (run the archive step)"
   local options="$OUT/ExportOptions-app-store.plist"

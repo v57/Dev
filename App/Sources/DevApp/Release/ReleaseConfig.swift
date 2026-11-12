@@ -22,7 +22,7 @@ nonisolated struct ReleaseConfig: Equatable, Sendable {
   /// The keys the Release tool edits, in file order, with the line written above each.
   static let fields: [(key: String, comment: String?)] = [
     ("APP_NAME", "How Tools/release/release.sh ships this app (see release.env.example)."),
-    ("SCHEME", nil), ("PROJECT", nil), ("WORKSPACE", nil), ("PLATFORM", nil), ("TEAM_ID", nil),
+    ("SCHEME", nil), ("PROJECT", nil), ("WORKSPACE", nil), ("PLATFORM", nil), ("TEAM_ID", nil), ("VERSION", nil),
     ("TEST_SCHEME", ""), ("TEST_DESTINATION", nil), ("SCREENSHOT_TEST", nil),
     ("SCREENSHOT_LOCALES", nil), ("SCREENSHOT_DESTINATION", nil),
     ("DIRECT_DOWNLOAD", ""), ("DIRECT_ARCHS", nil), ("DIRECT_SETTINGS", nil), ("NOTARY_PROFILE", nil),
@@ -33,7 +33,7 @@ nonisolated struct ReleaseConfig: Equatable, Sendable {
   /// The other platforms' and stores' keys, written only when set (most apps ship on Apple platforms only).
   static let platformFields: [String] = [
     "PACKAGE_PATH", "SWIFTUI_PATH", "WINDOWS_PRODUCT", "WINDOWS_HOST", "LINUX_PRODUCT", "LINUX_HOST", "LINUX_STATIC",
-    "LINUX_JOBS", "ANDROID_PRODUCT", "ANDROID_KEYSTORE", "ANDROID_KEY_ALIAS", "ANDROID_KEYCHAIN_ITEM",
+    "LINUX_JOBS", "LINUX_CATEGORIES", "ANDROID_PRODUCT", "ANDROID_KEYSTORE", "ANDROID_KEY_ALIAS", "ANDROID_KEYCHAIN_ITEM",
     "GOOGLE_PLAY", "GOOGLE_PLAY_TRACK", "GOOGLE_PLAY_KEY_PATH", "GOOGLE_PLAY_PACKAGE", "MS_STORE", "MS_STORE_APP_ID",
     "MS_STORE_TENANT_ID", "MS_STORE_CLIENT_ID",
   ]
