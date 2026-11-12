@@ -183,7 +183,7 @@ struct WorkflowsView: View {
   private func sidebar(_ list: [Workflow], selected: Workflow?) -> some View {
     KitList(selection: pick(selected)) {
       KitSection(
-        "Workflows", meta: list.count == 1 ? String(localized: "1 workflow") : String(localized: "\(list.count) workflows"),
+        "Workflows", meta: String(localized: "\(list.count) workflows"),
         systemImage: "play", hue: .blue
       ) {
         ForEach(list) { workflow in
@@ -238,7 +238,7 @@ struct WorkflowsView: View {
       let releases = store.runs(for: root).filter { !$0.files.isEmpty }
       if !releases.isEmpty {
         KitSection(
-          "Releases", meta: releases.count == 1 ? String(localized: "1 run with files") : String(localized: "\(releases.count) runs with files"),
+          "Releases", meta: String(localized: "\(releases.count) runs with files"),
           systemImage: "shippingbox", hue: .green
         ) {
           ForEach(releases) { run in
@@ -416,7 +416,7 @@ struct WorkflowsView: View {
             }
           } else {
             Chip(workflow.trigger.summary)
-            Chip(workflow.steps.count == 1 ? "1 step" : "\(workflow.steps.count) steps")
+            Chip("\(workflow.steps.count) steps")
           }
         }
       }

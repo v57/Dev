@@ -377,7 +377,7 @@ struct StoreTextView: View {
         .controlSize(.small)
         FormCard("Out of Git") {
           GroupRow(
-            privateCount == 1 ? "1 private text" : "\(privateCount) private texts",
+            "\(privateCount) private texts",
             help: "Drafts, review notes and messages to testers live in .dev/store/private/, which .dev/store/.gitignore keeps out of commits. \(vaultNote)")
           if !trackedPrivate.isEmpty {
             FormRow(
