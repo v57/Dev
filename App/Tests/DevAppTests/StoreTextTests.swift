@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import GitHubKit
 import Testing
 
 @testable import DevApp
@@ -315,6 +316,86 @@ import Testing
     #expect(StoreLocale.match("de-DE", in: ["de", "en-US"]) == "de")
     #expect(StoreLocale.match("en-us", in: ["en-GB", "en-US"]) == "en-US")
     #expect(StoreLocale.match("ja", in: ["en-US"]) == nil)
+  }
+
+  // MARK: Placeholders
+
+  @Test func aPlaceholderStopsAPublishAndNamesItsFields() throws {
+    let texts = StoreTexts(root: try project())
+    var settings = StoreSettings()
+    settings.locales = ["de-DE"]
+    try texts.save(settings)
+    try texts.write("Dev", at: StoreAddress(field: .name))
+    try texts.write("[TODO user: what the app does]", at: StoreAddress(field: .description))
+    try texts.write("Ein Werkzeug [todo]", at: StoreAddress(field: .description, locale: "de-DE"))
+    try texts.write("Fixed it", at: StoreAddress(field: .changelog, version: "1.0"))
+    let plan = texts.publishPlan(destination: .appStore, live: StoreLive(), version: "1.0")
+    #expect(Set(plan.placeholders) == ["Description · en-US", "Description · de-DE"])
+    #expect(plan.changes.contains { $0.field == .name })
+    #expect(throws: StoreTextError.self) { try StorePlaceholder.refuse(plan.changes) }
+    #expect(StorePlaceholder.message(plan.placeholders).contains("Description · en-US"))
+    // Without them the plan may go.
+    try texts.write("A developer toolbox", at: StoreAddress(field: .description))
+    try texts.write("Ein Werkzeug", at: StoreAddress(field: .description, locale: "de-DE"))
+    #expect(texts.publishPlan(destination: .appStore, live: StoreLive(), version: "1.0").placeholders.isEmpty)
+  }
+
+  @Test func aPlaceholderInAnAnswerIsCaughtButOneInItsNotesIsNot() throws {
+    let texts = StoreTexts(root: try project())
+    try texts.write(#"{"notes": "[TODO user: check]", "unrestrictedWebAccess": false}"#, at: StoreAddress(field: .ageRating))
+    #expect(texts.publishPlan(destination: .appStore, live: StoreLive(), version: nil).placeholders.isEmpty)
+    try texts.write(
+      #"{"firstName": "[TODO user: first name]", "signInRequired": false}"#,
+      at: StoreAddress(field: .reviewContact))
+    #expect(texts.publishPlan(destination: .appStore, live: StoreLive(), version: nil).placeholders == ["App Review Contact"])
+  }
+
+  @Test func appStoreConnectAndGitHubRefuseAPlaceholderBeforeAnyRequest() async throws {
+    let change = StoreChange(field: .description, title: "Description", locale: "en-US", liveLocale: "en-US", new: "[TODO: write]")
+    let store = appStoreStub()
+    await #expect(throws: StoreTextError.self) {
+      try await appStore(store).publish([change], version: "1.2") { _ in }
+    }
+    #expect(store.sent.isEmpty)
+
+    let github = Stub([:])
+    let service = GitHubStoreText(repository: "v57/Dev", token: "t", send: github.send)
+    await #expect(throws: StoreTextError.self) {
+      try await service.publish([
+        StoreChange(field: .subtitle, title: "Description", new: "A toolbox"),
+        StoreChange(field: .changelog, title: "Release Notes", new: "- [TODO user: the highlights]"),
+      ], version: "1.0") { _ in }
+    }
+    #expect(github.sent.isEmpty)
+  }
+
+  @Test func aGitHubReleaseWithPlaceholderNotesIsNeverPublished() async throws {
+    let root = try project()
+    let notes = root.appendingPathComponent("changelog.txt")
+    try "- [TODO user: the highlights]\n".write(to: notes, atomically: true, encoding: .utf8)
+    let transport = RecordingTransport()
+    let request = GitHubReleaseRequest(
+      format: 1, repository: "v57/App", tag: "v1.0", version: "1.0", notesFile: notes.path, files: [])
+    await #expect(throws: GitHubReleaseRequest.Problem.self) {
+      _ = try await GitHubReleasePublisher.publish(
+        request, api: GitHubAPI(token: "t", transport: transport), signingKey: { Data() }, log: { _ in })
+    }
+    #expect(transport.authorizations.isEmpty)
+  }
+
+  @Test func releaseShRefusesPlaceholderReleaseNotes() throws {
+    let project = try ReleaseSecurityTests.Project("APP_NAME=App\nSCHEME=App\nGITHUB_REPO=v57/App\n")
+    let folder = project.root.appendingPathComponent("build/release/1.0/macos")
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    try Data("x".utf8).write(to: folder.appendingPathComponent("App.zip"))
+    try "package\t\(folder.appendingPathComponent("App.zip").path)\n"
+      .write(to: folder.appendingPathComponent("artifacts.tsv"), atomically: true, encoding: .utf8)
+    let texts = StoreTexts(root: project.root)
+    try texts.write("- [TODO user: the highlights]", at: StoreAddress(field: .changelog, version: "1.0"))
+    let (output, status) = try project.run(["--version", "1.0", "github"], environment: ["GH_TOKEN": ""])
+    #expect(status != 0)
+    #expect(output.contains("placeholder"), "\(output)")
+    #expect(!output.contains("::publish github"))
   }
 
   // MARK: Services, stubbed

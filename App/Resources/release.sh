@@ -1128,6 +1128,8 @@ do_github() {
   local notes notes_json=null generate=true draft=false
   notes=$(store_release_notes)
   if [ -n "$notes" ]; then
+    # A draft's [TODO …] placeholder never reaches a public release page (Dev's publish refuses it too).
+    grep -qiF '[TODO' "$notes" && fail "the release notes still hold a [TODO …] placeholder: write ${notes#"$PROJECT_DIR"/} first"
     notes_json=$(json "$notes")
     generate=false
     echo "release notes: ${notes#"$PROJECT_DIR"/}"

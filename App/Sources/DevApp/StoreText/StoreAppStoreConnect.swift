@@ -179,6 +179,7 @@ nonisolated struct AppStoreConnectText: StoreService {
   }
 
   func publish(_ changes: [StoreChange], version: String?, progress: @Sendable (String) -> Void) async throws {
+    try StorePlaceholder.refuse(changes)
     let context = try await load(version: version)
     let attribute: (StoreField) -> String? = {
       switch $0 {

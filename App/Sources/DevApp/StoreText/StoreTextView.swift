@@ -22,6 +22,8 @@ struct StoreTextView: View {
     var isOver = false
     var isEmpty = true
     var isPrivate = false
+    /// Some text of it, in any language or destination, still holds a `[TODO …]` placeholder: Publish refuses it.
+    var hasPlaceholder = false
   }
 
   @State private var texts: StoreTexts?
@@ -166,10 +168,15 @@ struct StoreTextView: View {
   private func fieldRow(_ item: StoreField) -> some View {
     let state = states[item] ?? FieldState()
     return SidebarRow(value: item, item.title) {
-      RowTile(systemImage: item.systemImage, hue: state.isOver ? .red : (state.isEmpty ? .gray : .blue))
+      RowTile(
+        systemImage: item.systemImage,
+        hue: state.isOver ? .red : (state.hasPlaceholder ? .orange : (state.isEmpty ? .gray : .blue)))
     } trailing: {
       if state.isOver {
         StatusDot(hue: .red)
+      } else if state.hasPlaceholder {
+        Image(systemName: "exclamationmark.triangle.fill").kitFont(.caption).foregroundStyle(Hue.orange.text)
+          .kitHelp("Still a placeholder", meta: "Holds a [TODO …] marker: Publish won't send it.", systemImage: "exclamationmark.triangle")
       } else if !state.isEmpty, state.isPrivate {
         Image(systemName: "lock").kitFont(.caption).foregroundStyle(.kitSecondary)
       }
@@ -328,6 +335,10 @@ struct StoreTextView: View {
   private var footer: some View {
     let isBase = address.locale == nil
     HStack(spacing: 10) {
+      if StorePlaceholder.contains(buffer) {
+        Label("Still a placeholder: Publish won't send text with [TODO …] in it.", systemImage: "exclamationmark.triangle.fill")
+          .foregroundStyle(Hue.orange.text)
+      }
       if field.isList { Text("One per line.").foregroundStyle(.kitSecondary) }
       if !isBase, field.isTranslated {
         switch translationState {
@@ -416,6 +427,7 @@ struct StoreTextView: View {
     }
     if let hint = row.slot.hint { notes.append(hint) }
     if !row.slot.isSent { notes.append(String(localized: "set by hand on the service")) }
+    if StorePlaceholder.contains(text) { notes.append(String(localized: "still a [TODO …] placeholder: not sent")) }
     return GroupRow(
       "\(row.destination.shortTitle): \(row.slot.title)",
       help: "\(notes.joined(separator: " · "))"
@@ -525,7 +537,9 @@ struct StoreTextView: View {
           let base = opened.entry(StoreAddress(field: field, version: field.isPerVersion ? version : nil))
           states[field] = FieldState(
             isOver: own.contains { !$0.slot.isEstimate && $0.count?.isOver == true },
-            isEmpty: base == nil, isPrivate: base?.isPrivate == true)
+            isEmpty: base == nil, isPrivate: base?.isPrivate == true,
+            hasPlaceholder: StorePlaceholder.contains(base?.text ?? "")
+              || own.contains { StorePlaceholder.contains($0.resolved.text) })
         }
         return (rows, states, opened.privateFileCount())
       }.value

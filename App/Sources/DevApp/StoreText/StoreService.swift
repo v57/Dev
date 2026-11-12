@@ -96,6 +96,33 @@ nonisolated struct StorePublishPlan: Sendable {
   var skipped: [String] = []
   /// Fields the service's API can't set, to copy by hand when they differ.
   var manual: [StoreSlot] = []
+  /// Changes whose text still holds a draft's `[TODO …]` placeholder: the publish won't start while there are any.
+  var placeholders: [String] = []
+}
+
+/// The `[TODO …]` / `[TODO user: …]` markers a draft carries where a person still has to write the real text. Nothing
+/// that holds one is sent: Publish lists them and won't start, every service refuses them, and so does a GitHub
+/// release's notes.
+nonisolated enum StorePlaceholder {
+  static let marker = "[TODO"
+
+  static func contains(_ text: String) -> Bool { text.range(of: marker, options: .caseInsensitive) != nil }
+
+  /// "Description · de-DE" for each change that holds a placeholder.
+  static func names(_ changes: [StoreChange]) -> [String] {
+    changes.filter { contains($0.new) }.map { $0.title + ($0.locale.map { " · \($0)" } ?? "") }
+  }
+
+  static func message(_ names: [String]) -> String {
+    String(localized: "Still a placeholder ([TODO …]), so nothing was sent: \(names.joined(separator: ", ")). Write the text, then publish.")
+  }
+
+  /// Throws, naming the fields, when any change would send a placeholder. Every service calls it before its first
+  /// request.
+  static func refuse(_ changes: [StoreChange]) throws {
+    let names = names(changes)
+    guard names.isEmpty else { throw StoreTextError(message(names)) }
+  }
 }
 
 /// One text an import would write.
@@ -136,6 +163,7 @@ nonisolated struct DemoStoreText: StoreService {
   }
 
   func publish(_ changes: [StoreChange], version: String?, progress: @Sendable (String) -> Void) async throws {
+    try StorePlaceholder.refuse(changes)
     for change in changes { progress("Demo: not sent, \(change.title)") }
   }
 }
@@ -185,6 +213,7 @@ extension StoreTexts {
           field: field, title: slot.title, locale: locale, liveLocale: liveLocale ?? locale, old: old, new: new))
       }
     }
+    plan.placeholders = StorePlaceholder.names(plan.changes)
     return plan
   }
 

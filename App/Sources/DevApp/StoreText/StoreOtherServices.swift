@@ -54,6 +54,7 @@ nonisolated struct GitHubStoreText: StoreService {
   }
 
   func publish(_ changes: [StoreChange], version: String?, progress: @Sendable (String) -> Void) async throws {
+    try StorePlaceholder.refuse(changes)
     var fields: [String: Any] = [:]
     for change in changes {
       switch change.field {
@@ -208,6 +209,7 @@ nonisolated struct GooglePlayStoreText: StoreService {
   }
 
   func publish(_ changes: [StoreChange], version: String?, progress: @Sendable (String) -> Void) async throws {
+    try StorePlaceholder.refuse(changes)
     let token = try await token()
     guard let edit = try await call("POST", "/edits", token: token, json: [:])["id"] as? String else {
       throw StoreTextError("Google Play didn't open an edit.")
@@ -324,6 +326,7 @@ nonisolated struct MicrosoftStoreText: StoreService {
   }
 
   func publish(_ changes: [StoreChange], version: String?, progress: @Sendable (String) -> Void) async throws {
+    try StorePlaceholder.refuse(changes)
     let token = try await token()
     let application = try await StoreHTTP.json(try StoreHTTP.request("GET", base, token: token), send: send)
     var submission: [String: Any]

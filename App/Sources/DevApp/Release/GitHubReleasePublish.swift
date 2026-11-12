@@ -57,6 +57,8 @@ nonisolated struct GitHubReleaseRequest: Decodable, Equatable, Sendable {
     case file(String)
     case duplicate(String)
     case noVersion
+    /// The notes still hold a draft's `[TODO …]` placeholder (Store Text's changelog).
+    case placeholder(String)
 
     var errorDescription: String? {
       switch self {
@@ -67,6 +69,8 @@ nonisolated struct GitHubReleaseRequest: Decodable, Equatable, Sendable {
       case .file(let path): "\(path) isn't a file of this project or of this run."
       case .duplicate(let name): "Two files are named \(name)."
       case .noVersion: "Files to sign need the release's version."
+      case .placeholder(let source):
+        "The release notes (\(source)) still hold a [TODO …] placeholder, so nothing was published. Write the changelog in Store Text, then publish."
       }
     }
   }
@@ -182,6 +186,13 @@ nonisolated enum GitHubReleasePublisher {
     let parts = request.repository.split(separator: "/").map(String.init)
     let (owner, repository) = (parts[0], parts[1])
 
+    // The notes before anything else: a draft's placeholder never reaches a public release page.
+    let notes = try request.notesFile.map { try String(contentsOfFile: $0, encoding: .utf8) } ?? request.notes
+    if let notes, StorePlaceholder.contains(notes) {
+      throw GitHubReleaseRequest.Problem.placeholder(
+        request.notesFile.map { URL(fileURLWithPath: $0).lastPathComponent } ?? String(localized: "the request's notes"))
+    }
+
     // Signatures first: a missing key stops the run before anything reaches GitHub.
     var uploads: [(name: String, data: Data)] = []
     var secret: Data?
@@ -200,7 +211,6 @@ nonisolated enum GitHubReleasePublisher {
       log("signed \(url.lastPathComponent) (\(signatureURL.lastPathComponent))")
     }
 
-    let notes = try request.notesFile.map { try String(contentsOfFile: $0, encoding: .utf8) } ?? request.notes
     var release: GitHubRelease
     if let existing = try await api.release(owner: owner, repository: repository, tag: request.tag) {
       release = existing

@@ -107,7 +107,7 @@ struct StoreSyncSheet: View {
           Button("Publish \(plan.changes.count)…") { confirming = true }
             .buttonStyle(.kitPrimary)
             .keyboardShortcut(.defaultAction)
-            .disabled(isWorking || plan.changes.isEmpty || !plan.overLimit.isEmpty)
+            .disabled(isWorking || plan.changes.isEmpty || !plan.overLimit.isEmpty || !plan.placeholders.isEmpty)
         }
       }
     }
@@ -167,6 +167,14 @@ struct StoreSyncSheet: View {
       FormCard("Over the limit") {
         ForEach(plan.overLimit, id: \.self) { line in
           FormRow("\(line)", help: "Shorten it to publish.", systemImage: "exclamationmark.triangle", hue: .red)
+        }
+      }
+      .controlSize(.small)
+    }
+    if !plan.placeholders.isEmpty {
+      FormCard("Still placeholders") {
+        ForEach(plan.placeholders, id: \.self) { line in
+          FormRow("\(line)", help: "Holds a [TODO …] placeholder. Write the text to publish.", systemImage: "exclamationmark.triangle", hue: .red)
         }
       }
       .controlSize(.small)
@@ -245,6 +253,7 @@ struct StoreSyncSheet: View {
     do {
       let service = try await StoreCredentials.service(destination, root: root, config: config, accountID: accountID)
       let changes = plan.changes
+      try StorePlaceholder.refuse(changes)
       try await service.publish(changes, version: version) { line in
         Task { @MainActor in lines.append(line) }
       }
