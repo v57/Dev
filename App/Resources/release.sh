@@ -661,7 +661,10 @@ PLIST
 # profile stops the app from launching).
 check_signature() {
   [ "$DRY_RUN" = 1 ] && return 0
-  codesign -dv "$1" 2>&1 | grep -qE '^CodeDirectory .*flags=0x[0-9a-f]*\([^)]*runtime' \
+  # Read whole, then matched: with pipefail, `codesign | grep -q` fails when grep's early exit cuts codesign off.
+  local details
+  details=$(codesign -dv "$1" 2>&1 || true)
+  grep -qE '^CodeDirectory .*flags=0x[0-9a-f]*\([^)]*runtime' <<<"$details" \
     || fail "$(basename "$1") isn't signed with the hardened runtime (ENABLE_HARDENED_RUNTIME = YES)"
   local entitlements="$OUT/.entitlements-check.plist" aps
   codesign -d --entitlements - --xml "$1" >"$entitlements" 2>/dev/null || true
