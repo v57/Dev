@@ -366,8 +366,8 @@ final class ServerCorpus {
         if result.stale > 0 && held.origin == "machine" { held.stale = true }
       }
       notes[key] = result.stale > 0
-        ? "comment written — \(result.stale) machine value\(result.stale == 1 ? "" : "s") marked stale"
-        : "comment written"
+        ? String(localized: "comment written — \(result.stale) machine values marked stale")
+        : String(localized: "comment written")
     } catch {
       notes[key] = message(for: error)
     }

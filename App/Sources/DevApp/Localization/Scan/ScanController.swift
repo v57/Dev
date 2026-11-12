@@ -233,7 +233,7 @@ final class ScanController {
     isCommenting = true
     phase = prepared.targets.isEmpty
       ? "Comments: nothing to generate"
-      : "Generating comments for \(prepared.targets.count) key(s)…"
+      : String(localized: "Generating comments for \(prepared.targets.count) keys…")
 
     let token = cancellation
     let model = OnDeviceCommentModel()

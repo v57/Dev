@@ -278,10 +278,11 @@ nonisolated enum StorageSystemScan {
       data.bytes - total >= 1_000_000_000 {
       items.append(StorageItem(
         id: "system:invisible", category: .system, group: "Not in Any Category",
-        title: unreadable.isEmpty ? "Not visible as files" : "Not visible as files, or unreadable",
+        title: unreadable.isEmpty
+          ? String(localized: "Not visible as files") : String(localized: "Not visible as files, or unreadable"),
         detail: unreadable.isEmpty
-          ? "APFS snapshots, purgeable copies and file-system metadata"
-          : "Snapshots, metadata, and \(unreadable.count) folder\(unreadable.count == 1 ? "" : "s") macOS wouldn't let the scan read",
+          ? String(localized: "APFS snapshots, purgeable copies and file-system metadata")
+          : String(localized: "Snapshots, metadata, and \(unreadable.count) folders macOS wouldn't let the scan read"),
         paths: [], safety: .data,
         cleanup: .revealOnly(reason: unreadable.isEmpty
           ? "Check snapshots with: tmutil listlocalsnapshots /"

@@ -334,7 +334,7 @@ nonisolated enum ScanEngine {
 
     allModuleMapFiles = Set(ScanExtractor.uniqueModuleMaps(allModuleMapFiles.sorted()))
     let allUnits = units + projectUnits
-    emit(.phase("Extracting strings from \(allUnits.count) module(s)…"))
+    emit(.phase(String(localized: "Extracting strings from \(allUnits.count) modules…")))
 
     // MARK: 4. extraction (parallel; each compile is its own process)
 

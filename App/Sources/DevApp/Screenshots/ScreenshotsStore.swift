@@ -69,7 +69,9 @@ final class ScreenshotsStore {
       phases[root] = .idle
       if process.status != 0, errors[root] == nil {
         let failed = logs[root, default: []].filter { $0.contains(" failed: ") }.count
-        errors[root] = failed > 0 ? "\(failed) pictures were not captured: see the log." : "The capture stopped: see the log."
+        errors[root] = failed > 0
+          ? String(localized: "\(failed) pictures were not captured: see the log.")
+          : String(localized: "The capture stopped: see the log.")
       }
       // Frame whatever was taken, even when some scenes failed.
       await processLatest(root)

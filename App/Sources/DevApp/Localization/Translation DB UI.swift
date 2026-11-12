@@ -174,7 +174,7 @@ private struct ImportedDBInfoView: View {
             .kitFont(.caption)
             .foregroundStyle(.kitSecondary)
             .lineLimit(1)
-            .help("\(language): \(rows.formatted()) translations in the imported DB")
+            .help("\(language): \(rows) translations in the imported DB")
         }
       }
     }

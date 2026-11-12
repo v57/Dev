@@ -97,7 +97,7 @@ nonisolated enum AppStoreConnectKey {
       let api = try AppStoreConnectAPI(config: config)
       let json = try await api.request("GET", "/v1/apps?limit=200&fields[apps]=bundleId")
       let count = AppStoreConnectAPI.data(json).count
-      return .valid(count == 1 ? "Works · 1 app" : "Works · \(count) apps")
+      return .valid(String(localized: "Works · \(count) apps"))
     } catch {
       return .failed(error.localizedDescription)
     }

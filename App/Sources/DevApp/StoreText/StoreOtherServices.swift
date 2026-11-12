@@ -204,7 +204,7 @@ nonisolated struct GooglePlayStoreText: StoreService {
     }
     // One open edit at a time: a read leaves none behind.
     _ = try? await call("DELETE", "/edits/\(edit)", token: token)
-    live.summary = "\(package) · \(live.locales.count) languages"
+    live.summary = "\(package) · " + String(localized: "\(live.locales.count) languages")
     return live
   }
 

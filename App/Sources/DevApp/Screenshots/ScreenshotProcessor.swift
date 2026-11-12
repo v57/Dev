@@ -141,11 +141,11 @@ extension ScreenshotStatus.State {
   var reason: String? {
     switch self {
     case .current: nil
-    case .missing: "Not captured yet"
-    case .incomplete(let missing): "\(missing) of its pictures are missing"
-    case .changed: "Its arguments or the capture settings changed since"
-    case .outdated(let commits?): commits == 1 ? "1 commit since its capture" : "\(commits) commits since its capture"
-    case .outdated(nil): "Taken at a commit that is gone"
+    case .missing: String(localized: "Not captured yet")
+    case .incomplete(let missing): String(localized: "\(missing) of its pictures are missing")
+    case .changed: String(localized: "Its arguments or the capture settings changed since")
+    case .outdated(let commits?): String(localized: "\(commits) commits since its capture")
+    case .outdated(nil): String(localized: "Taken at a commit that is gone")
     }
   }
 }

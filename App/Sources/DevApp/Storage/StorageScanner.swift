@@ -105,7 +105,8 @@ nonisolated enum StorageScanner {
       // reading them tells; their bytes are already counted by their folders.
       let found = DuplicateFiles.find(in: roots)
       item.bytes = found.bytes
-      item.detail = "\(found.copyCount) copies of \(found.groups.count) files · nothing is removed"
+      let files = String(localized: "\(found.groups.count) files")
+      item.detail = String(localized: "\(found.copyCount) copies of \(files)") + " · " + String(localized: "nothing is removed")
     } else if !item.reportedSize {
       let measurement = DiskUsage.measure(item.paths, excluding: item.excluded, ledger: ledger)
       item.bytes = measurement.bytes
@@ -220,7 +221,7 @@ nonisolated enum StorageCleaner {
           report.cleanedBytes += result.freed
           if !result.failures.isEmpty {
             report.failures.append((item.title,
-              "\(result.failures.count) files kept their own copy. First: \(result.failures[0])"))
+              String(localized: "\(result.failures.count) files kept their own copy. First: \(result.failures[0])")))
           }
           continue
         }

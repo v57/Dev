@@ -101,16 +101,17 @@ struct ScanStringsView: View {
     return VStack(alignment: .leading, spacing: 4) {
       row("Scan root", report.root.path)
       row("Duration", ScanController.durationText(report.duration))
-      row("Packages", "\(report.packages.count) · \(packageModules.count) module(s)")
-      row("Xcode targets", "\(projectModules.count) module(s)")
+      row("Packages", "\(report.packages.count) · " + String(localized: "\(packageModules.count) modules"))
+      row("Xcode targets", String(localized: "\(projectModules.count) modules"))
       row("Modules extracted", "\(report.modules.count) (\(report.failedModules.count) failed)")
       row("Keys extracted", "\(report.extractedKeyCount) unique · \(report.totalKeysAcrossModules) key-hits")
       if report.skippedTableKeys > 0 {
-        row("Other tables", "\(report.skippedTableKeys) key(s) in non-Localizable tables, skipped")
+        row("Other tables", String(localized: "\(report.skippedTableKeys) keys in non-Localizable tables, skipped"))
       }
       if let plan = store.scan.plan {
-        row("Merge", "\(plan.addedCount) new · \(plan.existingKeyCount) already in the catalog")
-        row("Catalog size", "\(plan.catalogKeyCount) → \(plan.totalAfterMerge) keys")
+        row("Merge", String(localized: "\(plan.addedCount) new") + " · "
+          + String(localized: "\(plan.existingKeyCount) already in the catalog"))
+        row("Catalog size", "\(plan.catalogKeyCount) → " + String(localized: "\(plan.totalAfterMerge) keys"))
       }
       if let comments = store.scan.comments, comments.didRun {
         row("Comments", "\(comments.generatedCount) generated · \(comments.skippedCount) skipped"
@@ -180,9 +181,13 @@ struct ScanStringsView: View {
       }
     } else {
       VStack(alignment: .leading, spacing: 3) {
-        Text("\(comments.targetCount) key(s) had no comment · \(comments.generatedCount) generated · \(comments.skippedCount) skipped"
-          + (comments.cancelled ? " · cancelled" : "")
-          + String(format: " · %.2fs per comment", comments.secondsPerComment))
+        Text(verbatim: ([
+          String(localized: "\(comments.targetCount) keys had no comment"),
+          String(localized: "\(comments.generatedCount) generated"),
+          String(localized: "\(comments.skippedCount) skipped"),
+        ] + (comments.cancelled ? [String(localized: "cancelled")] : []) + [
+          String(localized: "\(comments.secondsPerComment.formatted(.number.precision(.fractionLength(2))))s per comment")
+        ]).joined(separator: " · "))
           .kitFont(.callout)
         ForEach(Array(comments.skipLines.enumerated()), id: \.offset) { _, line in
           Text("skipped — \(line.reason.label): \(line.count)")
@@ -190,7 +195,7 @@ struct ScanStringsView: View {
             .foregroundStyle(.kitSecondary)
         }
         if comments.unlocatedCount > 0 {
-          Text("no call site at all — the scan never located \(comments.unlocatedCount) comment-less key(s)")
+          Text("no call site at all — the scan never located \(comments.unlocatedCount) comment-less keys")
             .kitFont(.caption)
             .foregroundStyle(.kitSecondary)
         }

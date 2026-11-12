@@ -582,7 +582,8 @@ final class LocalizationStore {
       }.value
       Reconcile.apply(seeded.0, projectID: projectID, base: base, generation: generation)
       isAddingLanguage = false
-      note("Added \(codes.count) language(s): \(seeded.1.inserted) slot(s) ready to translate")
+      note(String(localized: "Added \(codes.count) languages") + ": "
+        + String(localized: "\(seeded.1.inserted) slots ready to translate"))
     }
   }
 

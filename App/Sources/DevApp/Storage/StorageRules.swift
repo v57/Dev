@@ -135,7 +135,7 @@ nonisolated extension StorageDiscovery {
       add(StorageItem(
         id: "sim:unavailable", category: .xcode, group: "Simulators",
         title: "Unavailable simulators",
-        detail: "\(unavailable.count) devices whose runtime is no longer installed",
+        detail: String(localized: "\(unavailable.count) devices whose runtime is no longer installed"),
         paths: unavailable, safety: .rebuildable,
         cleanup: .command(executable: xcrun, arguments: ["simctl", "delete", "unavailable"],
           verb: "Delete")))
@@ -147,7 +147,8 @@ nonisolated extension StorageDiscovery {
       let owns = owner(of: key) != nil
       let used = simulatorCounts[key] ?? 0
       let count = owns ? used : 0
-      let simulators = used == 0 ? "no simulator uses it" : owns ? "\(used) simulator\(used == 1 ? "" : "s")" : nil
+      let simulators = used == 0
+        ? String(localized: "no simulator uses it") : owns ? String(localized: "\(used) simulators") : nil
       let detail = [runtime.build, simulators, StorageNames.relative(runtime.lastUsedAt).map { "used \($0)" }]
         .compactMap { $0 }.joined(separator: " · ")
       var item = StorageItem(
@@ -210,7 +211,7 @@ nonisolated extension StorageDiscovery {
       guard !users.isEmpty else { return nil }
       let names = users.map(\.name).joined(separator: ", ")
       let last = users.compactMap(\.lastConnection).max()
-      return [names + (users.count == 1 ? " runs it" : " run it"),
+      return [users.count == 1 ? String(localized: "\(names) runs it") : String(localized: "\(names) run it"),
         StorageNames.relative(last).map { "connected \($0)" }]
         .compactMap { $0 }.joined(separator: " · ")
     }

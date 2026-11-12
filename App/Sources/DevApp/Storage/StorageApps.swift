@@ -40,7 +40,7 @@ nonisolated extension StorageDiscovery {
         ? [] : appLeftovers(identifier: identifier, names: names, groupContainers: groupContainers)
       let version = info["CFBundleShortVersionString"] as? String
       let detail = [version.map { "Version \($0)" },
-        leftovers.isEmpty ? nil : "\(leftovers.count) support folder\(leftovers.count == 1 ? "" : "s")"]
+        leftovers.isEmpty ? nil : String(localized: "\(leftovers.count) support folders")]
         .compactMap { $0 }.joined(separator: " · ")
       add(StorageItem(
         id: bundle, category: isApple ? .systemApps : .applications,

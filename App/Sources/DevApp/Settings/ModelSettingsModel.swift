@@ -126,7 +126,7 @@ final class ModelSettingsModel {
       ImportCandidate(
         presetID: $0.preset.id, providerName: $0.preset.name, source: $0.source, key: $0.key)
     }
-    importStatus = importCandidates.isEmpty ? "No new keys found." : nil
+    importStatus = importCandidates.isEmpty ? String(localized: "No new keys found.") : nil
   }
 
   func importKeys() {
@@ -136,7 +136,7 @@ final class ModelSettingsModel {
     if providerID.isEmpty, let first = importCandidates.first {
       providerID = first.presetID
     }
-    importStatus = "Imported \(importCandidates.count) \(importCandidates.count == 1 ? "key" : "keys")."
+    importStatus = String(localized: "Imported \(importCandidates.count) keys.")
     importCandidates = []
     refreshKeyState()
   }

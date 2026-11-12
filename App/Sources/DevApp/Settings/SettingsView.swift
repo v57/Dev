@@ -291,7 +291,7 @@ private struct ImportKeysSheet: View {
 
   var body: some View {
     KitSheet(
-      title: "Import \(model.importCandidates.count == 1 ? "this key" : "these keys")?",
+      title: model.importCandidates.count == 1 ? "Import this key?" : "Import these keys?",
       meta: "Each key is copied into your login keychain for Dev.",
       systemImage: "key.fill", hue: .orange, width: 400
     ) {

@@ -239,7 +239,7 @@ struct StoreSyncSheet: View {
   private func applyImport() {
     do {
       try texts.apply(chosen)
-      lines.append("Wrote \(chosen.count) texts to \(StoreTexts.path).")
+      lines.append(String(localized: "Wrote \(chosen.count) texts to \(StoreTexts.path)."))
       isDone = true
     } catch {
       self.error = error.localizedDescription
