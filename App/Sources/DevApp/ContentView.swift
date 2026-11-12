@@ -95,11 +95,15 @@ struct ContentView: View {
       agents.answer(true)
     }
     // File ▸ New Icon: the App Icon tool without a project.
-    .onReceive(NotificationCenter.default.publisher(for: .devOpenProjectlessIcon)) { _ in
-      model.selection = .tool(.icon)
+    .task {
+      for await _ in NotificationCenter.default.notifications(named: .devOpenProjectlessIcon) {
+        model.selection = .tool(.icon)
+      }
     }
-    .onReceive(NotificationCenter.default.publisher(for: .devAddProject)) { _ in
-      model.addProjectsFromPanel()
+    .task {
+      for await _ in NotificationCenter.default.notifications(named: .devAddProject) {
+        model.addProjectsFromPanel()
+      }
     }
     // Unsaved-changes prompt: Reload…, Open…, a sidebar project switch and
     // quitting all hold their request here until it is answered, because
