@@ -5,7 +5,7 @@
 # root (see release.env.example); Dev's Release tool and Workflows edit the same file and run
 # this script, so a release from the app and one from a terminal are the same release.
 #
-#   Tools/release/release.sh [--project DIR] [--platform P] [--host USER@HOST] [--output DIR]
+#   Tools/release/release.sh [--project DIR] [--platform P] [--host USER@HOST[:PORT]] [--output DIR]
 #                            [--version X.Y.Z] [--build N] [--commit REV] [--no-zip] [--local] [--dry-run] STEP...
 #
 # The version: --version, else VERSION in release.env, else the Xcode project's MARKETING_VERSION.
@@ -265,6 +265,11 @@ build_host() {
     case "$PLATFORM" in windows) HOST="$WINDOWS_HOST" ;; linux) HOST="$LINUX_HOST" ;; esac
   fi
   [ -n "$HOST" ] || fail "no machine to build $PLATFORM on (--host user@address, or $(echo "$PLATFORM" | tr a-z A-Z)_HOST in release.env)"
+  # user@address:port: a build machine on another SSH port (a container on this Mac); ssh, scp and rsync all take it.
+  if [[ "$HOST" =~ ^(.+):([0-9]+)$ ]]; then
+    HOST="${BASH_REMATCH[1]}"
+    SSH_OPTS+=(-o "Port=${BASH_REMATCH[2]}")
+  fi
 }
 
 # The package the other platforms build: PACKAGE_PATH, else the project's App/ package (a v57 app's), else the root.
