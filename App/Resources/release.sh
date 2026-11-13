@@ -5,7 +5,7 @@
 # root (see release.env.example); Dev's Release tool and Workflows edit the same file and run
 # this script, so a release from the app and one from a terminal are the same release.
 #
-#   Tools/release/release.sh [--project DIR] [--platform P] [--host USER@HOST[:PORT]] [--output DIR]
+#   Tools/release/release.sh [--project DIR] [--platform P] [--host USER@HOST[:PORT]] [--arch A[,A]] [--output DIR]
 #                            [--version X.Y.Z] [--build N] [--commit REV] [--no-zip] [--local] [--dry-run] STEP...
 #
 # The version: --version, else VERSION in release.env, else the Xcode project's MARKETING_VERSION.
@@ -19,6 +19,9 @@
 # on another machine over SSH (--host, else WINDOWS_HOST / LINUX_HOST: Dev passes its UTM VMs), which gets the
 # project and every package it builds from on this Mac (V57_LOCAL=1), and the packages come back here; android
 # cross-compiles on this Mac (not set up yet).
+# Windows architectures (--arch, else WINDOWS_ARCHS in release.env: arm64, x64 or both, e.g. "arm64 x64"): each is
+# built on the one Windows host (an arm64 machine cross-compiles x64 and the other way round) and packaged as
+# <App>-Windows-<arch>.zip. Without either, the host's own architecture.
 #
 # Steps, in the order `all` runs them (a step that doesn't apply to the platform is skipped):
 #   check        tools, signing identity, notary profile, the build host, release.env holds no ASC_* values, the
@@ -71,6 +74,7 @@ DRY_RUN=0
 STEPS=""
 ARG_PLATFORM=""
 ARG_HOST=""
+ARG_ARCH=""
 ARG_OUTPUT=""
 ARG_BUILD=""
 ARG_COMMIT=""
@@ -84,6 +88,7 @@ while [ $# -gt 0 ]; do
     --project) PROJECT_DIR="$2"; shift 2 ;;
     --platform) ARG_PLATFORM="$2"; shift 2 ;;
     --host) ARG_HOST="$2"; shift 2 ;;
+    --arch) ARG_ARCH="$2"; shift 2 ;;
     --output) ARG_OUTPUT="$2"; shift 2 ;;
     --version) VERSION="$2"; shift 2 ;;
     --build) ARG_BUILD="$2"; shift 2 ;;
@@ -110,7 +115,7 @@ CONFIGURATION="Release"; TEST_SCHEME=""; TEST_DESTINATION=""; SCREENSHOT_TEST=""
 SCREENSHOT_LOCALES="en"; SCREENSHOT_DESTINATION=""; DIRECT_DOWNLOAD="zip dmg"; DIRECT_ARCHS="universal"
 DIRECT_SETTINGS=""; NOTARY_PROFILE=""; GITHUB_REPO=""; GITHUB_DRAFT="yes"; APP_STORE="no"
 ASC_KEY_ID=""; ASC_ISSUER_ID=""; ASC_KEY_PATH=""
-PACKAGE_PATH=""; WINDOWS_PRODUCT=""; WINDOWS_HOST=""; LINUX_PRODUCT=""; LINUX_HOST=""; LINUX_STATIC="yes"
+PACKAGE_PATH=""; WINDOWS_PRODUCT=""; WINDOWS_HOST=""; WINDOWS_ARCHS=""; LINUX_PRODUCT=""; LINUX_HOST=""; LINUX_STATIC="yes"
 LINUX_JOBS=4; SWIFTUI_PATH=""
 ANDROID_PRODUCT=""; ANDROID_KEYSTORE=""; ANDROID_KEY_ALIAS=""; ANDROID_KEYCHAIN_ITEM=""
 GOOGLE_PLAY="no"; GOOGLE_PLAY_TRACK="internal"; GOOGLE_PLAY_KEY_PATH=""
@@ -141,7 +146,7 @@ read_env() {
 
 RELEASE_KEYS="APP_NAME SCHEME PROJECT WORKSPACE PLATFORM TEAM_ID VERSION CONFIGURATION TEST_SCHEME TEST_DESTINATION
   SCREENSHOT_TEST SCREENSHOT_LOCALES SCREENSHOT_DESTINATION DIRECT_DOWNLOAD DIRECT_ARCHS DIRECT_SETTINGS NOTARY_PROFILE
-  GITHUB_REPO GITHUB_DRAFT APP_STORE PACKAGE_PATH WINDOWS_PRODUCT WINDOWS_HOST WINDOWS_RELEASE_ROOT LINUX_PRODUCT
+  GITHUB_REPO GITHUB_DRAFT APP_STORE PACKAGE_PATH WINDOWS_PRODUCT WINDOWS_HOST WINDOWS_ARCHS WINDOWS_RELEASE_ROOT LINUX_PRODUCT
   LINUX_HOST LINUX_STATIC LINUX_JOBS LINUX_CATEGORIES SWIFTUI_PATH ANDROID_PRODUCT ANDROID_KEYSTORE ANDROID_KEY_ALIAS
   ANDROID_KEYCHAIN_ITEM GOOGLE_PLAY GOOGLE_PLAY_TRACK GOOGLE_PLAY_KEY_PATH GOOGLE_PLAY_PACKAGE MS_STORE MS_STORE_APP_ID
   MS_STORE_TENANT_ID MS_STORE_CLIENT_ID RELEASE_PINS"
@@ -170,6 +175,12 @@ APP_NAME="${APP_NAME:-$SCHEME}"
 PLATFORM="${ARG_PLATFORM:-${PLATFORM:-macos}}"
 DIRECT_DOWNLOAD="${DIRECT_DOWNLOAD//,/ }"
 DIRECT_ARCHS="${DIRECT_ARCHS//,/ }"
+# The Windows architectures to build (empty: the build host's own).
+WINDOWS_ARCHS="${ARG_ARCH:-$WINDOWS_ARCHS}"
+WINDOWS_ARCHS="$(echo ${WINDOWS_ARCHS//,/ })"
+for windows_arch in $WINDOWS_ARCHS; do
+  case "$windows_arch" in arm64|x64) ;; *) echo "::fail config the Windows architectures are arm64 and x64 (--arch, WINDOWS_ARCHS): $windows_arch"; exit 1 ;; esac
+done
 SCREENSHOT_LOCALES="${SCREENSHOT_LOCALES//,/ }"
 
 if [ -n "$WORKSPACE" ]; then CONTAINER=(-workspace "$WORKSPACE")
@@ -514,34 +525,54 @@ remote_build() {
   if [ "$PLATFORM" = windows ]; then
     package="$REMOTE_TREE\\$(rel "$PACKAGE_DIR" | tr / '\\')"
     swiftui="$REMOTE_TREE\\$(rel "$SWIFTUI_DIR" | tr / '\\')"
+    # The architectures as a PowerShell list ('arm64','x64'); empty: the host's.
+    local archs="" arch
+    for arch in $WINDOWS_ARCHS; do archs="$archs'$arch',"; done
+    archs="${archs%,}"
     if [ "$kind" = build ]; then
+      # Another architecture than the host's: the native build system with --triple, as build-app.ps1 builds it.
       remote_run "\$ErrorActionPreference = 'Stop'
 \$env:V57_LOCAL = '1'
-swift build --package-path '$package' --product '$product'
-exit \$LASTEXITCODE" || fail "the Windows build failed (log: $OUT/remote-$CURRENT.log)"
+\$hostArch = if (\$env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x64' }
+\$archs = @($archs)
+if (-not \$archs.Count) { \$archs = @('') }
+foreach (\$arch in \$archs) {
+  \$archOption = @()
+  if (\$arch -and \$arch -ne \$hostArch) { \$archOption = @('--build-system', 'native', '--triple', \$(if (\$arch -eq 'x64') { 'x86_64-unknown-windows-msvc' } else { 'aarch64-unknown-windows-msvc' })) }
+  swift build --package-path '$package' --product '$product' @archOption
+  if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE }
+}" || fail "the Windows build failed (log: $OUT/remote-$CURRENT.log)"
     else
       # build-app.ps1 stages the app DLL, its DLLs, the Swift runtime and the WinUI host in .build\winui\<product>;
       # the zip holds that folder as <App>\, without the PDBs, and the host takes the app's name as SwiftUI's
       # install-apps.ps1 does: WinUI reads <exe name>.pri, and SwiftUIHost.exe opens no window. The exe and the
-      # windows get the app's icon (-Icon, rendered here from its AppIcon.icon).
+      # windows get the app's icon (-Icon, rendered here from its AppIcon.icon). Each architecture (-Arch) is staged
+      # and zipped on its own: .build\winui\<product> for the host's, .build\winui\<product>-<arch> for another.
       windows_icon "$name"
       local icon_option=""
       [ -n "$WINDOWS_ICON" ] && icon_option="-Icon '$WINDOWS_ICON'"
       remote_run "\$ErrorActionPreference = 'Stop'
 \$env:V57_LOCAL = '1'
-& '$swiftui\\Windows\\scripts\\build-app.ps1' -PackagePath '$package' -Product '$product' -Configuration release -Version '$VERSION' -Build '$BUILD_NUMBER' $icon_option
-\$arch = if (\$env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x64' }
+\$hostArch = if (\$env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x64' }
+\$archs = @($archs)
+if (-not \$archs.Count) { \$archs = @(\$hostArch) }
 \$out = '$REMOTE_TREE\\out'
 if (Test-Path \$out) { Remove-Item -Recurse -Force \$out }
 New-Item -ItemType Directory \$out | Out-Null
-Copy-Item '$package\\.build\\winui\\$product' \"\$out\\$name\" -Recurse
-Get-ChildItem \"\$out\\$name\" -Recurse -Filter *.pdb | Remove-Item -Force
-Rename-Item \"\$out\\$name\\SwiftUIHost.exe\" '$name.exe'
-Rename-Item \"\$out\\$name\\SwiftUIHost.pri\" '$name.pri'
-\$zip = \"\$out\\$name-Windows-\$arch.zip\"
-tar.exe -a -c -f \$zip -C \$out '$name'
-if (\$LASTEXITCODE -ne 0) { exit 1 }
-'dev-release-file: ' + \$zip" || fail "the Windows release build failed (log: $OUT/remote-$CURRENT.log)"
+foreach (\$arch in \$archs) {
+  & '$swiftui\\Windows\\scripts\\build-app.ps1' -PackagePath '$package' -Product '$product' -Configuration release -Arch \$arch -Version '$VERSION' -Build '$BUILD_NUMBER' $icon_option
+  \$staged = if (\$arch -eq \$hostArch) { '$package\\.build\\winui\\$product' } else { \"$package\\.build\\winui\\$product-\$arch\" }
+  \$folder = \"\$out\\\$arch\"
+  New-Item -ItemType Directory \$folder | Out-Null
+  Copy-Item \$staged \"\$folder\\$name\" -Recurse
+  Get-ChildItem \"\$folder\\$name\" -Recurse -Filter *.pdb | Remove-Item -Force
+  Rename-Item \"\$folder\\$name\\SwiftUIHost.exe\" '$name.exe'
+  Rename-Item \"\$folder\\$name\\SwiftUIHost.pri\" '$name.pri'
+  \$zip = \"\$out\\$name-Windows-\$arch.zip\"
+  tar.exe -a -c -f \$zip -C \$folder '$name'
+  if (\$LASTEXITCODE -ne 0) { exit 1 }
+  'dev-release-file: ' + \$zip
+}" || fail "the Windows release build failed (log: $OUT/remote-$CURRENT.log)"
     fi
   else
     package="\$HOME/$REMOTE_TREE/$(rel "$PACKAGE_DIR")"
