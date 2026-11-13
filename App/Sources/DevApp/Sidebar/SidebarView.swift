@@ -30,6 +30,9 @@ struct SidebarView: View {
   @Environment(ServerStore.self) private var servers
   /// The Storage tool's last scan: the Tools section sums it up.
   @Environment(StorageStore.self) private var storage
+  /// Workflows and agents' requests: the bottom bar's Approvals lists what of theirs waits for the reader.
+  @Environment(WorkflowStore.self) private var workflows
+  @Environment(AgentBridge.self) private var agents
   /// Which server the form sheet is adding or editing (nil = no sheet). Owned
   /// here so the + menu, the empty-state row and a row's Edit… all open the
   /// SAME sheet.
@@ -74,6 +77,7 @@ struct SidebarView: View {
           Button("Add Localization Server…", systemImage: "server.rack") { serverSheet = .add }
         }
         .kitHelp("Add", meta: "Add a project or a Localization Server", systemImage: "plus")
+      ApprovalsButton(model: model, workflows: workflows, agents: agents)
     }
     .kitSheet(item: $serverSheet) { sheet in
       switch sheet {

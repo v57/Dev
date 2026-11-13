@@ -67,6 +67,7 @@ struct ContentView: View {
     .environment(translation)
     .environment(screenshots)
     .environment(workflows)
+    .environment(agents)
     .navigationTitle(windowTitle)
     .navigationSubtitle(windowSubtitle)
     // The kit's rich title stands in for the window's.

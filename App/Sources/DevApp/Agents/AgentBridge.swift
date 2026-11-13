@@ -26,7 +26,8 @@ final class AgentBridge {
   }
 
   private(set) var pending: Pending?
-  @ObservationIgnored private var queue: [Pending] = []
+  /// The requests after the one on screen, oldest first (the sidebar's Approvals list shows them too).
+  private(set) var queue: [Pending] = []
   @ObservationIgnored private var observers: [Broadcast.Observation] = []
   @ObservationIgnored weak var workflows: WorkflowStore?
   @ObservationIgnored weak var screenshots: ScreenshotsStore?
@@ -72,20 +73,39 @@ final class AgentBridge {
         return
       }
     }
+    enqueue(request)
+  }
+
+  /// A request joins the queue; the first one waiting goes on screen.
+  func enqueue(_ request: Pending) {
     queue.append(request)
     if pending == nil { pending = queue.removeFirst() }
   }
+
+  /// Every request waiting for the reader: the one on screen first, then the queue.
+  var waiting: [Pending] { (pending.map { [$0] } ?? []) + queue }
 
   /// The reader's answer to the request on screen.
   func answer(_ approved: Bool) {
     guard let request = pending else { return }
     pending = nil
+    resolve(request, approved)
+    if !queue.isEmpty { pending = queue.removeFirst() }
+  }
+
+  /// The reader's answer to any waiting request, on screen or queued (the sidebar's Approvals list).
+  func answer(_ id: String, _ approved: Bool) {
+    if pending?.id == id { return answer(approved) }
+    guard let index = queue.firstIndex(where: { $0.id == id }) else { return }
+    resolve(queue.remove(at: index), approved)
+  }
+
+  private func resolve(_ request: Pending, _ approved: Bool) {
     if approved {
       if request.kind == "run" { startRun(request) } else { reply(request.id, "approved") }
     } else {
       reply(request.id, request.kind == "run" ? "error:The reader declined the run." : "denied")
     }
-    if !queue.isEmpty { pending = queue.removeFirst() }
   }
 
   /// The sidebar project and the workflow a run request names, as on disk now; nil after replying why not.

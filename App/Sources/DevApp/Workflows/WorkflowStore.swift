@@ -62,8 +62,23 @@ final class WorkflowStore {
   @ObservationIgnored private var tasks: [URL: Task<Void, Never>] = [:]
   @ObservationIgnored private var processes: [URL: [LineProcess]] = [:]
   @ObservationIgnored private var triggerTimer: Timer?
-  /// The project folders the triggers watch; set from the sidebar's projects.
-  @ObservationIgnored var watchedRoots: [URL] = []
+  /// The project folders the triggers watch; set from the sidebar's projects. Their workflow files load at once, so the
+  /// sidebar's Approvals counts the ones waiting before any tab opened (a project without files would only show the
+  /// defaults, which wait for nothing: those load when its tab asks).
+  @ObservationIgnored var watchedRoots: [URL] = [] {
+    didSet { reloadWorkflowFiles(onlyNew: true) }
+  }
+
+  /// Reads the workflow files of the watched projects that have `.dev/workflows` (all of them, or only those not read
+  /// yet): files changed in git or by an agent show up in the sidebar's Approvals.
+  func reloadWorkflowFiles(onlyNew: Bool = false) {
+    for root in watchedRoots where !onlyNew || workflows[root] == nil {
+      var isFolder: ObjCBool = false
+      if FileManager.default.fileExists(atPath: Workflow.folder(in: root).path, isDirectory: &isFolder), isFolder.boolValue {
+        workflows[root] = Workflow.load(in: root)
+      }
+    }
+  }
   /// The window's vault; set by ContentView.
   @ObservationIgnored var vault: Vault?
   /// The account each run in flight releases with (`VaultProjects.account(of:)`), by project folder.
@@ -103,6 +118,29 @@ final class WorkflowStore {
   func isApproved(_ workflow: Workflow, in root: URL) -> Bool {
     _ = approvalChanges
     return WorkflowApprovals.isApproved(workflow, in: root)
+  }
+
+  /// The workflows with a trigger that wait for the reader's approval (new, or changed since it was approved) in the
+  /// sidebar's projects, by project folder and name: their triggers start nothing until then. Only files on disk: a
+  /// project without `.dev/workflows` shows Dev's defaults, which nobody wrote yet.
+  var unapproved: [(root: URL, workflow: Workflow)] {
+    _ = approvalChanges
+    return Self.unapproved(in: workflows, roots: watchedRoots)
+  }
+
+  static func unapproved(in workflows: [URL: [Workflow]], roots: [URL]) -> [(root: URL, workflow: Workflow)] {
+    let roots = Set(roots.map(\.standardizedFileURL.path))
+    return workflows
+      .filter { roots.contains($0.key.standardizedFileURL.path) }
+      .sorted { $0.key.lastPathComponent.localizedStandardCompare($1.key.lastPathComponent) == .orderedAscending }
+      .flatMap { root, workflows in
+        workflows.filter {
+          $0.trigger.isSet && !WorkflowApprovals.isApproved($0, in: root)
+            && FileManager.default.fileExists(atPath: Workflow.url($0.id, in: root).path)
+        }
+        .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        .map { (root: root, workflow: $0) }
+      }
   }
 
   /// The reader approved the workflow's steps as shown: its triggers start runs, and agents may ask to run it.
