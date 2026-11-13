@@ -718,6 +718,10 @@ struct WorkflowsView: View {
     if let name = step.vmName, !vms.machines.contains(where: { $0.name == name }) {
       runners.append(KitSegment("\(name) (VM)", value: step.runner, systemImage: "desktopcomputer"))
     }
+    // A build machine over SSH, set in the workflow's file (`ssh:user@address:port`).
+    if step.sshHost != nil, step.kind == .release {
+      runners.append(KitSegment(step.runnerTitle, value: step.runner, systemImage: "network"))
+    }
     return runners
   }
 

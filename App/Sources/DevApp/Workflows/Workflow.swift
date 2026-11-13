@@ -60,8 +60,10 @@ nonisolated struct Workflow: Codable, Hashable, Identifiable, Sendable {
     /// For `.command`: what runs in the project folder.
     var command: String?
     /// `mac`, or `vm:<name>` for a UTM machine (commands, and release steps for Windows and Linux, which build
-    /// there and bring their packages back), or `hub` / `hub:<system>` (`hub:macos`, `hub:linux-arm64`) for a
-    /// command on the runners of the user's Hub (dev-runner), which run it at the pushed commit.
+    /// there and bring their packages back), `ssh:<user@address[:port]>` for another build machine release steps
+    /// reach over SSH (the x86_64 Linux container on this Mac: `ssh:v57@127.0.0.1:2225`), or `hub` /
+    /// `hub:<system>` (`hub:macos`, `hub:linux-arm64`) for a command on the runners of the user's Hub (dev-runner),
+    /// which run it at the pushed commit.
     var runner: String = "mac"
     /// Runs at the same time as the step before it.
     var parallel = false
@@ -83,11 +85,14 @@ nonisolated struct Workflow: Codable, Hashable, Identifiable, Sendable {
     /// The jobs it splits into on Hub runners.
     var jobCount: Int { hubRequirement == nil ? 1 : min(max(shards ?? 1, 1), 64) }
     var vmName: String? { runsOnVM ? String(runner.dropFirst(3)) : nil }
+    /// The build machine an `ssh:` runner names (`user@address[:port]`), passed to release.sh as `--host`.
+    var sshHost: String? { runner.hasPrefix("ssh:") && runner.count > 4 ? String(runner.dropFirst(4)) : nil }
 
     var releasePlatform: ReleasePlatform? { platform.flatMap(ReleasePlatform.init) }
 
     var runnerTitle: String {
       if let vmName { return String(localized: "\(vmName) (VM)") }
+      if let sshHost { return String(localized: "\(sshHost) (SSH)") }
       if let requirement = hubRequirement {
         let needs = requirement.summary
         let base = needs.isEmpty ? String(localized: "Hub runners") : String(localized: "Hub runners · \(needs)")
@@ -101,7 +106,7 @@ nonisolated struct Workflow: Codable, Hashable, Identifiable, Sendable {
       switch kind {
       case .release:
         let platform = platform.map { "--platform \($0) " } ?? ""
-        let host = vmName.map { "--host <\($0)> " } ?? ""
+        let host = vmName.map { "--host <\($0)> " } ?? sshHost.map { "--host \($0) " } ?? ""
         return "release.sh \(platform)\(host)\(releaseStep ?? "")"
       case .screenshots: return "release.sh screenshots, then the framing"
       case .command: return command ?? ""

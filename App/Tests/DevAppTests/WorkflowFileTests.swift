@@ -18,4 +18,20 @@ struct WorkflowFileTests {
     #expect(workflows.first?.trigger.isSet == false)
     #expect(workflows.first?.steps.first?.command == "Scripts/release-libssh2.sh")
   }
+
+  /// An `ssh:` runner is a build machine over SSH (the x86_64 Linux container): its release step passes the host as
+  /// it is, port included; a VM runner still names its UTM machine.
+  @Test func sshRunnerNamesItsHost() {
+    var step = Workflow.Step(
+      id: "archive-linux-x64", name: "Archive · Linux x64", kind: .release, releaseStep: "archive", platform: "linux",
+      runner: "ssh:v57@127.0.0.1:2225")
+    #expect(step.sshHost == "v57@127.0.0.1:2225")
+    #expect(step.vmName == nil)
+    #expect(step.commandLine == "release.sh --platform linux --host v57@127.0.0.1:2225 archive")
+    step.runner = "vm:Ubuntu"
+    #expect(step.sshHost == nil)
+    #expect(step.vmName == "Ubuntu")
+    step.runner = "ssh:"
+    #expect(step.sshHost == nil)
+  }
 }

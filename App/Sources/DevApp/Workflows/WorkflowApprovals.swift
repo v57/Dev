@@ -74,7 +74,7 @@ nonisolated enum WorkflowApprovals {
   /// The commands a workflow would run, one line per step, for the approval questions.
   static func summary(of workflow: Workflow) -> String {
     workflow.steps.map { step in
-      let runner = step.vmName.map { " (on \($0))" } ?? ""
+      let runner = (step.vmName ?? step.sshHost).map { " (on \($0))" } ?? ""
       return "\(step.name): \(step.commandLine)\(runner)"
     }.joined(separator: "; ")
   }

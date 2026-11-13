@@ -277,6 +277,9 @@ final class WorkflowStore {
         passed = await runOnHub(step, workflowID: workflowID, runID: runID, root: root)
       } else if let vmName = step.vmName {
         passed = await runOnVM(step, vmName: vmName, runID: runID, root: root)
+      } else if step.sshHost != nil {
+        setStep(root, step.id) { $0.note = String(localized: "An SSH build machine runs release steps only") }
+        passed = false
       } else {
         let process = LineProcess("/bin/bash", ["-lc", step.command ?? ""], directory: root)
         let requested = PublishRequest()
@@ -308,6 +311,9 @@ final class WorkflowStore {
     if let vmName = step.vmName {
       guard let target = await vmTarget(vmName, stepID: stepID, runID: runID, root: root) else { return false }
       arguments += ["--host", target.target]
+    } else if let host = step.sshHost {
+      // Another build machine over SSH (not a UTM machine): release.sh takes user@address:port as it is.
+      arguments += ["--host", host]
     }
     if let version { arguments += ["--version", version] }
     // The run's build number and commit, not the branch's as it is now: every step of the run agrees.
