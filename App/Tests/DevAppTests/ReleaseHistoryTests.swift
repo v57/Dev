@@ -91,6 +91,25 @@ import Testing
     #expect(VMStore.leasedAddress(of: "02:00:00:00:00:00", in: leases) == nil)
   }
 
+  /// A VM is reached by its Bonjour name once Dev learned it: the guest's `hostname` plus `.local`, plain labels only;
+  /// a name nobody answers doesn't resolve (alone this takes the 1-second wait, not getaddrinfo's 5).
+  @Test func aVMIsNamedByItsHostname() async {
+    #expect(VMStore.localName(forHostname: "WINUI-VM") == "WINUI-VM.local")
+    #expect(VMStore.localName(forHostname: "ubuntu-swift") == "ubuntu-swift.local")
+    #expect(VMStore.localName(forHostname: "") == nil)
+    #expect(VMStore.localName(forHostname: "-x") == nil)
+    #expect(VMStore.localName(forHostname: "a.b") == nil)
+    #expect(VMStore.localName(forHostname: "bad name") == nil)
+    #expect(await VMStore.resolves("localhost"))
+    #expect(await VMStore.resolves("no-such-dev-vm-\(UUID().uuidString.prefix(8)).local", within: 1) == false)
+  }
+
+  @Test func vmSettingsFromBeforeTheNameStillDecode() throws {
+    let old = try JSONDecoder().decode(VMSettings.self, from: Data(#"{"user":"v57","host":""}"#.utf8))
+    #expect(old.user == "v57")
+    #expect(old.localName == nil)
+  }
+
   @Test func platformKeysAreWrittenOnlyWhenSet() {
     var config = ReleaseConfig.parse("SCHEME=Markdown\nWINDOWS_PRODUCT=MarkdownWinUI\n# mine\n")
     #expect(config["WINDOWS_PRODUCT"] == "MarkdownWinUI")

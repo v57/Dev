@@ -6,6 +6,11 @@
 import Foundation
 import ComponentKit
 import Observation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 
 // MARK: - VirtualMachine
 
@@ -46,6 +51,11 @@ nonisolated struct VMSettings: Codable, Equatable, Sendable {
   /// Overrides the discovered address (a hostname or IP that resolves from this Mac).
   var host = ""
   var system: VirtualMachine.System?
+  /// The VM's own name on this Mac's network (`<hostname>.local`, answered over Bonjour: Windows does it itself,
+  /// Ubuntu through Avahi), learned the first time Dev reaches it and tried before looking for its address. It stays
+  /// when vmnet moves the VM to another subnet: after a restart, whichever VM or colima starts first gets
+  /// 192.168.64.x.
+  var localName: String?
 
   static func load(_ id: String) -> VMSettings {
     guard let data = UserDefaults.standard.data(forKey: "vm.\(id)"),
@@ -136,7 +146,7 @@ final class VMStore {
       return vm
     }
     for vm in machines where vm.status.isRunning && addresses[vm.id] == nil {
-      if let address = await findAddress(vm) { addresses[vm.id] = address }
+      _ = await address(of: vm)
     }
   }
 
@@ -170,15 +180,66 @@ final class VMStore {
 
   // MARK: - address
 
-  /// Where to SSH: the user's host, the guest agent's answer, or the address the
-  /// VM's MAC has in this Mac's ARP table (UTM's shared network).
+  /// Where to SSH: the user's host, the VM's `.local` name when it answers, else the guest agent's answer or the
+  /// address the VM's MAC has in this Mac's ARP table or DHCP leases (UTM's shared network), whose `.local` name is
+  /// then learned for next time.
   func address(of vm: VirtualMachine) async -> String? {
-    let settings = VMSettings.load(vm.id)
+    var settings = VMSettings.load(vm.id)
     if !settings.host.isEmpty { return settings.host }
     if let known = addresses[vm.id] { return known }
-    let found = await findAddress(vm)
+    if let name = settings.localName, await Self.resolves(name) {
+      addresses[vm.id] = name
+      return name
+    }
+    guard let found = await findAddress(vm) else { return nil }
+    let user = settings.user.isEmpty ? Self.sshUser(for: vm) : settings.user
+    if let name = await Self.localName(at: found, user: user) {
+      settings.localName = name
+      settings.save(vm.id)
+      addresses[vm.id] = name
+      return name
+    }
     addresses[vm.id] = found
     return found
+  }
+
+  /// The `.local` name the machine at `address` answers to: its `hostname` over SSH (a Linux shell and Windows'
+  /// OpenSSH both have it), kept only when the name resolves from this Mac. Nil while SSH isn't up yet.
+  nonisolated static func localName(at address: String, user: String) async -> String? {
+    let result = await LineProcess.run("/usr/bin/ssh", [
+      "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=accept-new",
+      "-o", "LogLevel=ERROR", "\(user)@\(address)", "hostname",
+    ])
+    guard result.status == 0,
+          let host = result.output.split(whereSeparator: \.isNewline).first?.trimmingCharacters(in: .whitespaces),
+          let name = localName(forHostname: host)
+    else { return nil }
+    return await resolves(name) ? name : nil
+  }
+
+  /// `WINUI-VM` → `WINUI-VM.local`; nil for anything that isn't a plain host label.
+  nonisolated static func localName(forHostname host: String) -> String? {
+    guard (1...63).contains(host.count), host.first != "-",
+          host.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") })
+    else { return nil }
+    return host + ".local"
+  }
+
+  /// Whether `name` resolves to an IPv4 address within `seconds` (a `.local` name goes out over Bonjour; a VM that
+  /// is off never answers, so the wait is bounded).
+  nonisolated static func resolves(_ name: String, within seconds: Double = 3) async -> Bool {
+    await withCheckedContinuation { continuation in
+      let answer = ResumeOnce(continuation)
+      DispatchQueue.global().async {
+        var hints = addrinfo()
+        hints.ai_family = AF_INET
+        var result: UnsafeMutablePointer<addrinfo>?
+        let status = getaddrinfo(name, nil, &hints, &result)
+        if let result { freeaddrinfo(result) }
+        answer.resume(status == 0)
+      }
+      DispatchQueue.global().asyncAfter(deadline: .now() + seconds) { answer.resume(false) }
+    }
   }
 
   func forgetAddress(of vm: VirtualMachine) { addresses[vm.id] = nil }
@@ -278,5 +339,21 @@ final class VMStore {
       }
     }
     return NSUserName()
+  }
+}
+
+/// Resumes a continuation with the first answer only (a lookup racing its timeout).
+private nonisolated final class ResumeOnce: @unchecked Sendable {
+  private let lock = NSLock()
+  private var continuation: CheckedContinuation<Bool, Never>?
+
+  init(_ continuation: CheckedContinuation<Bool, Never>) { self.continuation = continuation }
+
+  func resume(_ value: Bool) {
+    lock.lock()
+    let continuation = self.continuation
+    self.continuation = nil
+    lock.unlock()
+    continuation?.resume(returning: value)
   }
 }
