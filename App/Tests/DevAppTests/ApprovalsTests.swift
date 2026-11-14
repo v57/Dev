@@ -46,4 +46,23 @@ struct ApprovalsTests {
     // A project the sidebar no longer lists drops out.
     #expect(WorkflowStore.unapproved(in: loaded, roots: [bare]).isEmpty)
   }
+
+  /// Projects share workflow ids (`release`): each project's file is its own row.
+  @Test func sameWorkflowInTwoProjectsIsTwoRows() throws {
+    let roots = (0..<2).map {
+      URL(fileURLWithPath: NSTemporaryDirectory()).appending(path: "dev-approvals-\($0)-\(UUID().uuidString)")
+    }
+    defer { roots.forEach { try? FileManager.default.removeItem(at: $0) } }
+    let release = #"{"name": "Release", "trigger": {"tag": "v*"}, "steps": [{"id": "b", "name": "Build", "kind": "command", "command": "make"}]}"#
+    for root in roots {
+      try FileManager.default.createDirectory(at: Workflow.folder(in: root), withIntermediateDirectories: true)
+      try Data(release.utf8).write(to: Workflow.url("release", in: root))
+    }
+    let loaded = Dictionary(uniqueKeysWithValues: roots.map { ($0, Workflow.load(in: $0)) })
+    let rows = WorkflowStore.unapproved(in: loaded, roots: roots)
+    #expect(rows.count == 2)
+    #expect(Set(rows.map(\.id)).count == 2)
+    #expect(Workflow.isSaved("release", in: roots[0]))
+    #expect(!Workflow.isSaved("pull-request", in: roots[0]))
+  }
 }

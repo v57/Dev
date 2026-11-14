@@ -87,7 +87,7 @@ struct ApprovalsList: View {
                 Button("Publish") { workflows.answer(publishing, true) }.buttonStyle(.kitPrimary)
               }
             }
-            ForEach(unapproved, id: \.workflow.id.self) { item in
+            ForEach(unapproved) { item in
               ApprovalRow(
                 systemImage: "arrow.triangle.branch",
                 title: "\(item.workflow.name) in \(item.root.lastPathComponent)",

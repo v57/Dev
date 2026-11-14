@@ -123,12 +123,12 @@ final class WorkflowStore {
   /// The workflows with a trigger that wait for the reader's approval (new, or changed since it was approved) in the
   /// sidebar's projects, by project folder and name: their triggers start nothing until then. Only files on disk: a
   /// project without `.dev/workflows` shows Dev's defaults, which nobody wrote yet.
-  var unapproved: [(root: URL, workflow: Workflow)] {
+  var unapproved: [UnapprovedWorkflow] {
     _ = approvalChanges
     return Self.unapproved(in: workflows, roots: watchedRoots)
   }
 
-  static func unapproved(in workflows: [URL: [Workflow]], roots: [URL]) -> [(root: URL, workflow: Workflow)] {
+  static func unapproved(in workflows: [URL: [Workflow]], roots: [URL]) -> [UnapprovedWorkflow] {
     let roots = Set(roots.map(\.standardizedFileURL.path))
     return workflows
       .filter { roots.contains($0.key.standardizedFileURL.path) }
@@ -139,8 +139,16 @@ final class WorkflowStore {
             && FileManager.default.fileExists(atPath: Workflow.url($0.id, in: root).path)
         }
         .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
-        .map { (root: root, workflow: $0) }
+        .map { UnapprovedWorkflow(root: root, workflow: $0) }
       }
+  }
+
+  /// A workflow file waiting for approval, named by its project and id: projects share ids (`release`,
+  /// `pull-request`), so the id alone would show one project's row for all of them.
+  struct UnapprovedWorkflow: Identifiable {
+    let root: URL
+    let workflow: Workflow
+    var id: String { root.standardizedFileURL.path + "#" + workflow.id }
   }
 
   /// The reader approved the workflow's steps as shown: its triggers start runs, and agents may ask to run it.

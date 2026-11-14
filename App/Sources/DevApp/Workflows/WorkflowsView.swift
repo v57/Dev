@@ -374,8 +374,20 @@ struct WorkflowsView: View {
           .padding([.horizontal, .top], -KitMetrics.gutter)
           .padding(.bottom, 4)
         }
-        // A workflow from the repository or an agent starts on its own only once the reader approved its steps.
-        if workflow.trigger.isSet, !store.isApproved(workflow, in: root) {
+        // A workflow from the repository or an agent starts on its own only once the reader approved its steps. Dev's
+        // own suggestion (no file yet) asks nobody's approval: its trigger is simply off until the reader turns it on,
+        // and it isn't in the sidebar's Approvals.
+        if workflow.trigger.isSet, !store.isApproved(workflow, in: root), !Workflow.isSaved(workflow.id, in: root) {
+          Banner(
+            "\(workflow.trigger.summary) doesn't start this suggested workflow yet.",
+            message: "Dev suggests it from what the project has. Turn it on to let its trigger start it.",
+            systemImage: "lightbulb", hue: .gray
+          ) {
+            Button("Turn On") { store.approve(workflow, in: root) }
+          }
+          .padding([.horizontal, .top], -KitMetrics.gutter)
+          .padding(.bottom, 4)
+        } else if workflow.trigger.isSet, !store.isApproved(workflow, in: root) {
           Banner(
             "\(workflow.trigger.summary) is off until you approve this workflow.",
             message: "It came from the project's files or an agent. Check its steps below; a change to its file needs approving again.",

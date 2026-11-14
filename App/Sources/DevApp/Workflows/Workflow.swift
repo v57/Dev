@@ -155,6 +155,11 @@ nonisolated struct Workflow: Codable, Hashable, Identifiable, Sendable {
     try encoder.encode(self).write(to: Self.url(id, in: root), options: .atomic)
   }
 
+  /// Whether the workflow is a file in the project (not one of Dev's suggested defaults, which nobody wrote yet).
+  static func isSaved(_ id: String, in root: URL) -> Bool {
+    FileManager.default.fileExists(atPath: url(id, in: root).path)
+  }
+
   static func delete(_ id: String, in root: URL) {
     try? FileManager.default.removeItem(at: url(id, in: root))
   }
