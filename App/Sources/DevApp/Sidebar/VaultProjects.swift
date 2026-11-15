@@ -207,7 +207,7 @@ import VaultKit
     guard !LaunchOptions.isScreenshotMode, !folders.isEmpty else { return }
     let paths = folders.map(\.standardizedFileURL.path)
     vault.perform { store in
-      for path in paths { try store.addProject(path: path) }
+      try store.addProjects(paths.map { VaultProjectFolder(path: $0) })
       try store.arrangeProjects(paths, roots: roots.map(\.standardizedFileURL.path))
     }
   }

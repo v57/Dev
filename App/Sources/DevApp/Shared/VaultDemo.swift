@@ -31,7 +31,7 @@ enum VaultDemo {
     for index in arguments.indices.dropLast() where arguments[index] == "--add-folder" {
       let root = URL(fileURLWithPath: arguments[index + 1], isDirectory: true)
       let found = VaultProjectDiscovery.scan(root)
-      for repository in found.repositories { _ = try? store.addProject(path: repository.path) }
+      _ = try? store.addProjects(found.repositories.map { VaultProjectFolder(path: $0.path) })
       try? store.arrangeProjects(found.repositories.map(\.path), roots: [root.path])
     }
     try? store.refreshProjectKinds()
