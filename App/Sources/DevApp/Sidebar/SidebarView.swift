@@ -187,6 +187,9 @@ struct SidebarView: View {
     .rowMenu { project in
       if let row = layout.rows[project.id] { projectMenu(row) }
     }
+    .selectionMenu { projects in
+      pickedMenu(projects.compactMap { layout.rows[$0.id] })
+    }
     .removable(confirmsRemoveAll: false) { ids in
       var seen = Set<Int64>()
       let rows = ids.compactMap { layout.rows[$0] }.filter { seen.insert($0.id).inserted }
@@ -207,6 +210,30 @@ struct SidebarView: View {
         dropHintRow
       } else {
         Text("No projects match “\(search)”.").kitFont(.callout).foregroundStyle(.kitSecondary)
+      }
+    }
+  }
+
+  /// The menu of several picked projects, before Copy Paths: installing the apps among them.
+  @ViewBuilder
+  private func pickedMenu(_ rows: [SidebarProjectRow]) -> some View {
+    let roots = rows.compactMap(\.rootURL).filter { installs.canInstall($0) && installs.appName($0) != nil }
+    let waiting = roots.filter { root in
+      switch installs.phase(for: root) {
+      case .queued, .installing: true
+      default: false
+      }
+    }
+    let ready = roots.filter { !waiting.contains($0) }
+    if !ready.isEmpty {
+      Button(ready.count == 1 ? "Install \(installs.appName(ready[0]) ?? "") on This Mac" : "Install \(ready.count) Apps on This Mac", systemImage: "arrow.down.app") {
+        for root in ready { installs.install(root) }
+      }
+      .kitMenuPreview(ready.compactMap(installs.appName).joined(separator: ", "))
+    }
+    if !waiting.isEmpty {
+      Button("Cancel \(waiting.count) Installs", systemImage: "xmark.circle") {
+        for root in waiting { installs.cancel(root) }
       }
     }
   }
