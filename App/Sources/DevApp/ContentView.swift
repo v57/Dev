@@ -15,8 +15,9 @@ import VaultUI
 /// sidebar selection.
 ///
 /// A selected project gets the toolbar's tab control — Overview, Localization,
-/// App Icon, Screenshots, Workflows — and opens on Overview (or the tab it was
-/// last left on). With nothing selected, the pane is the welcome screen.
+/// App Icon, Screenshots, Workflows, Store Text — and opens on the tab the
+/// project before it showed (Overview at first). With nothing selected, the pane
+/// is the welcome screen.
 struct ContentView: View {
   @Environment(\.openSettings) private var openSettings
   /// A screenshot scene asks for Settings; the view opens it, since the environment's

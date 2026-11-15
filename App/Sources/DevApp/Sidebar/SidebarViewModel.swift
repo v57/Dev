@@ -136,11 +136,8 @@ final class SidebarViewModel {
   var selection: SidebarSelection? = nil {
     didSet {
       guard selection != oldValue else { return }
-      // A project opens on the tab it was last left on, Overview the first time.
-      if case .project(let id) = selection {
-        projectTool = lastTool[id] ?? .overview
-        noteOpened(id)
-      }
+      // Switching projects keeps the tab: Workflows stays Workflows, so projects compare side by side.
+      if case .project(let id) = selection { noteOpened(id) }
     }
   }
 
@@ -160,16 +157,9 @@ final class SidebarViewModel {
     UserDefaults.standard.set(openedAt, forKey: "ProjectsLastOpened")
   }
 
-  /// The tab shown for the SELECTED project. Drives the toolbar's tab control,
-  /// which only exists for a project.
-  var projectTool: DevTool = .overview {
-    didSet {
-      if case .project(let id) = selection { lastTool[id] = projectTool }
-    }
-  }
-
-  /// The tab each project was last left on, while the app runs.
-  @ObservationIgnored private var lastTool: [Int64: DevTool] = [:]
+  /// The tab shown for the SELECTED project, kept when another project is selected. Drives the toolbar's tab
+  /// control, which only exists for a project.
+  var projectTool: DevTool = .overview
 
   /// True while a project is the selection: the toolbar's tab control is
   /// visible only then.
