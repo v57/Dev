@@ -2,8 +2,9 @@ import Foundation
 import VaultKit
 
 /// The Projects section's tree for VaultUI's `VaultProjectsSection`: the vault's project tree (the groups made in
-/// Git, shared with the other v57 apps and Macs) cut down to Dev's projects, with the ones the vault doesn't list at
-/// the end of the top level, as projects of their own (`dev.project.<id>`). A search keeps the projects whose name
+/// Git, shared with the other v57 apps and Macs) cut down to Dev's projects, with the ones the vault doesn't list (a
+/// catalog without a folder, everything while no vault is set up) at the end of the top level, as projects of their
+/// own (`dev.project.<id>`). A search keeps the projects whose name
 /// matches and the groups that hold one.
 struct ProjectGroupsLayout {
   let tree: VaultProjectTree

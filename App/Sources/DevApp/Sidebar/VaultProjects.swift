@@ -6,14 +6,16 @@ import VaultKit
 /// for the others.
 ///
 /// A project removed in Dev stays in the other apps: Dev remembers it and doesn't bring it back. A project
-/// removed in Git leaves Dev too, unless Dev holds translation work for it.
+/// removed in Git leaves Dev too: Dev keeps the translation work it holds and lists the project again when its
+/// folder comes back. Dev lists the folders the vault has, as Git does, so a folder that's gone, or a link to a
+/// project listed under its own path, isn't listed twice.
 ///
 /// Dev lists only Xcode projects: the vault notes each project's kinds (`VaultProject.Kind`), and the others
 /// stay in the other apps (Settings ▸ General ▸ Show only Xcode projects).
 ///
 /// One per account (../Ideas/Accounts.md): a window lists the projects of the account it shows. Dev's own project
 /// list (`TranslationData`) holds every account's; an account's window lists the folders its vault has, and
-/// Personal's lists the rest, leaving out those only another account has.
+/// Personal's also lists the catalogs without a folder.
 @MainActor final class VaultProjects {
   /// Personal's: today's vault, and what screenshot mode and code outside a window use.
   static let shared = VaultProjects(vault: .shared)
@@ -93,11 +95,12 @@ import VaultKit
     /// The folders the other accounts' vaults have.
     var others: Set<String>
 
-    /// An account lists its own folders; Personal also lists those no account has (a catalog without a folder
-    /// too).
+    /// An account lists its own folders; Personal also lists a catalog without a folder, and everything while no
+    /// vault lists a folder on this Mac (none set up yet, screenshot runs).
     func lists(_ root: URL?) -> Bool {
       guard let path = root?.standardizedFileURL.path else { return isPersonal }
-      return own.contains(path) || (isPersonal && !others.contains(path))
+      if own.isEmpty, others.isEmpty { return isPersonal }
+      return own.contains(path)
     }
   }
 
