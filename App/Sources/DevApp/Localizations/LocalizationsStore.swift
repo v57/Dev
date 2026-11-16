@@ -611,7 +611,7 @@ final class LocalizationsStore {
   #if DEBUG
     /// Debug builds take commands without a click: post the distributed notification `dev.v57.dev.localizations`
     /// with `scan [app…]`, `translate [source…]`, `build`, `cancel`, `include <app> yes|no`, `addapp <folder>`,
-    /// `describe <source> <phrase…>`, `importdb <file>`, `languages <code…>`, `reasoning <effort|default>`,
+    /// `describe <source> <phrase…>`, `importdb <file>`, `languages <code…>`, `reasoning <effort|default|provider>`,
     /// `compare <source> <count> <language,…> <effort,…>` (`LocalizationsCompare`) or
     /// `dump` (the state, plan and progress to /tmp/dev-localizations.txt).
     func listenForDebugCommands(shell: Translation.Shell) async {
@@ -632,10 +632,11 @@ final class LocalizationsStore {
           // compare <source> <count> <language,…> <effort,…>: one request per language and effort, nothing written.
           if rest.count == 4, let count = Int(rest[1]) { compare(rest[0], count: count, languages: rest[2].split(separator: ",").map(String.init), efforts: rest[3].split(separator: ",").map(String.init), shell: shell) }
         case "reasoning":
-          // The translation model's reasoning effort, as Settings sets it; `default` clears it.
+          // The translation model's reasoning effort, as Settings sets it; `default` clears it (low),
+          // `provider` sends none.
           let effort = rest.first.flatMap { $0 == "default" ? nil : $0 }
           UserDefaults.standard.set(effort, forKey: ModelSettings.Key.reasoningEffort)
-          say("Reasoning effort: \(effort ?? "default")")
+          say("Reasoning effort: \(ModelSettings.reasoningEffort ?? "provider default")")
         case "languages":
           state.languages = rest
           persist()

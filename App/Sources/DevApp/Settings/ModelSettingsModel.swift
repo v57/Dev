@@ -34,7 +34,7 @@ final class ModelSettingsModel {
   var wire: Wire {
     didSet { defaults.set(wire.rawValue, forKey: ModelSettings.Key.wire) }
   }
-  /// "" for the provider's default.
+  /// The stored choice: an effort, or `ModelSettings.providerDefault` to send none.
   var reasoningEffort: String {
     didSet { defaults.set(reasoningEffort, forKey: ModelSettings.Key.reasoningEffort) }
   }
@@ -84,7 +84,7 @@ final class ModelSettingsModel {
     model = ModelSettings.model ?? ""
     baseURL = ModelSettings.baseURL ?? ""
     wire = ModelSettings.wire ?? .chatCompletions
-    reasoningEffort = ModelSettings.reasoningEffort ?? ""
+    reasoningEffort = ModelSettings.reasoningEffort ?? ModelSettings.providerDefault
     refreshKeyState()
   }
 

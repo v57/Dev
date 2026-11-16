@@ -206,4 +206,11 @@ import Testing
     #expect(memory.effort("high", for: key) == "high")
     #expect(memory.effort("minimal", for: "other|model") == "minimal")
   }
+
+  @Test func translationReasonsLowUnlessTheUserChose() {
+    #expect(ModelSettings.reasoningEffort(stored: nil) == "low")
+    #expect(ModelSettings.reasoningEffort(stored: "") == "low")
+    #expect(ModelSettings.reasoningEffort(stored: "high") == "high")
+    #expect(ModelSettings.reasoningEffort(stored: ModelSettings.providerDefault) == nil)
+  }
 }

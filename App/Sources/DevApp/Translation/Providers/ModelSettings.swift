@@ -34,9 +34,28 @@ nonisolated enum ModelSettings {
 
   /// How hard a reasoning model thinks before it answers (`none`, `minimal`, `low`, `medium`,
   /// `high`), sent as the wire's own field; nil sends nothing and the provider decides.
-  /// Translation needs little: a low effort is most of a reasoning model's answer for a
-  /// fraction of its tokens.
-  static var reasoningEffort: String? { nonEmpty(UserDefaults.standard.string(forKey: Key.reasoningEffort)) }
+  static var reasoningEffort: String? {
+    reasoningEffort(stored: UserDefaults.standard.string(forKey: Key.reasoningEffort))
+  }
+
+  /// The effort sent for a stored choice: `low` while the user has chosen none, nothing for
+  /// `provider`. Low is the default because thinking longer does not make a translation
+  /// better — published studies find it flat or worse, and Dev's own comparison (60 strings,
+  /// 10 languages, 2026-11-16) found low and high as far apart as two runs at the same
+  /// effort — while a provider's own default is often its highest effort, at about three
+  /// times the tokens. A provider that refuses `low` gets nothing after one refusal
+  /// (`ChatStream.EffortMemory`).
+  static func reasoningEffort(stored: String?) -> String? {
+    switch nonEmpty(stored) {
+    case nil: defaultReasoningEffort
+    case providerDefault?: nil
+    case let effort?: effort
+    }
+  }
+
+  static let defaultReasoningEffort = "low"
+  /// The stored choice that sends no effort at all.
+  static let providerDefault = "provider"
 
   static var preset: ProviderPreset? { providerID.flatMap(ProviderPreset.preset(id:)) }
 

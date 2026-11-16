@@ -244,12 +244,16 @@ struct TranslationSettingsView: View {
         }
       }
       FormRow(
-        "Reasoning", help: "How hard a reasoning model thinks before it answers. Low is plenty for translation; Default sends nothing.",
+        "Reasoning",
+        help: "How hard a reasoning model thinks before it answers. Low is the default: thinking longer doesn't make translations better and costs about three times the tokens. Provider Default lets the provider choose.",
         systemImage: "brain", hue: .purple
       ) {
         KitPicker(
           "Reasoning", selection: $model.reasoningEffort,
-          options: [("Default", ""), ("None", "none"), ("Minimal", "minimal"), ("Low", "low"), ("Medium", "medium"), ("High", "high")])
+          options: [
+            ("None", "none"), ("Minimal", "minimal"), ("Low", "low"), ("Medium", "medium"), ("High", "high"),
+            ("Provider Default", ModelSettings.providerDefault),
+          ])
       }
     }
   }
