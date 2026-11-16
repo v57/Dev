@@ -39,6 +39,8 @@ enum Translation {
     /// model drifts and where a cut reply loses most, and the answer is what costs most.
     /// Estimated per item from the target script (`Languages.Script`).
     static let outputTokens = 3_000
+    /// Batches in flight at once (`Runner.runBatches`).
+    static let parallelBatches = 4
     /// Items per language batch at most, however short they are.
     static let batchItems = 120
     /// Characters a row batch carries: every row's English and all of its translations.

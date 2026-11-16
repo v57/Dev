@@ -85,6 +85,9 @@ extension Translation {
     /// The keys whose values the column pass wrote in this run: the rows the row pass then
     /// reviews. A row nothing changed in was reviewed when it last changed.
     var touched: Set<String> = []
+    /// The batches that have landed (applied or failed): what a resumed run skips, and what
+    /// moves the cursor, with several batches in flight at once.
+    var finishedBatches: Set<String> = []
 
     init(stage: Stage, project: Project) {
       self.stage = stage
@@ -657,14 +660,15 @@ extension Translation {
     }
 
     /// The plan, one operation at a time. Preparation is a single pass with no model
-    /// call; every other operation scans its batches and runs them sequentially —
-    /// within a language the batches are strictly sequential, because a write-back
-    /// changes the column the next batch's register sample is read from (4.5).
+    /// call; every other operation scans its batches and runs several at once
+    /// (`runBatches`).
     private func plan(_ run: Run) async {
       let isFresh = run.startedAt == nil
       if isFresh {
         run.startedAt = .now
         run.tally = Run.Tally()
+        run.touched = []
+        run.finishedBatches = []
         // The telemetry is the client's, and a run's numbers are its own (5.7).
         router.resetTelemetry()
         indexRows(run)
@@ -722,32 +726,75 @@ extension Translation {
           try scan(operation, into: run)
         }
         run.state = .running
-        let model = RunProgress.model
-        while run.batchIndex < run.batches.count {
-          try Task.checkCancellation()
-          let batch = run.batches[run.batchIndex]
-          run.progress?.begin(RunProgress.stage(for: batch, model: model))
-          do {
-            try await perform(batch, in: run)
-          } catch is CancellationError {
-            throw CancellationError()
-          } catch {
-            markFailed(batch, error: error, in: run)
-            // An unconfigured provider is not a per-batch condition: every later
-            // batch would fail the same way, so the run stops and reports instead of
-            // spending a request per batch to hear the same answer.
-            if let backend = error as? BackendError, case .notConfigured = backend {
-              // Not a batch that took its time: nothing for the history to learn from.
-              run.progress?.cancel()
-              return
-            }
-          }
-          run.tally.batchesDone += 1
-          run.batchIndex += 1
-          try await checkpoint(run)
+        do {
+          try await runBatches(run)
+        } catch is StopRun {
+          // Not a batch that took its time: nothing for the history to learn from.
+          run.progress?.cancel()
+          return
         }
         run.operationIndex += 1
       }
+    }
+
+    /// Thrown when a batch's failure is every batch's: the run stops instead of spending a
+    /// request per batch to hear the same answer.
+    private struct StopRun: Error {}
+
+    /// How many batches are in flight at once. The provider's per-minute budget still paces
+    /// the sends (`Router.admit`); a local server answers one request at a time anyway.
+    private var parallelBatches: Int {
+      ModelSettings.preset?.group == .local ? 1 : Limits.parallelBatches
+    }
+
+    /// The operation's batches from the cursor on, up to `parallelBatches` at a time. A batch
+    /// that finished on an earlier execution (a resumed run) is not sent again, and the cursor
+    /// is the first batch not yet finished, so a pause resumes at what is left.
+    ///
+    /// Each start begins a progress stage: with several in flight, a stage lasts until the next
+    /// start, which is what the history should learn — how fast the run goes, not one call's
+    /// latency.
+    private func runBatches(_ run: Run) async throws {
+      let model = RunProgress.model
+      let width = parallelBatches
+      var next = run.batchIndex
+      try await withThrowingTaskGroup(of: Void.self) { group in
+        var running = 0
+        while true {
+          while running < width, next < run.batches.count {
+            try Task.checkCancellation()
+            let batch = run.batches[next]
+            next += 1
+            guard !run.finishedBatches.contains(batch.id) else { continue }
+            run.progress?.begin(RunProgress.stage(for: batch, model: model))
+            running += 1
+            let id = batch.id
+            group.addTask { @MainActor in try await self.runBatch(id, in: run) }
+          }
+          guard running > 0 else { break }
+          try await group.next()
+          running -= 1
+          while run.batchIndex < run.batches.count, run.finishedBatches.contains(run.batches[run.batchIndex].id) {
+            run.batchIndex += 1
+          }
+          try await checkpoint(run)
+        }
+      }
+    }
+
+    /// One batch, its failure kept on the batch.
+    private func runBatch(_ id: String, in run: Run) async throws {
+      guard let batch = run.batches.first(where: { $0.id == id }) else { return }
+      do {
+        try await perform(batch, in: run)
+      } catch is CancellationError {
+        throw CancellationError()
+      } catch {
+        markFailed(batch, error: error, in: run)
+        if let backend = error as? BackendError, case .notConfigured = backend { throw StopRun() }
+      }
+      run.finishedBatches.insert(id)
+      run.tally.batchesDone += 1
     }
 
     /// Preparation: one pass, NO model call, before any batch, so every later
@@ -1710,7 +1757,8 @@ extension Translation {
         // saved and this row is reported failed. Rolling the context back here would take the
         // batch's pending rows with it while the page still shows them as landed, so what is
         // pending is committed instead, best effort.
-        if !saving, pendingWrites {
+        // Other batches in flight may have rows pending too, and a rollback would take them.
+        if pendingWrites {
           try? store.save()
           pendingWrites = false
         } else {
