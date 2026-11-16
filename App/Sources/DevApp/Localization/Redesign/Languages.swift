@@ -11,7 +11,7 @@
 import Foundation
 
 extension Translation {
-  enum Languages {
+  nonisolated enum Languages {
     /// The language's English name ("German", "Portuguese (Portugal)"), or the code.
     static func name(of code: String) -> String {
       Locale(identifier: "en_US").localizedString(forIdentifier: code) ?? code

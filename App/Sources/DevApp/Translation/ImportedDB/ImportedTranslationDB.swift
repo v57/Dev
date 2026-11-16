@@ -329,7 +329,7 @@ final class ImportedTranslationDB {
     return ImportedDBLanguage.hit(
       in: rows,
       forCatalogLanguage: language,
-      appRowCounts: stats?.apps ?? [:])
+      appRowCounts: stats?.apps ?? [:], source: source)
   }
 }
 

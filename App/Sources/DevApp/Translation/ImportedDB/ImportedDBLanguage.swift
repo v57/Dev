@@ -70,19 +70,29 @@ enum ImportedDBLanguage {
     return out
   }
 
-  /// Picks the best translation for a catalog language among the rows of one
-  /// source text. Prefers the highest-priority spelling rank that has rows;
-  /// within it, the target the most distinct apps agree on; ties fall to row
-  /// count, then the target text itself (deterministic). `appRowCounts`
-  /// (whole-DB per-app totals, when the background scan finished) breaks
-  /// same-app-count ties by app popularity; without it, app names decide.
+  /// Picks the translation for a catalog language among the rows of one source
+  /// text, or nil when the database cannot say which one is meant. Prefers the
+  /// highest-priority spelling rank that has usable rows; within it, the target
+  /// the most distinct apps agree on, and only when it is ahead: a source with
+  /// several targets and no agreement between them is AMBIGUOUS ("Audio" as
+  /// sound in one app and as headphones in another, "OK" as an answer and as a
+  /// rating), and no tie-break between them reads the meaning, so the slot is
+  /// left to the model. The database keeps one row per (source, language,
+  /// target), which makes such ties the common case. A target that is not a
+  /// translation at all (`usable`) never counts. `appRowCounts` (whole-DB
+  /// per-app totals, when the background scan finished) only picks the app shown
+  /// for the winner. `source` is the English, for the usability check.
   nonisolated static func hit(
     in rows: [ImportedDBRow],
     forCatalogLanguage code: String,
-    appRowCounts: [String: Int64]
+    appRowCounts: [String: Int64],
+    source: String? = nil
   ) -> ImportedDBHit? {
     for spelling in candidates(for: code) {
-      let matching = rows.filter { $0.language == spelling && !$0.target.isBlankOrEmpty }
+      let matching = rows.filter {
+        $0.language == spelling && !$0.target.isBlankOrEmpty
+          && usable($0.target, source: source, language: code)
+      }
       guard !matching.isEmpty else { continue }
 
       // Group by target: how many distinct apps (and total rows) back each.
@@ -93,13 +103,12 @@ enum ImportedDBLanguage {
         group.rows += 1
         byTarget[row.target] = group
       }
-      let best = byTarget.max { lhs, rhs in
-        let l = lhs.value
-        let r = rhs.value
-        if l.apps.count != r.apps.count { return l.apps.count < r.apps.count }
-        if l.rows != r.rows { return l.rows < r.rows }
-        return lhs.key > rhs.key
-      }!
+      let ranked = byTarget.sorted { lhs, rhs in
+        if lhs.value.apps.count != rhs.value.apps.count { return lhs.value.apps.count > rhs.value.apps.count }
+        return lhs.key < rhs.key
+      }
+      let best = ranked[0]
+      if ranked.count > 1, ranked[1].value.apps.count == best.value.apps.count { return nil }
       let app = bestApp(in: matching, target: best.key, appRowCounts: appRowCounts)
       return ImportedDBHit(
         value: best.key,
@@ -108,6 +117,32 @@ enum ImportedDBLanguage {
         matchedLanguage: spelling)
     }
     return nil
+  }
+
+  /// Whether a target is a translation at all: not a string-table identifier
+  /// (`ACTION_CANCEL`), not shouted when the English is not (`ABBRECHEN` for
+  /// "Cancel"), without a Windows menu accelerator (`キャンセル(C)`, `&Open`), and
+  /// written in the language's own script when that is not Latin (`Cancelar`
+  /// filed under Russian). A target equal to the English is a name kept as is.
+  nonisolated static func usable(_ target: String, source: String?, language: String) -> Bool {
+    let text = target.trimmingCharacters(in: .whitespaces)
+    if let source, text == source { return true }
+    let english = source ?? ""
+    if text.contains("_"), !text.contains(" "), !english.contains("_") { return false }
+    let cased = text.unicodeScalars.filter { CharacterSet.uppercaseLetters.contains($0) || CharacterSet.lowercaseLetters.contains($0) }
+    if cased.count >= 2, cased.allSatisfy({ CharacterSet.uppercaseLetters.contains($0) }),
+      english.unicodeScalars.contains(where: { CharacterSet.lowercaseLetters.contains($0) })
+    {
+      return false
+    }
+    if text.range(of: #"\(&?[A-Za-z0-9]\)$"#, options: .regularExpression) != nil, !english.hasSuffix(")") { return false }
+    if text.range(of: #"&\p{L}"#, options: .regularExpression) != nil, !english.contains("&") { return false }
+    let script = Translation.Languages.script(of: language)
+    if !script.ranges.isEmpty {
+      let letters = text.unicodeScalars.filter { CharacterSet.letters.contains($0) }
+      if !letters.isEmpty, !letters.contains(where: script.contains) { return false }
+    }
+    return true
   }
 
   /// The app to show for a winning target: the one carrying the most of that

@@ -242,7 +242,7 @@ extension Translation {
           hit = ImportedDBLanguage.hit(
             in: try database.rows(forSource: source),
             forCatalogLanguage: language,
-            appRowCounts: appRowCounts)
+            appRowCounts: appRowCounts, source: source)
           picks[source] = hit
         }
         guard let hit else { continue }

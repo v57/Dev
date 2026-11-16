@@ -245,7 +245,8 @@ extension Translation {
     ///
     /// Only a slot with nothing in it is resolved: a value the app already holds is
     /// either the human's own (`.verified`) or machine output this project produced,
-    /// and a shipped translation does not get to replace either.
+    /// and a shipped translation does not get to replace either. An `.imported` value the
+    /// database no longer gives is emptied, so a bad pick does not outlive the picker's fix.
     private func applyImported() async throws {
       // The lookups are SQLite reads of the imported file, one per distinct source text per
       // language — off the main actor, over the rows as they are now.
@@ -259,8 +260,19 @@ extension Translation {
         }
       }.value
       for (language, resolved) in lookups {
-        guard !resolved.isEmpty else { continue }
         for index in project.data.indices {
+          // A value an earlier pick wrote that the database no longer gives (the picker has
+          // since learned to refuse junk and ambiguity) is taken back: the slot is empty
+          // again, and the next run translates it.
+          if let slot = project.data[index].targets.firstIndex(where: { $0.language == language }),
+            project.data[index].targets[slot].status == .imported,
+            case .value(let held) = project.data[index].targets[slot].target,
+            resolved[project.data[index].key] != held
+          {
+            project.data[index].targets[slot].target = .empty
+            project.data[index].targets[slot].status = .needsTranslate
+            continue
+          }
           guard let value = resolved[project.data[index].key],
             let slot = project.data[index].targets.firstIndex(where: { $0.language == language }),
             project.data[index].targets[slot].target.isEmpty,
