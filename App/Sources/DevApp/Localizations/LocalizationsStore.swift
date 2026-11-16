@@ -715,8 +715,12 @@ final class LocalizationsTranslator {
     var cachedTokens = 0
     var completionTokens = 0
     var seconds = 0.0
+    /// The row pass: values it read across the languages, and how many it corrected.
+    var checked = 0
+    var corrected = 0
     var description: String {
       var text = "\(done)/\(items) translated" + (failures > 0 ? ", \(failures) failed batch(es)" : "")
+      if checked > 0 { text += ", \(corrected) of \(checked) corrected by row" }
       guard requests > 0 else { return text }
       let cached = promptTokens > 0 ? cachedTokens * 100 / promptTokens : 0
       text += "; \(requests) requests, \(promptTokens) tokens in (\(cached)% cached), \(completionTokens) out"
@@ -790,10 +794,13 @@ final class LocalizationsTranslator {
       throw Failure.open(failure)
     }
     let tally = run?.tally ?? Translation.Run.Tally()
+    let checked = run?.batches.filter { $0.stage == .horizontal }.reduce(0) { $0 + $1.items.count } ?? 0
+    let corrected = tally.byStage[.horizontal] ?? 0
     return Outcome(
-      items: tally.items, done: tally.itemsDone, failures: run?.failures.count ?? 0,
+      items: tally.items - checked, done: tally.itemsDone - corrected, failures: run?.failures.count ?? 0,
       changed: tally.itemsDone > 0 || !missing.isEmpty, requests: tally.requests, promptTokens: tally.promptTokens,
       cachedTokens: tally.cachedTokens, completionTokens: tally.completionTokens,
-      seconds: run.flatMap { run in run.startedAt.map { (run.finishedAt ?? .now).timeIntervalSince($0) } } ?? 0)
+      seconds: run.flatMap { run in run.startedAt.map { (run.finishedAt ?? .now).timeIntervalSince($0) } } ?? 0,
+      checked: checked, corrected: corrected)
   }
 }
