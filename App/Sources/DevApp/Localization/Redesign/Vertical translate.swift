@@ -52,6 +52,23 @@ extension Translation {
       // that ordinal, and a paused run's cursor counts those batches (5.6) — so it
       // may not depend on a Dictionary's iteration order. The items INSIDE a group
       // stay in catalog order, which is the order they were appended in.
+      // Strings of one source file are one screen, so a batch carries them together, in
+      // the order the file writes them; a key with no known file follows in catalog order.
+      let locations = project.sourceLocations
+      if !locations.isEmpty {
+        for language in Array(byLanguages.keys) {
+          let items = byLanguages[language]?.items ?? []
+          byLanguages[language]?.items = items.enumerated().sorted { a, b in
+            switch (locations[a.element.key], locations[b.element.key]) {
+            case let (left?, right?):
+              return left.file == right.file ? left.line < right.line : left.file < right.file
+            case (.some, nil): return true
+            case (nil, .some): return false
+            case (nil, nil): return a.offset < b.offset
+            }
+          }.map(\.element)
+        }
+      }
       self.operations = byLanguages.keys.sorted().flatMap { byLanguages[$0]?.split() ?? [] }
     }
     struct Operations {

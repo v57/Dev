@@ -189,12 +189,25 @@ extension Translation {
     /// project's own initializer.
     func open(catalog: StringCatalog, from url: URL) async throws {
       catalogURL = url
+      // The code the catalog's strings come from: the checkout it lives in. A caller that
+      // knows better (Translations: the source's own checkout) replaces it.
+      if project.sourceRoots.isEmpty, let root = Self.checkout(of: url) { project.sourceRoots = [root] }
       try await project.loadData(catalog: catalog)
       try await applyImported()
       Task { await project.loadJournal() }
       cursors = Run.plan(for: .vertical).reduce(into: [:]) { found, stage in
         found[stage] = try? store.cursor(for: stage, project: project.id)
       }
+    }
+
+    /// The git checkout a file is in, nil when it is in none.
+    nonisolated static func checkout(of file: URL) -> URL? {
+      var folder = file.deletingLastPathComponent().standardizedFileURL
+      while folder.path != "/" {
+        if FileManager.default.fileExists(atPath: folder.appendingPathComponent(".git").path) { return folder }
+        folder = folder.deletingLastPathComponent()
+      }
+      return nil
     }
 
     /// The file this session's catalog lives in, for the surfaces that have to NAME what a Save

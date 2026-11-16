@@ -304,6 +304,12 @@ final class LocalizationsStore {
   }
 
   /// What the model is told about a source (`LocalizationsAbout`).
+  /// The checkouts a source's code is in: where a run finds the file each key is written in.
+  func sourceCode(_ source: String) -> [URL] {
+    guard let found = plan.sources.first(where: { $0.name == source }), !found.repo.isEmpty else { return [] }
+    return [URL(fileURLWithPath: found.repo)]
+  }
+
   func about(_ source: String) -> [String] {
     LocalizationsAbout.lines(for: source, in: plan, descriptions: state.descriptions ?? [:])
   }
@@ -521,7 +527,7 @@ final class LocalizationsStore {
         do {
           let outcome = try await translator.translate(
             catalog: LocalizationsRepo.catalog(name, in: repoURL), source: name, languages: languages,
-            about: about(name))
+            about: about(name), code: sourceCode(name))
           say("\(name): \(outcome)")
           if outcome.changed { note(name, "translated into \(languages.joined(separator: ", "))") }
           done += 1
@@ -718,7 +724,9 @@ final class LocalizationsTranslator {
 
   /// `about`: what the source is, for the model (`LocalizationsStore.about`), kept as the `About:` lines of the
   /// source's project rules.
-  func translate(catalog url: URL, source: String, languages: [String], about: [String] = []) async throws -> Outcome {
+  func translate(
+    catalog url: URL, source: String, languages: [String], about: [String] = [], code: [URL] = []
+  ) async throws -> Outcome {
     let data = TranslationData.shared
     await data.start()
     // The source's own translation project, named so it reads apart from the app project of the same name.
@@ -749,6 +757,8 @@ final class LocalizationsTranslator {
     // Written before the run, so its prompts carry them. A changed line marks the source's translations stale, like any
     // project rule.
     workspace.project.context.replaceLines(prefixed: LocalizationsStore.aboutPrefix, with: about)
+    // The catalog lives in the Localizations repository; its strings are written in the source's own checkout.
+    if !code.isEmpty { workspace.project.sourceRoots = code }
     // A source with nothing left to translate isn't run: a run ends in the row pass, which sends every row again
     // whatever its state (Translate by row), and over a finished source that costs hours and changes nothing.
     try workspace.project.loadData()

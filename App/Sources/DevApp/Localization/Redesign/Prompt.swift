@@ -38,7 +38,8 @@ extension Translation {
       languageRequest(
         language: language, items: items, shared: sharedBlocks(project: project),
         style: style(language: language, project: project),
-        glossary: registerSample(language: language, project: project, excluding: Set(items.map(\.key))))
+        glossary: glossary(language: language, items: items, project: project),
+        keep: keep(items))
     }
 
     /// The language batch from its parts, with no project: what the design preview and the
@@ -137,7 +138,12 @@ extension Translation {
     /// The ITEMS lines of a language batch, in batch order.
     static func itemLines(_ items: [Run.Item], language: String) -> String {
       var lines: [String] = []
+      var file = ""
       for (index, item) in items.enumerated() {
+        if !item.file.isEmpty, item.file != file {
+          lines.append("# \(item.file)")
+        }
+        file = item.file
         switch item.payloadSource {
         case .value(let text):
           lines.append("\(index)\t\(escaped(text))")
@@ -219,31 +225,101 @@ extension Translation {
       return written.isEmpty ? StyleRules.rules(for: language) : written
     }
 
-    /// What this project already ships in one language, as `English = translation` lines:
-    /// values a human settled (`.verified`, `.imported`) first, then the machine's own.
-    /// Recomputed per batch because a write-back changes the column (4.5); the batch's own
-    /// rows are left out, since they are what is being asked.
-    private static func registerSample(language: String, project: Project, excluding keys: Set<String>) -> [String] {
-      var settled: [String] = []
-      var machine: [String] = []
-      for row in project.data where !keys.contains(row.key) {
-        guard let slot = row.target(language), !slot.target.isEmpty else { continue }
-        let source = row.content.catalogValue
-        let value = slot.target.catalogValue
-        guard !value.isEmpty, value != source else { continue }
-        let line = escaped(clamp("\(source) = \(value)", to: Limits.neighborCharacters))
+    /// The terms of this batch the project — or a human in any project — already
+    /// translated, as `English = translation` lines: a short string elsewhere in the
+    /// project (up to `glossaryWords` words) whose every word is in the batch, and the
+    /// gold translation memory holds for the batch's short phrases. Settled values come
+    /// first, the machine's own after; the batch's own rows are left out, since they are
+    /// what is being asked. Recomputed per batch because a write-back changes the column.
+    static func glossary(language: String, items: [Run.Item], project: Project) -> [String] {
+      let keys = Set(items.map(\.key))
+      let texts = items.map { everything($0.payloadSource) }
+      let words = Set(texts.flatMap(Self.words))
+      var settled: [(String, String)] = []
+      var machine: [(String, String)] = []
+      for row in project.data where row.isCatalogRow && !keys.contains(row.key) {
+        guard case .value(let source) = row.content, (1...glossaryWords).contains(Self.words(source).count),
+          source.count <= 40, Self.words(source).allSatisfy(words.contains),
+          let slot = row.target(language), case .value(let value) = slot.target, !value.isEmpty, value != source
+        else { continue }
         switch slot.status {
-        case .verified, .imported: settled.append(line)
-        case .stale, .translated, .needsTranslate, .ignore: machine.append(line)
+        case .verified, .imported: settled.append((source, value))
+        case .translated: machine.append((source, value))
+        case .stale, .needsTranslate, .ignore: break
         }
       }
-      var seen = Set<String>()
-      var kept: [String] = []
-      for line in settled + machine where seen.insert(line).inserted {
-        kept.append(line)
-        if kept.count == Limits.neighbors { break }
+      // Gold memory for the batch's short phrases, from any project.
+      var remembered: [(String, String)] = []
+      let memory = Memory(project: project)
+      var asked = Set<String>()
+      for phrase in texts.flatMap({ phrases(in: $0) }) where asked.count < 400 {
+        guard asked.insert(phrase).inserted,
+          let entry = try? memory.resolve(source: phrase, language: language), entry.grade == .gold,
+          !entry.value.isEmpty, entry.value != phrase
+        else { continue }
+        remembered.append((phrase, entry.value))
       }
-      return kept
+      var seen = Set<String>()
+      var lines: [String] = []
+      for (source, value) in settled + remembered + machine where seen.insert(source.lowercased()).inserted {
+        lines.append(escaped("\(source) = \(value)"))
+        if lines.count == Limits.glossary { break }
+      }
+      return lines
+    }
+
+    /// Up to this many words make a glossary term.
+    static let glossaryWords = 3
+
+    /// The lowercased words of a text, placeholders left out.
+    static func words(_ text: String) -> [String] {
+      text.split { !$0.isLetter && $0 != "'" }.map { $0.lowercased() }.filter { $0.count > 1 || $0 == "a" }
+    }
+
+    /// The phrases of one or two words in a text that read as a term (`Open Project`,
+    /// `Settings`): a run of letters, each word starting uppercase or the whole text short.
+    static func phrases(in text: String) -> [String] {
+      let tokens = text.split { !$0.isLetter }.map(String.init)
+      guard !tokens.isEmpty else { return [] }
+      var found: [String] = []
+      for (index, token) in tokens.enumerated() where token.first?.isUppercase == true {
+        found.append(token)
+        if index + 1 < tokens.count, tokens[index + 1].first?.isUppercase == true {
+          found.append(token + " " + tokens[index + 1])
+        }
+      }
+      return found
+    }
+
+    /// The names a batch carries that stay as written in every language: mixed-case words
+    /// (`iCloud`, `GitHub`, `macOS`) and acronyms (`SSH`, `URLs`), from the batch's English.
+    static func keep(_ items: [Run.Item]) -> [String] {
+      var found = Set<String>()
+      for item in items {
+        let text = everything(item.payloadSource)
+        for token in text.split(whereSeparator: { !$0.isLetter && !$0.isNumber }) {
+          let word = String(token)
+          guard word.count >= 2, word.first?.isLetter == true else { continue }
+          let letters = word.filter(\.isLetter)
+          let upper = letters.filter(\.isUppercase).count
+          let mixed = upper > 0 && upper < letters.count && word.dropFirst().contains(where: \.isUppercase)
+          let acronym = letters.count >= 2 && (upper == letters.count || (upper == letters.count - 1 && word.hasSuffix("s")))
+          guard mixed || acronym, !translatedAcronyms.contains(word) else { continue }
+          found.insert(word)
+        }
+      }
+      return found.sorted().prefix(Limits.keep).map { $0 }
+    }
+
+    /// Acronyms languages do translate (`KI`, `IA`), or that are words.
+    static let translatedAcronyms: Set<String> = ["OK", "AI", "AM", "PM", "TV", "ID", "IDs"]
+
+    /// Every text a body carries.
+    static func everything(_ body: StringBody) -> String {
+      switch body {
+      case .value(let text): text
+      case .plural(let plural): plural.values.map(\.value).joined(separator: " ")
+      }
     }
 
     // MARK: - context blocks
@@ -303,7 +379,9 @@ extension Translation {
       language named in TARGET LANGUAGE.
 
       ITEMS has one string per line: `<id><TAB><English>`. A plural string has one line per \
-      English form: `<id>.<form><TAB><English>`. Indented lines under a string describe it:
+      English form: `<id>.<form><TAB><English>`. A line `# <path>` names the source file the \
+      strings after it come from: strings of one file are on one screen. Indented lines under \
+      a string describe it:
         note: where it appears
         max: the most characters its translation should take
         forms: the plural forms to write in the target language

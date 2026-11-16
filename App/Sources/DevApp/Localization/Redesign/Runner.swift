@@ -250,6 +250,8 @@ extension Translation {
       /// goes out (5.5). Per ITEM rather than per batch because a row batch spans
       /// several languages, and each of them has its own language document.
       var versions: Context.Version = .none
+      /// The source file the string is written in (`SourceIndex`), empty when unknown.
+      var file: String = ""
       /// Why an earlier answer for this item was rejected, sent as its `problem:` line when
       /// the item is asked again. Empty on a first ask.
       var problem: String = ""
@@ -759,6 +761,18 @@ extension Translation {
       try run.project.loadData()
       indexRows(run)
       learn(run)
+      await locateSources(run)
+    }
+
+    /// Finds the file each key is written in, off the main actor: a language batch is
+    /// ordered by file and names it (`Prompt.itemLines`).
+    private func locateSources(_ run: Run) async {
+      let roots = run.project.sourceRoots
+      guard !roots.isEmpty else { return }
+      let keys = Set(run.project.data.lazy.filter(\.isCatalogRow).map(\.key))
+      run.project.sourceLocations = await Task.detached(priority: .utility) {
+        SourceIndex.locations(of: keys, in: roots)
+      }.value
     }
 
     /// Learning, with no model call: each verified slot's value is written to translation
@@ -855,7 +869,8 @@ extension Translation {
               source: operation.source,
               target: operation.target,
               comment: operation.comment,
-              maxWidth: operation.maxWidth)
+              maxWidth: operation.maxWidth,
+              file: project.sourceLocations[operation.key]?.file ?? "")
           },
           characters: group.items.reduce(0) { $0 + $1.characters })
       }

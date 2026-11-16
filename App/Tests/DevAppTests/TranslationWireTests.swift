@@ -112,4 +112,46 @@ import Testing
     #expect(Translation.Languages.name(of: "pt-PT").contains("Portug"))
     #expect(Translation.Languages.script(of: "zh-Hans") == .han)
   }
+
+  @Test func sourceIndexMatchesLiteralsToKeys() throws {
+    let source = #"""
+      // Text("Commented out")
+      struct V: View {
+        var body: some View {
+          Text("Delete “\(name)”?")
+          Button("Open Project") {}
+          Text(verbatim: "say \("nested \(1)") here")
+        }
+      }
+      """#
+    let literals = Translation.SourceIndex.literals(in: source)
+    #expect(literals.map(\.text).contains("Delete “\u{1}”?"))
+    #expect(!literals.map(\.text).contains("Commented out"))
+    #expect(literals.first { $0.text == "Open Project" }?.line == 5)
+
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("SourceIndex-\(UUID().uuidString)")
+    let folder = root.appendingPathComponent("Sidebar")
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try source.write(to: folder.appendingPathComponent("Row.swift"), atomically: true, encoding: .utf8)
+    let found = Translation.SourceIndex.locations(of: ["Delete “%@”?", "Open Project", "Missing"], in: [root])
+    #expect(found["Delete “%@”?"]?.file == root.lastPathComponent + "/Sidebar/Row.swift")
+    #expect(found["Open Project"]?.line == 5)
+    #expect(found["Missing"] == nil)
+  }
+
+  @Test func keepListsNamesAndAcronyms() {
+    let item = Translation.Run.Item(
+      key: "k", language: "de", source: .value("Sync with iCloud over SSH, or open URLs in GitHub. OK"),
+      target: .empty, comment: "", maxWidth: 0)
+    #expect(Prompt.keep([item]) == ["GitHub", "SSH", "URLs", "iCloud"])
+  }
+
+  @Test func itemsOfOneFileFollowItsHeader() {
+    let items = ["Open", "Close"].map {
+      Translation.Run.Item(
+        key: $0, language: "de", source: .value($0), target: .empty, comment: "", maxWidth: 0, file: "App/Menu.swift")
+    }
+    #expect(Prompt.itemLines(items, language: "de") == "# App/Menu.swift\n0\tOpen\n1\tClose")
+  }
 }

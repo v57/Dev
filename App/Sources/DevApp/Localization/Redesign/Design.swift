@@ -51,9 +51,10 @@ enum Translation {
     /// loop existed. Only a failure the run already calls `retryable` is re-asked; a
     /// non-retryable one is not retried into the ground.
     static let retries = 3
-    /// Reference material carried into a language batch.
-    static let neighbors = 10
-    static let neighborCharacters = 400
+    /// Glossary lines a language batch carries at most.
+    static let glossary = 40
+    /// KEEP terms a language batch carries at most.
+    static let keep = 30
     static let commentCharacters = 600
   }
 
@@ -330,6 +331,11 @@ enum Translation {
     /// key -> position in `data`, so a result can be applied by key and
     /// re-checked against the scan's snapshot.
     var rowIndex: [String: Int] = [:]
+    /// The folders the project's Swift code is in: where `SourceIndex` looks for the file
+    /// each key is written in. Empty when nobody said, and then no key has a location.
+    var sourceRoots: [URL] = []
+    /// Each key's first place in the code, read by a run's preparation (`SourceIndex`).
+    var sourceLocations: [String: SourceIndex.Location] = [:]
     /// When the snapshot in `data` was taken. Nothing whose store record carries a NEWER
     /// stamp is this session's to overwrite: it belongs to whoever wrote it
     /// (`adoptForeignWrites`). A project whose `loadData` never ran keeps the distant past,
