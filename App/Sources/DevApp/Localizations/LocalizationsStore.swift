@@ -611,7 +611,8 @@ final class LocalizationsStore {
   #if DEBUG
     /// Debug builds take commands without a click: post the distributed notification `dev.v57.dev.localizations`
     /// with `scan [app…]`, `translate [source…]`, `build`, `cancel`, `include <app> yes|no`, `addapp <folder>`,
-    /// `describe <source> <phrase…>`, `importdb <file>`, `languages <code…>`, `reasoning <effort|default>` or
+    /// `describe <source> <phrase…>`, `importdb <file>`, `languages <code…>`, `reasoning <effort|default>`,
+    /// `compare <source> <count> <language,…> <effort,…>` (`LocalizationsCompare`) or
     /// `dump` (the state, plan and progress to /tmp/dev-localizations.txt).
     func listenForDebugCommands(shell: Translation.Shell) async {
       for await note in Broadcast.messages(named: "dev.v57.dev.localizations") {
@@ -627,6 +628,9 @@ final class LocalizationsStore {
         case "addapp": if !rest.isEmpty { addApp(at: URL(fileURLWithPath: rest.joined(separator: " "))) }
         case "describe": if let source = rest.first { setDescription(rest.dropFirst().joined(separator: " "), of: source) }
         case "importdb": if !rest.isEmpty { importDatabase(URL(fileURLWithPath: rest.joined(separator: " "))) }
+        case "compare":
+          // compare <source> <count> <language,…> <effort,…>: one request per language and effort, nothing written.
+          if rest.count == 4, let count = Int(rest[1]) { compare(rest[0], count: count, languages: rest[2].split(separator: ",").map(String.init), efforts: rest[3].split(separator: ",").map(String.init), shell: shell) }
         case "reasoning":
           // The translation model's reasoning effort, as Settings sets it; `default` clears it.
           let effort = rest.first.flatMap { $0 == "default" ? nil : $0 }
@@ -637,6 +641,25 @@ final class LocalizationsStore {
           persist()
         case "dump": dump()
         default: break
+        }
+      }
+    }
+
+    private func compare(_ name: String, count: Int, languages: [String], efforts: [String], shell: Translation.Shell) {
+      guard let repoURL else { return }
+      start(String(localized: "Comparing \(name)")) { [self] in
+        let translator = LocalizationsTranslator(shell: shell)
+        self.translator = translator
+        do {
+          let comparison = try await translator.compare(
+            catalog: LocalizationsRepo.catalog(name, in: repoURL), source: name, count: count, languages: languages,
+            efforts: efforts, code: sourceCode(name))
+          let encoder = JSONEncoder()
+          encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+          try encoder.encode(comparison).write(to: URL(fileURLWithPath: "/tmp/dev-compare-\(name).json"))
+          say("\(name): compared \(comparison.keys.count) strings, \(comparison.answers.count) answers")
+        } catch {
+          say("\(name): \(error.localizedDescription)")
         }
       }
     }
@@ -745,9 +768,12 @@ final class LocalizationsTranslator {
 
   /// `about`: what the source is, for the model (`LocalizationsStore.about`), kept as the `About:` lines of the
   /// source's project rules.
-  func translate(
+  /// The source's catalog opened in a store of its own and focused in the shell's workspace for it, with the
+  /// languages added and the run's context (the source's description, its code) in place; nil when cancelled.
+  /// `missing` is the languages the catalog did not have yet.
+  func open(
     catalog url: URL, source: String, languages: [String], about: [String] = [], code: [URL] = []
-  ) async throws -> Outcome {
+  ) async throws -> (Translation.Workspace, missing: [String])? {
     let data = TranslationData.shared
     await data.start()
     // The source's own translation project, named so it reads apart from the app project of the same name.
@@ -768,7 +794,7 @@ final class LocalizationsTranslator {
       // A workspace built before these languages existed doesn't have their columns.
       shell.forget(catalogURL: url)
     }
-    guard !cancelled else { return Outcome() }
+    guard !cancelled else { return nil }
     shell.handOver(store: store, catalogURL: url)
     guard let workspace = await shell.focus(catalogURL: url, catalog: store.catalog ?? opened) else {
       throw Failure.open(shell.error ?? "The translation workspace couldn't be built.")
@@ -780,6 +806,14 @@ final class LocalizationsTranslator {
     workspace.project.context.replaceLines(prefixed: LocalizationsStore.aboutPrefix, with: about)
     // The catalog lives in the Localizations repository; its strings are written in the source's own checkout.
     if !code.isEmpty { workspace.project.sourceRoots = code }
+    return (workspace, missing)
+  }
+
+  func translate(
+    catalog url: URL, source: String, languages: [String], about: [String] = [], code: [URL] = []
+  ) async throws -> Outcome {
+    guard let (workspace, missing) = try await open(catalog: url, source: source, languages: languages, about: about, code: code)
+    else { return Outcome() }
     // A source with nothing left to translate isn't run: a run ends in the row pass, which sends every row again
     // whatever its state (Translate by row), and over a finished source that costs hours and changes nothing.
     try workspace.project.loadData()
