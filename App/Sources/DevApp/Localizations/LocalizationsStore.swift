@@ -611,7 +611,7 @@ final class LocalizationsStore {
   #if DEBUG
     /// Debug builds take commands without a click: post the distributed notification `dev.v57.dev.localizations`
     /// with `scan [app…]`, `translate [source…]`, `build`, `cancel`, `include <app> yes|no`, `addapp <folder>`,
-    /// `describe <source> <phrase…>`, `importdb <file>`, `languages <code…>` or
+    /// `describe <source> <phrase…>`, `importdb <file>`, `languages <code…>`, `reasoning <effort|default>` or
     /// `dump` (the state, plan and progress to /tmp/dev-localizations.txt).
     func listenForDebugCommands(shell: Translation.Shell) async {
       for await note in Broadcast.messages(named: "dev.v57.dev.localizations") {
@@ -627,6 +627,11 @@ final class LocalizationsStore {
         case "addapp": if !rest.isEmpty { addApp(at: URL(fileURLWithPath: rest.joined(separator: " "))) }
         case "describe": if let source = rest.first { setDescription(rest.dropFirst().joined(separator: " "), of: source) }
         case "importdb": if !rest.isEmpty { importDatabase(URL(fileURLWithPath: rest.joined(separator: " "))) }
+        case "reasoning":
+          // The translation model's reasoning effort, as Settings sets it; `default` clears it.
+          let effort = rest.first.flatMap { $0 == "default" ? nil : $0 }
+          UserDefaults.standard.set(effort, forKey: ModelSettings.Key.reasoningEffort)
+          say("Reasoning effort: \(effort ?? "default")")
         case "languages":
           state.languages = rest
           persist()
@@ -685,7 +690,7 @@ nonisolated final class LineSink: @unchecked Sendable {
 // MARK: - Translating one source
 
 /// Runs the Localization tab's pipeline on one source's catalog with no pane showing it: the catalog opens in a store
-/// of its own, the languages are added to it, the shell's workspace for it runs translate (prepare, prelearn, learn,
+/// of its own, the languages are added to it, the shell's workspace for it runs translate (prepare,
 /// translate, the row pass) and its Save writes the file. The same path the toolbar's Translate takes, so translation
 /// memory, context rules and the run's history are the ones the tab uses.
 @MainActor
@@ -703,8 +708,20 @@ final class LocalizationsTranslator {
     var done = 0
     var failures = 0
     var changed = false
+    /// What the run cost: requests that came back, tokens in (and how many the provider's cache served),
+    /// tokens out, and its time, so a run's log line says what it spent.
+    var requests = 0
+    var promptTokens = 0
+    var cachedTokens = 0
+    var completionTokens = 0
+    var seconds = 0.0
     var description: String {
-      "\(done)/\(items) translated" + (failures > 0 ? ", \(failures) failed batch(es)" : "")
+      var text = "\(done)/\(items) translated" + (failures > 0 ? ", \(failures) failed batch(es)" : "")
+      guard requests > 0 else { return text }
+      let cached = promptTokens > 0 ? cachedTokens * 100 / promptTokens : 0
+      text += "; \(requests) requests, \(promptTokens) tokens in (\(cached)% cached), \(completionTokens) out"
+      text += ", \(Int(seconds.rounded())) s"
+      return text
     }
   }
 
@@ -772,8 +789,11 @@ final class LocalizationsTranslator {
     if let failure = workspace.error, run?.failures.isEmpty ?? true {
       throw Failure.open(failure)
     }
+    let tally = run?.tally ?? Translation.Run.Tally()
     return Outcome(
-      items: run?.tally.items ?? 0, done: run?.tally.itemsDone ?? 0, failures: run?.failures.count ?? 0,
-      changed: (run?.tally.itemsDone ?? 0) > 0 || !missing.isEmpty)
+      items: tally.items, done: tally.itemsDone, failures: run?.failures.count ?? 0,
+      changed: tally.itemsDone > 0 || !missing.isEmpty, requests: tally.requests, promptTokens: tally.promptTokens,
+      cachedTokens: tally.cachedTokens, completionTokens: tally.completionTokens,
+      seconds: run.flatMap { run in run.startedAt.map { (run.finishedAt ?? .now).timeIntervalSince($0) } } ?? 0)
   }
 }
