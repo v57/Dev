@@ -34,6 +34,13 @@ nonisolated enum Wire: String, Sendable {
 
   /// The headers this wire needs besides the bearer token: the Messages API
   /// takes its key as `x-api-key` and wants a version.
+  /// Whether a key goes out as `Authorization: Bearer` as well. Anthropic's own API takes an
+  /// API key as `x-api-key` alone (a bearer there is an OAuth token); every other provider,
+  /// a proxy speaking Messages included, reads the bearer.
+  func sendsBearer(to url: URL) -> Bool {
+    !(self == .anthropicMessages && url.host == "api.anthropic.com")
+  }
+
   func headers(apiKey: String) -> [String: String] {
     guard self == .anthropicMessages else { return [:] }
     var headers = ["anthropic-version": "2023-06-01"]
@@ -83,7 +90,7 @@ nonisolated struct OpenAIChatClient: Sendable {
     request.timeoutInterval = timeout
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     // A local server takes no key: an empty one sends no header at all.
-    if !apiKey.isEmpty {
+    if !apiKey.isEmpty, wire.sendsBearer(to: endpoint) {
       request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
     }
     for (name, value) in wire.headers(apiKey: apiKey).merging(headers, uniquingKeysWith: { _, own in own }) {

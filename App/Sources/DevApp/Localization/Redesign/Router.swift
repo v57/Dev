@@ -241,7 +241,9 @@ extension Translation {
             model: candidate.model,
             wire: model.wire,
             headers: model.allHeaders,
-            timeout: Self.requestTimeout)
+            timeout: Self.requestTimeout,
+            reasoningEffort: model.reasoningEffort,
+            cachedPrefix: request.prefix)
           do {
             let usage = try await client.send(
               system: request.system,

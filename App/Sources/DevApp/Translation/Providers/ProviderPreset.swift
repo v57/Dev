@@ -164,9 +164,8 @@ nonisolated extension ProviderPreset {
       keyNames: ["OPENAI_API_KEY"], keysURL: "https://platform.openai.com/api-keys"),
     ProviderPreset(
       id: "anthropic", name: "Anthropic", group: .popular,
-      baseURL: "https://api.anthropic.com/v1", wire: .chatCompletions,
-      keyNames: ["ANTHROPIC_API_KEY"], keysURL: "https://platform.claude.com/settings/keys",
-      note: String(localized: "Through Anthropic's OpenAI-compatible endpoint (no prompt caching there).")),
+      baseURL: "https://api.anthropic.com/v1", wire: .anthropicMessages,
+      keyNames: ["ANTHROPIC_API_KEY"], keysURL: "https://platform.claude.com/settings/keys"),
     ProviderPreset(
       id: "gemini", name: "Google Gemini", group: .popular,
       baseURL: "https://generativelanguage.googleapis.com/v1beta/openai", wire: .chatCompletions,

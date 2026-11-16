@@ -52,6 +52,12 @@ extension Translation {
     /// Extra headers a provider requires (OpenCode's session id, the user agent).
     var headers: [String: String] = [:]
     var timeout: TimeInterval = 180
+    /// The reasoning effort to ask for (`ModelSettings.reasoningEffort`); nil sends none.
+    var reasoningEffort: String? = nil
+    /// How much of the user message is the same for every batch of a language
+    /// (`Prompt.Request.prefix`): on the Messages wire it is its own content block with a
+    /// cache breakpoint, as is the system prompt, so the provider caches them.
+    var cachedPrefix: String = ""
 
     /// What the provider reported about the call. Every number is optional because a
     /// provider is free to report none of them, and — see `includeUsage` — may not know
@@ -83,13 +89,13 @@ extension Translation {
     ) async throws -> Usage? {
       return try await attempt(
         system: system, user: user, temperature: temperature,
-        includeUsage: true, onChunk: onChunk)
+        includeUsage: true, reasoning: reasoningEffort, onChunk: onChunk)
     }
 
     // MARK: - one attempt
 
     private func attempt(
-      system: String, user: String, temperature: Double?, includeUsage: Bool,
+      system: String, user: String, temperature: Double?, includeUsage: Bool, reasoning: String?,
       onChunk: (String) -> Void
     ) async throws -> Usage? {
       var request = URLRequest(url: endpoint)
@@ -97,7 +103,7 @@ extension Translation {
       request.timeoutInterval = timeout
       request.setValue("application/json", forHTTPHeaderField: "Content-Type")
       // A local server takes no key: an empty one sends no header at all.
-      if !apiKey.isEmpty {
+      if !apiKey.isEmpty, wire.sendsBearer(to: endpoint) {
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
       }
       for (name, value) in wire.headers(apiKey: apiKey).merging(headers, uniquingKeysWith: { _, own in own }) {
@@ -115,7 +121,8 @@ extension Translation {
               ],
               temperature: temperature,
               stream: true,
-              stream_options: includeUsage ? Request.StreamOptions(include_usage: true) : nil))
+              stream_options: includeUsage ? Request.StreamOptions(include_usage: true) : nil,
+              reasoning_effort: reasoning))
         case .responses:
           // The Responses API streams usage in its closing frame and knows no
           // `stream_options`, so the includeUsage retry below only ever fires
@@ -126,18 +133,20 @@ extension Translation {
               instructions: system,
               input: [ResponsesRequest.Item(role: "user", content: user)],
               temperature: temperature,
-              stream: true))
+              stream: true,
+              reasoning: reasoning.map { ResponsesRequest.Reasoning(effort: $0) }))
         case .anthropicMessages:
           // Like Responses, Messages streams its usage on its own (`message_start`,
           // `message_delta`) and knows no `stream_options`.
           request.httpBody = try JSONEncoder().encode(
             MessagesRequest(
               model: model,
-              system: system,
-              messages: [MessagesRequest.Message(role: "user", content: user)],
+              system: [.init(text: system, cached: true)],
+              messages: [MessagesRequest.Message(role: "user", content: Self.blocks(of: user, prefix: cachedPrefix))],
               temperature: temperature,
               max_tokens: Wire.defaultMaxTokens,
-              stream: true))
+              stream: true,
+              output_config: reasoning.map { MessagesRequest.OutputConfig(effort: Self.messagesEffort($0)) }))
         }
       } catch {
         throw BackendError.network("could not encode request: \(error.localizedDescription)")
@@ -168,12 +177,19 @@ extension Translation {
            excerpt?.localizedCaseInsensitiveContains("temperature") == true {
           return try await attempt(
             system: system, user: user, temperature: nil,
-            includeUsage: includeUsage, onChunk: onChunk)
+            includeUsage: includeUsage, reasoning: reasoning, onChunk: onChunk)
+        }
+        // A model that does not reason refuses the effort field the same way.
+        if http.statusCode == 400, reasoning != nil,
+           ["reasoning", "effort", "output_config"].contains(where: { excerpt?.localizedCaseInsensitiveContains($0) == true }) {
+          return try await attempt(
+            system: system, user: user, temperature: temperature,
+            includeUsage: includeUsage, reasoning: nil, onChunk: onChunk)
         }
         if http.statusCode == 400, includeUsage, wire == .chatCompletions {
           return try await attempt(
             system: system, user: user, temperature: temperature,
-            includeUsage: false, onChunk: onChunk)
+            includeUsage: false, reasoning: reasoning, onChunk: onChunk)
         }
         // 429 / 402 are quota refusals: the router parks the candidate for them.
         if http.statusCode == 429 || http.statusCode == 402 {
@@ -418,10 +434,15 @@ extension Translation {
     }
 
     /// The usage numbers of a Messages-API frame: `input_tokens` / `output_tokens`,
-    /// cache hits as `cache_read_input_tokens`.
+    /// cache hits as `cache_read_input_tokens`. Messages counts the prompt's cached and
+    /// cache-written parts apart from `input_tokens`, so the prompt is their sum — what the
+    /// other wires call the prompt, and what the cached share is a share of.
     private static func messagesUsage(of object: [String: Any]) -> Usage? {
       var usage = Usage()
-      usage.promptTokens = object["input_tokens"] as? Int
+      if let input = object["input_tokens"] as? Int {
+        usage.promptTokens = input + (object["cache_read_input_tokens"] as? Int ?? 0)
+          + (object["cache_creation_input_tokens"] as? Int ?? 0)
+      }
       usage.completionTokens = object["output_tokens"] as? Int
       usage.cachedTokens = object["cache_read_input_tokens"] as? Int
       return usage.isEmpty ? nil : usage
@@ -435,6 +456,7 @@ extension Translation {
       var temperature: Double?
       var stream: Bool
       var stream_options: StreamOptions?
+      var reasoning_effort: String?
 
       struct Message: Encodable {
         var role: String
@@ -454,10 +476,15 @@ extension Translation {
       var input: [Item]
       var temperature: Double?
       var stream: Bool
+      var reasoning: Reasoning?
 
       struct Item: Encodable {
         var role: String
         var content: String
+      }
+
+      struct Reasoning: Encodable {
+        var effort: String
       }
     }
 
@@ -465,16 +492,51 @@ extension Translation {
     /// no `stream_options` in this protocol either.
     private struct MessagesRequest: Encodable {
       var model: String
-      var system: String
+      var system: [Block]
       var messages: [Message]
       var temperature: Double?
       var max_tokens: Int
       var stream: Bool
+      var output_config: OutputConfig?
 
       struct Message: Encodable {
         var role: String
-        var content: String
+        var content: [Block]
       }
+
+      /// How hard the model thinks: Messages' effort runs `low` to `max`.
+      struct OutputConfig: Encodable {
+        var effort: String
+      }
+
+      /// A text block; a cached one ends a prefix the provider caches (`cache_control`).
+      struct Block: Encodable {
+        var type = "text"
+        var text: String
+        var cache_control: CacheControl?
+
+        init(text: String, cached: Bool = false) {
+          self.text = text
+          cache_control = cached ? CacheControl() : nil
+        }
+      }
+
+      struct CacheControl: Encodable {
+        var type = "ephemeral"
+      }
+    }
+
+    /// The setting's effort as Messages names it: it has no `none` or `minimal`, so both ask
+    /// for its lowest.
+    private static func messagesEffort(_ effort: String) -> String {
+      effort == "none" || effort == "minimal" ? "low" : effort
+    }
+
+    /// The user message as Messages blocks: the stable prefix as a cached block of its own,
+    /// then the rest. A message with no prefix is one plain block.
+    private static func blocks(of user: String, prefix: String) -> [MessagesRequest.Block] {
+      guard !prefix.isEmpty, user.hasPrefix(prefix), user.count > prefix.count else { return [.init(text: user)] }
+      return [.init(text: prefix, cached: true), .init(text: String(user.dropFirst(prefix.count)))]
     }
 
     /// A whole (non-streamed) reply, for the provider that ignored `stream`.

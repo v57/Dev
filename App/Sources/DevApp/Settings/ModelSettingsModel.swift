@@ -34,6 +34,10 @@ final class ModelSettingsModel {
   var wire: Wire {
     didSet { defaults.set(wire.rawValue, forKey: ModelSettings.Key.wire) }
   }
+  /// "" for the provider's default.
+  var reasoningEffort: String {
+    didSet { defaults.set(reasoningEffort, forKey: ModelSettings.Key.reasoningEffort) }
+  }
 
   /// The key being typed; cleared once saved.
   var keyDraft = ""
@@ -80,6 +84,7 @@ final class ModelSettingsModel {
     model = ModelSettings.model ?? ""
     baseURL = ModelSettings.baseURL ?? ""
     wire = ModelSettings.wire ?? .chatCompletions
+    reasoningEffort = ModelSettings.reasoningEffort ?? ""
     refreshKeyState()
   }
 
@@ -153,7 +158,10 @@ final class ModelSettingsModel {
     defer { isFetchingModels = false }
     var request = URLRequest(url: url, timeoutInterval: 20)
     if let key = ProviderKeychain.key(for: preset) {
-      request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+      if preset.wire.sendsBearer(to: url) {
+        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+      }
+      for (name, value) in preset.wire.headers(apiKey: key) { request.setValue(value, forHTTPHeaderField: name) }
     }
     request.setValue(RoutedModel.userAgent, forHTTPHeaderField: "User-Agent")
     do {

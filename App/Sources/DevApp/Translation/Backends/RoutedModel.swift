@@ -30,6 +30,8 @@ nonisolated struct RoutedModel: Sendable, Identifiable {
   var headers: [String: String] = [:]
   /// Conservative client-side pacing, so a burst cannot turn into error retries.
   var requestsPerMinute = 30
+  /// The reasoning effort a call asks for; nil asks for none (`ModelSettings.reasoningEffort`).
+  var reasoningEffort: String? = nil
 
   var id: String { "\(providerID):\(model)" }
 

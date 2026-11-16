@@ -22,6 +22,7 @@ nonisolated enum ModelSettings {
     static let model = "translation.model"
     static let baseURL = "translation.baseURL"
     static let wire = "translation.wire"
+    static let reasoningEffort = "translation.reasoningEffort"
   }
 
   static var providerID: String? { UserDefaults.standard.string(forKey: Key.provider) }
@@ -30,6 +31,12 @@ nonisolated enum ModelSettings {
   static var baseURL: String? { nonEmpty(UserDefaults.standard.string(forKey: Key.baseURL)) }
   /// The user's wire, honoured for Custom only; presets know their own.
   static var wire: Wire? { UserDefaults.standard.string(forKey: Key.wire).flatMap(Wire.init) }
+
+  /// How hard a reasoning model thinks before it answers (`none`, `minimal`, `low`, `medium`,
+  /// `high`), sent as the wire's own field; nil sends nothing and the provider decides.
+  /// Translation needs little: a low effort is most of a reasoning model's answer for a
+  /// fraction of its tokens.
+  static var reasoningEffort: String? { nonEmpty(UserDefaults.standard.string(forKey: Key.reasoningEffort)) }
 
   static var preset: ProviderPreset? { providerID.flatMap(ProviderPreset.preset(id:)) }
 
@@ -48,7 +55,8 @@ nonisolated enum ModelSettings {
       apiKey: ProviderKeychain.key(for: preset),
       needsKey: preset.needsKey,
       headers: preset.headers,
-      requestsPerMinute: preset.requestsPerMinute)
+      requestsPerMinute: preset.requestsPerMinute,
+      reasoningEffort: reasoningEffort)
   }
 
   /// Why `resolved()` cannot run a call, in the reader's words, or nil when it can.

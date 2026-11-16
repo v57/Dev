@@ -243,6 +243,14 @@ struct TranslationSettingsView: View {
           model.model = recommendation.model
         }
       }
+      FormRow(
+        "Reasoning", help: "How hard a reasoning model thinks before it answers. Low is plenty for translation; Default sends nothing.",
+        systemImage: "brain", hue: .purple
+      ) {
+        KitPicker(
+          "Reasoning", selection: $model.reasoningEffort,
+          options: [("Default", ""), ("None", "none"), ("Minimal", "minimal"), ("Low", "low"), ("Medium", "medium"), ("High", "high")])
+      }
     }
   }
 }
