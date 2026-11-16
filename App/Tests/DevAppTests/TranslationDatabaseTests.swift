@@ -1,5 +1,8 @@
 import Foundation
 import Testing
+#if canImport(SQLite3)
+import SQLite3
+#endif
 
 @testable import DevApp
 
@@ -48,6 +51,31 @@ import Testing
     #expect(counts?.keys == 2)
     #expect(counts?.languages["ru"]?.needsReview == 2)
   }
+
+  #if canImport(SQLite3)
+  /// A database from before version 2 stored Portuguese (Portugal) as `pt_PT`; opening it renames the slots, edits,
+  /// memory and language documents to `pt-PT`, and a slot already under `pt-PT` wins over the old one.
+  @Test func portugalIsRenamedToPtPT() throws {
+    let (database, folder) = try database()
+    defer { try? FileManager.default.removeItem(at: folder) }
+    var changes = TranslationChanges()
+    changes.records = [record("a", "pt_PT", value: "old"), record("b", "pt_PT", value: "kept"), record("a", "pt-PT", value: "new")]
+    changes.memory = [TranslationMemoryEntry(
+      sourceText: "a", sourceLanguage: "en", targetLanguage: "pt_PT", value: "olá", state: .reviewed)]
+    try database.apply(changes)
+    var handle: OpaquePointer?
+    #expect(sqlite3_open(folder.appendingPathComponent("Translation.sqlite").path, &handle) == SQLITE_OK)
+    #expect(sqlite3_exec(handle, "PRAGMA user_version = 1", nil, nil, nil) == SQLITE_OK)
+    sqlite3_close(handle)
+
+    let reopened = try TranslationDatabase(url: folder.appendingPathComponent("Translation.sqlite"))
+    let records = try reopened.records(project: 7)
+    #expect(records.allSatisfy { $0.language == "pt-PT" })
+    #expect(records.first { $0.key == "a" }?.value == "new")
+    #expect(records.first { $0.key == "b" }?.value == "kept")
+    #expect(try reopened.memory().map(\.targetLanguage) == ["pt-PT"])
+  }
+  #endif
 
   @Test func aSlotIsOneRowAndDeletesApply() throws {
     let (database, folder) = try database()

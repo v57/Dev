@@ -17,7 +17,7 @@ import Testing
     "de", "fr", "es", "ja", "zh-Hans", "pt-BR", "ko", "it", "ru", "ar", "ars", "as", "az", "be", "bg", "bn", "bo",
     "brx", "ca", "chr", "ckb", "cs", "cy", "da", "doi", "dv", "el", "et", "fa", "fi", "fil", "fo", "ga", "gu", "haw",
     "he", "hi", "hr", "hu", "hy", "id", "is", "ka", "kk", "km", "kn", "kok", "ks", "ku", "ky", "lo", "lt", "lv", "mai",
-    "mi", "mk", "ml", "mn", "mni", "mr", "ms", "mt", "my", "nb", "ne", "nl", "nn", "or", "pa", "pl", "ps", "pt_PT", "ro",
+    "mi", "mk", "ml", "mn", "mni", "mr", "ms", "mt", "my", "nb", "ne", "nl", "nn", "or", "pa", "pl", "ps", "pt-PT", "ro",
     "sa", "sat", "sd", "si", "sk", "sl", "sq", "sr", "sv", "sw", "ta", "te", "tg", "th", "tk", "to", "tr", "ug", "uk",
     "ur", "vi", "yue",
   ]

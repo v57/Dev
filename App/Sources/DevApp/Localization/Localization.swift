@@ -491,7 +491,7 @@ final class LocalizationStore {
     "lo", "lt", "lv", "mai", "mi", "mk",
     "ml", "mn", "mni", "mr", "ms", "mt",
     "my", "nb", "ne", "nl", "nn", "or",
-    "pa", "pl", "ps", "pt_PT", "ro", "ru",
+    "pa", "pl", "ps", "pt-PT", "ro", "ru",
     "sa", "sat", "sd", "si", "sk", "sl",
     "sq", "sr", "sv", "sw", "ta", "te",
     "tg", "th", "tk", "to", "tr", "ug",

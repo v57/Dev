@@ -40,7 +40,13 @@ nonisolated struct LocalizationsState: Codable, Sendable {
     guard let data = try? Data(contentsOf: url) else { return LocalizationsState() }
     let decoder = JSONDecoder()
     decoder.dateDecodingStrategy = .iso8601
-    return (try? decoder.decode(LocalizationsState.self, from: data)) ?? LocalizationsState()
+    var state = (try? decoder.decode(LocalizationsState.self, from: data)) ?? LocalizationsState()
+    // Portuguese (Portugal) was listed as `pt_PT`; Apple's code is `pt-PT`.
+    state.languages = state.languages.reduce(into: []) { codes, code in
+      let code = code == "pt_PT" ? "pt-PT" : code
+      if !codes.contains(code) { codes.append(code) }
+    }
+    return state
   }
 
   func save(to url: URL = url) {

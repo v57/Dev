@@ -76,7 +76,7 @@ nonisolated final class TranslationDatabase {
   let url: URL?
 
   /// The schema this code reads and writes.
-  static let schemaVersion: Int64 = 1
+  static let schemaVersion: Int64 = 2
 
   /// Opens the file at `url`, or a database in memory for nil (SQLite's `:memory:`, which a file URL would turn into
   /// a path under the working directory).
@@ -92,9 +92,22 @@ nonisolated final class TranslationDatabase {
     guard version < Self.schemaVersion else { return }
     try connection.transaction {
       try connection.execute(Self.schema)
+      if version < 2 { try connection.execute(Self.renamedLanguages) }
       try connection.execute("PRAGMA user_version = \(Self.schemaVersion)")
     }
   }
+
+  /// Version 2: Portuguese (Portugal) was stored as `pt_PT`; Apple's code is `pt-PT`. A row already under the new code
+  /// wins, so the old one is dropped rather than renamed into a duplicate key.
+  private static let renamedLanguages = """
+    UPDATE OR IGNORE slot SET language = 'pt-PT' WHERE language = 'pt_PT';
+    DELETE FROM slot WHERE language = 'pt_PT';
+    UPDATE edit SET language = 'pt-PT' WHERE language = 'pt_PT';
+    UPDATE OR IGNORE memory SET target_language = 'pt-PT' WHERE target_language = 'pt_PT';
+    DELETE FROM memory WHERE target_language = 'pt_PT';
+    UPDATE context_doc SET identifier = replace(identifier, '/language/pt_PT', '/language/pt-PT')
+      WHERE scope = 'language' AND identifier LIKE '%/language/pt\\_PT' ESCAPE '\\';
+    """
 
   private static let schema = """
     CREATE TABLE IF NOT EXISTS project (
