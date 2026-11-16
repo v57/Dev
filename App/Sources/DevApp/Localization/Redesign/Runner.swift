@@ -1249,6 +1249,13 @@ extension Translation {
           message: "the reply answered id \(id), which this batch never asked for",
           retryable: false)
       }
+      // An answer that reads wrong carries its problem into the item's next ask.
+      for (id, problem) in report.flagged {
+        guard let position = Int(id), batch.items.indices.contains(position),
+          batch.items[position].phase != .applied
+        else { continue }
+        batch.items[position].problem = problem
+      }
       // A row the per-row pass already WROTE keeps `.applied`: it is the only record that
       // this batch has written that slot, and `.validated` would put it back in the write-back
       // as if it had not been.
@@ -1320,6 +1327,20 @@ extension Translation {
       // Write-back: one unit, decided per slot at the moment it is applied (5.5).
       apply(resolved, of: &batch, in: run)
 
+      // The answers that read wrong, asked once more in ONE request with their problems
+      // named; what comes back is taken as answered (`Validator.validate`).
+      let flagged = batch.items.indices.filter {
+        report.flagged[String($0)] != nil && batch.items[$0].phase != .applied && batch.items[$0].phase != .failed
+      }
+      if !flagged.isEmpty {
+        let repaired = await repair(flagged.map { batch.items[$0] }, of: batch, in: run)
+        for item in repaired {
+          guard let position = batch.items.firstIndex(where: { $0.key == item.key && $0.language == item.language })
+          else { continue }
+          batch.items[position].phase = item.phase
+        }
+      }
+
       // Anything still unanswered is reported, never retried forever: the run keeps
       // its other results. An item already marked failed was REPORTED where it was
       // rejected, with the defect that rejected it — reporting it a second time as "no
@@ -1328,7 +1349,8 @@ extension Translation {
       // 2026-09-14).
       for (position, item) in batch.items.enumerated()
       where writable.contains(position) && resolved[String(position)] == nil
-        && batch.items[position].phase != .failed {
+        && batch.items[position].phase != .failed && batch.items[position].phase != .applied
+        && report.flagged[String(position)] == nil {
         batch.items[position].phase = .failed
         fail(
           run, key: item.key, language: language(of: item, in: batch),
@@ -1336,6 +1358,24 @@ extension Translation {
       }
       settle(&batch)
       return batch
+    }
+
+    /// The items whose answers read wrong, asked once more in one request. A failure of the
+    /// request fails those items and nothing else: what the batch wrote stands.
+    private func repair(_ items: [Run.Item], of batch: Run.Batch, in run: Run) async -> [Run.Item] {
+      let fix = Run.Batch(
+        id: "\(batch.id).fix", stage: batch.stage, language: batch.language, items: items,
+        characters: items.reduce(0) { $0 + $1.characters })
+      do {
+        return try await performOne(fix, in: run).items
+      } catch {
+        for item in items {
+          fail(
+            run, key: item.key, language: language(of: item, in: batch),
+            message: "\(item.problem) (asking again failed: \(error.localizedDescription))", retryable: true)
+        }
+        return items.map { var item = $0; item.phase = .failed; return item }
+      }
     }
 
     /// The remainder of a cut reply, re-asked in halves. Each half is a request of
@@ -1551,6 +1591,12 @@ extension Translation {
           run, key: item.key, language: language,
           message: "no usable translation: \(Validator.describe(row.text, of: item, language: language))",
           retryable: false)
+        return
+      }
+      // An answer that reads wrong is not written: the batch's own pass flags it and asks
+      // once more (`Validator.softDefects`); a row-pass correction like it is dropped.
+      if item.problem.isEmpty, !Validator.softDefects(body, of: item, language: language).isEmpty {
+        if batch.stage == .horizontal { batch.items[position].phase = .validated }
         return
       }
       apply([row.id: row.text], of: &batch, in: run, saving: false)
@@ -1991,6 +2037,9 @@ extension Translation {
       /// Ids the request never asked for. Reported, never applied: there is no item
       /// behind them, so there is nothing to re-ask on their behalf.
       var invented: [String] = []
+      /// Ids whose answer passed the hard checks but reads wrong (`softDefects`): id -> the
+      /// problem a repair request names. Not applied; asked once more.
+      var flagged: [String: String] = [:]
     }
 
     /// Everything wrong with one answer. Empty means it is acceptable.
@@ -2002,9 +2051,24 @@ extension Translation {
       /// A form the reply left empty while the source text that form answers says
       /// something: the artifact would keep a form that cannot be rendered.
       case emptyForm(category: String)
+      /// The answer is still English (or the source verbatim) where the language would not be.
+      case untranslated
+      /// The answer has letters of a script the language is not written in.
+      case wrongScript(String)
+      /// The answer is over the string's width limit (`max`), or far longer than the
+      /// English (`max` 0).
+      case tooLong(max: Int, got: Int)
 
       var description: String {
         switch self {
+        case .untranslated:
+          return "it is still in English"
+        case .wrongScript(let letter):
+          return "it has letters of another script (\(letter))"
+        case .tooLong(let max, let got):
+          return max > 0
+            ? "it is \(got) characters, over the limit of \(max)"
+            : "it is \(got) characters, far longer than the English"
         case .empty:
           return "empty response"
         case .emptyForm(let category):
@@ -2041,6 +2105,14 @@ extension Translation {
         guard defects(body, of: item, language: language).isEmpty else {
           report.rejected.append(id)
           continue
+        }
+        // An item asked again for a problem is taken as answered: one repair, never a loop.
+        if item.problem.isEmpty {
+          let soft = softDefects(body, of: item, language: language)
+          if !soft.isEmpty {
+            report.flagged[id] = problem(body, soft)
+            continue
+          }
         }
         report.accepted[id] = answer
       }
@@ -2216,6 +2288,70 @@ extension Translation {
       }
       if let other = plural.values.first(where: { $0.rule == .other }) { return other.value }
       return plural.values.map(\.value).joined(separator: " ")
+    }
+
+    /// What reads wrong in an answer that passed the hard checks, deterministically: still
+    /// English, letters of another script, or too long. An answer with one of these is not
+    /// written; its item is asked once more with the problem named (`Item.problem`).
+    static func softDefects(_ answer: StringBody, of item: Run.Item, language: String) -> [Defect] {
+      var found: [Defect] = []
+      let source = everything(item.payloadSource)
+      let text = everything(answer)
+      let script = Languages.script(of: language)
+      if Languages.base(of: language) != "en", isUntranslated(text, source: source, script: script) {
+        found.append(.untranslated)
+      }
+      let sourceLetters = Set(source.unicodeScalars)
+      if let foreign = text.unicodeScalars.first(where: {
+        $0.properties.isAlphabetic && !Languages.Script.isShared($0) && !script.contains($0)
+          && !sourceLetters.contains($0)
+      }) {
+        found.append(.wrongScript(String(foreign)))
+      }
+      let english = longest(item.payloadSource)
+      let got = longest(answer)
+      if item.maxWidth > 0, english <= item.maxWidth, got > item.maxWidth {
+        found.append(.tooLong(max: item.maxWidth, got: got))
+      } else if got > max(english * 3, english + 40) {
+        found.append(.tooLong(max: 0, got: got))
+      }
+      return found
+    }
+
+    /// Still English: for a language written in another script, an answer with none of its
+    /// letters while the English has a word to translate; for a Latin one, the English
+    /// itself, when it is three words or more (a short string may well be the same word).
+    private static func isUntranslated(_ text: String, source: String, script: Languages.Script) -> Bool {
+      let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+      if script == .latin {
+        return Prompt.words(source).count >= 3
+          && trimmed.lowercased() == source.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+      }
+      if trimmed.unicodeScalars.contains(where: script.contains) { return false }
+      // A word to translate: three letters or more, lowercase or capitalized (`file`,
+      // `Settings`) — not a name written in mixed case or an acronym.
+      return source.split(whereSeparator: { !$0.isLetter }).contains { word in
+        word.count >= 3 && word.dropFirst().allSatisfy(\.isLowercase)
+      }
+    }
+
+    /// The longest text a body carries: its value, or its longest form.
+    private static func longest(_ body: StringBody) -> Int {
+      switch body {
+      case .value(let text): text.count
+      case .plural(let plural): plural.values.map(\.value.count).max() ?? 0
+      }
+    }
+
+    /// The `problem:` line a flagged answer is asked again with.
+    static func problem(_ answer: StringBody, _ defects: [Defect]) -> String {
+      let shown: String
+      switch answer {
+      case .value(let text): shown = text
+      case .plural(let plural): shown = plural.values.filter { !$0.value.isEmpty }.map(\.value).joined(separator: " / ")
+      }
+      return "your answer “\(Prompt.clamp(shown, to: 200))”: "
+        + defects.map(\.description).joined(separator: "; ")
     }
 
     /// The same defects as a sentence, for a failure report.

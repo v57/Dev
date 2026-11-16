@@ -154,4 +154,35 @@ import Testing
     }
     #expect(Prompt.itemLines(items, language: "de") == "# App/Menu.swift\n0\tOpen\n1\tClose")
   }
+
+  private func flat(_ source: String, _ language: String, max: Int = 0) -> Translation.Run.Item {
+    Translation.Run.Item(key: source, language: language, source: .value(source), target: .empty, comment: "", maxWidth: max)
+  }
+
+  @Test func softChecksCatchEnglishScriptAndLength() {
+    #expect(Validator.softDefects(.value("Settings"), of: flat("Settings", "ru"), language: "ru") == [.untranslated])
+    #expect(Validator.softDefects(.value("Настройки"), of: flat("Settings", "ru"), language: "ru").isEmpty)
+    #expect(Validator.softDefects(.value("iCloud"), of: flat("iCloud", "ja"), language: "ja").isEmpty)
+    let sentence = "Open the project in a new window"
+    #expect(Validator.softDefects(.value(sentence), of: flat(sentence, "de"), language: "de") == [.untranslated])
+    #expect(Validator.softDefects(.value("Start"), of: flat("Start", "de"), language: "de").isEmpty)
+    #expect(Validator.softDefects(.value(sentence), of: flat(sentence, "en-GB"), language: "en-GB").isEmpty)
+    #expect(Validator.softDefects(.value("Öffnen Открыть"), of: flat("Open", "de"), language: "de") == [.wrongScript("О")])
+    #expect(Validator.softDefects(.value("設定を開く"), of: flat("Open Settings", "ja"), language: "ja").isEmpty)
+    #expect(
+      Validator.softDefects(.value("Einstellungen"), of: flat("Settings", "de", max: 10), language: "de")
+        == [.tooLong(max: 10, got: 13)])
+  }
+
+  @Test func validateFlagsOnceAndAcceptsTheRepair() {
+    var item = flat("Settings", "ru")
+    var report = Validator.validate(["0": "Settings"], for: [item])
+    #expect(report.accepted.isEmpty)
+    #expect(report.flagged["0"]?.contains("still in English") == true)
+    item.problem = report.flagged["0"] ?? ""
+    report = Validator.validate(["0": "Settings"], for: [item])
+    #expect(report.accepted == ["0": "Settings"])
+    let request = Prompt.languageRequest(language: "ru", items: [item], shared: [], style: "", glossary: [])
+    #expect(request.user.contains("  problem: your answer “Settings”: it is still in English"))
+  }
 }

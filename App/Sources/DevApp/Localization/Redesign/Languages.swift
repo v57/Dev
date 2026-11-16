@@ -24,7 +24,11 @@ extension Translation {
 
     /// The script a language is written in, as Apple's platforms write it.
     static func script(of code: String) -> Script {
-      switch base(of: code) {
+      // A script the code names wins over the language's usual one (`sr-Latn`, `uz-Cyrl`).
+      if code.contains("Latn") { return .latin }
+      if code.contains("Cyrl") { return .cyrillic }
+      if code.contains("Arab") { return .arabic }
+      return switch base(of: code) {
       case "ru", "uk", "be", "bg", "mk", "sr", "kk", "ky", "tg", "mn": .cyrillic
       case "el": .greek
       case "hy": .armenian
@@ -118,6 +122,15 @@ extension Translation {
 
       func contains(_ scalar: Unicode.Scalar) -> Bool {
         ranges.contains { $0.contains(scalar.value) }
+      }
+
+      /// Letters any language's text may carry: Latin (names, acronyms, code), combining
+      /// marks, and the CJK and full-width punctuation blocks.
+      static func isShared(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.value {
+        case 0...0x02AF, 0x0300...0x036F, 0x1E00...0x1EFF, 0x2000...0x2BFF, 0x3000...0x303F, 0xFF00...0xFFEF: true
+        default: false
+        }
       }
     }
   }
