@@ -47,15 +47,9 @@ extension Translation {
     let stage: Stage
     let project: Project
     /// The operations this run performs, in order — what the rail shows as the
-    /// steps of one pass. A translate run is
-    /// `[.prepare, .prelearn, .learn, .vertical, .horizontal]`: the row pass is a
-    /// step, always, not a separate pass the user triggers.
+    /// steps of one pass. A translate run is `[.prepare, .vertical, .horizontal]`: the
+    /// row pass is a step, always, not a separate pass the user triggers.
     var operations: [Stage]
-    /// Which plan this run is on (`Mode`). Kept ON the run because everything that reports
-    /// about it — the rail, the four pages and the status bar — reads the run's own
-    /// `operations`, and three steps only read as deliberate if the run can say which plan
-    /// it is running (8.1: a step with nothing to do reads as a step that did nothing).
-    let mode: Mode
     var state: State = .idle
     /// Which operation of `operations` the run is on. The rail shows each step's
     /// progress through this, and reopening the overlay lands here (8.1).
@@ -89,60 +83,19 @@ extension Translation {
     /// counts only what is left, and the bar goes on from where the pause left it.
     var progressBase = 0.0
 
-    init(stage: Stage, project: Project, mode: Mode = .full) {
+    init(stage: Stage, project: Project) {
       self.stage = stage
       self.project = project
-      self.mode = mode
-      operations = Run.plan(for: stage, mode: mode)
+      operations = Run.plan(for: stage)
     }
-
-    /// WHICH PLAN a run is on. One run, two ways to start it (reader, 2026-09-14: "Add skip
-    /// learning mode that will start from vertical translation").
-    ///
-    /// The difference is exactly the learning steps: `prelearn` supplies the machine record a
-    /// human-verified slot is missing and `learn` folds what the human changed into the
-    /// project's language document. A run that skips them is the same runner, the same stages,
-    /// the same write-back and the same retry — it simply does not perform those two
-    /// operations, which is right for a project whose language documents are already what they
-    /// should be and whose machine records nobody needs.
-    ///
-    /// It is NOT a plan with the steps trimmed at a call site: `Run.plan` is the one place a
-    /// plan is decided, and the run carries the mode so the rail, the pages and the bar can
-    /// report which plan they are showing.
-    enum Mode: String, CaseIterable {
-      /// prepare -> prelearn -> learn -> vertical -> horizontal.
-      case full
-      /// prepare -> vertical -> horizontal: the same run without the learning steps.
-      case skipLearning
-
-      /// How a readout NAMES this mode. The bar says it only for a plan that differs from the
-      /// usual one: a run of three steps whose bar said nothing would let the two absent steps
-      /// read as steps that did nothing, when they are absent by choice (8.1).
-      var title: String {
-        switch self {
-        case .full: String(localized: "Full plan")
-        case .skipLearning: String(localized: "Skip learning")
-        }
-      }
-    }
-
-    /// What the skip-learning Start says it does — ONE sentence, read by BOTH hosts that offer
-    /// the button (the toolbar's and the pane's bar), so the two can never say different things.
-    static let skipLearningHelp =
-      String(localized: "Start without the learning steps: prepare, translate, then the row pass")
 
     /// The ordered operations behind a run. Preparation is always first: scan the
     /// catalog, merge it into the in-memory catalog, load the session rows and
     /// resolve the imported database, so every later operation sees one settled
-    /// set of rows. It survives the skip-learning plan for exactly that reason: it is
-    /// what reads the rows and resolves the imported database, so without it there
-    /// is no work for any later operation to find (4.8).
+    /// set of rows (4.8).
     ///
-    /// prelearn and learn are operations OF the translate run, not passes a user
-    /// starts: prelearn supplies the machine record a human-verified slot is
-    /// missing, and learn folds what the human changed into the project's language
-    /// document before the column it governs is translated. `.skipLearning` drops
-    /// exactly those two and keeps everything else in the same order.
+    /// Learning costs no request: preparation writes every value a human verified into
+    /// translation memory, where it answers the same source in any project with no prompt.
     ///
     /// The row pass is the LAST step of that run, and it is always enabled (reader,
     /// 2026-09-14). After the columns are translated, it puts each row in view so the
@@ -151,19 +104,12 @@ extension Translation {
     /// not a separate control: because it runs at the end of every run, pressing the
     /// button again after a verification session is how those corrections reach the
     /// rest of the project — the vertical step finds nothing to redo (verified slots
-    /// are not work), prelearn and learn do their thing, and the row pass adapts.
-    ///
-    /// The row-only flow has NO second variant: `.horizontal` is `[.prepare, .horizontal]`
-    /// in both modes, because there is no learning in it to skip.
-    static func plan(for stage: Stage, mode: Mode = .full) -> [Stage] {
+    /// are not work), preparation learns them, and the row pass adapts.
+    static func plan(for stage: Stage) -> [Stage] {
       switch stage {
-      case .vertical:
-        mode == .skipLearning
-          ? [.prepare, .vertical, .horizontal]
-          : [.prepare, .prelearn, .learn, .vertical, .horizontal]
+      case .vertical: [.prepare, .vertical, .horizontal]
       case .horizontal: [.prepare, .horizontal]
       case .prepare: [.prepare]
-      case .prelearn, .learn: [.prepare, stage]
       }
     }
 
@@ -360,6 +306,8 @@ extension Translation {
       /// No readout shows this number yet; the saving is already visible in
       /// `characters` and `requests`, and this is what says how much of it memory did.
       var resolved: [Stage: Int] = [:]
+      /// Verified values preparation wrote to translation memory as gold.
+      var learned = 0
     }
 
     /// A failure worth surfacing: the item or batch it happened on, and whether
@@ -453,32 +401,12 @@ extension Translation {
       }
     }
 
-    /// Which rule this run's write-back asks of a slot, for the shape the batch is.
-    ///
-    /// A translate batch writes a VALUE and asks the slot's status. A prelearn batch writes
-    /// the machine RECORD and no value at all (4.1), and the value rule refuses exactly the
-    /// slots that operation exists for: its slots are `.verified` by construction. Measured
-    /// before this pair existed — a prelearn batch spent its request, wrote nothing, and
-    /// reported no failure, because the write set was empty and nobody asked for an answer.
-    ///
-    /// One place answers for both, so the scan's own preview, the validator's "ids that must
-    /// be answered" and the write-back cannot drift apart (5.3, 5.5).
+    /// The write rule for one slot, asked by the scan, the validator and the write-back, so
+    /// they cannot drift apart (5.3, 5.5).
     static func writable(_ slot: LocalizationString, for stage: Stage) -> Bool {
-      stage == .prelearn ? machineWritable(slot) : writable(slot.status)
+      writable(slot.status)
     }
 
-    /// The write set of a machine-record write: the slot is one a HUMAN settled whose
-    /// machine record is still missing — the two halves of the prelearn predicate (2.4),
-    /// asked here so the scan and the write-back cannot disagree.
-    ///
-    /// It protects something narrower than the value rule does, and deliberately: the field
-    /// it fills, `machine`, is one no human owns (a human edit never touches it), so a
-    /// `.verified` slot is not a reason to refuse the write. What it does refuse is a slot
-    /// that already HAS a machine record: the operation only ever asks for one while it is
-    /// empty, so filling it again would spend the request on a record nobody asked for.
-    static func machineWritable(_ slot: LocalizationString) -> Bool {
-      slot.status == .verified && slot.machine.isEmpty
-    }
   }
 
   /// Executes a run. One runner per project: a project can have at most one run
@@ -510,8 +438,6 @@ extension Translation {
     /// as it closes with `saving: false`, and the batch's end pays the one save (`commit`).
     private var pendingWrites = false
 
-    /// The word a fold answers when the document already covers every lesson.
-    private static let noChange = "NO_CHANGE"
     /// Who a value memory answered with is attributed to, in the record the app's own
     /// browser reads. The old pipeline's memory resolve wrote exactly this word, and a
     /// model that was never asked must not be named as the writer (10.16).
@@ -540,7 +466,7 @@ extension Translation {
     /// (8.1). A run that has ended is replaced by a freshly cut one, which is how the other
     /// mode is reached.
     @discardableResult
-    func run(_ stage: Stage, mode: Run.Mode = .full) async throws -> Run {
+    func run(_ stage: Stage) async throws -> Run {
       if let existing = runs[stage] {
         switch existing.state {
         case .scanning, .running:
@@ -553,7 +479,7 @@ extension Translation {
           break
         }
       }
-      let run = Run(stage: stage, project: project, mode: mode)
+      let run = Run(stage: stage, project: project)
       runs[stage] = run
       try await execute(run)
       return run
@@ -738,10 +664,10 @@ extension Translation {
       run.finishedAt = nil
       run.state = .scanning
       let progress = ProgressTracker(
-        operation: RunProgress.operation(run.stage, mode: run.mode),
+        operation: RunProgress.operation(run.stage),
         stages: RunProgress.planned(
           for: run, model: RunProgress.model,
-          last: progressHistory.plan(for: RunProgress.operation(run.stage, mode: run.mode)) ?? []),
+          last: progressHistory.plan(for: RunProgress.operation(run.stage)) ?? []),
         history: progressHistory)
       run.progressBase = isFresh ? 0 : (run.estimate?.fraction ?? 0)
       run.progress = progress
@@ -776,7 +702,7 @@ extension Translation {
         let operation = run.operations[run.operationIndex]
         if operation == .prepare {
           run.progress?.begin(RunProgress.prepare)
-          try prepare(run)
+          try await prepare(run)
           run.operationIndex += 1
           continue
         }
@@ -821,10 +747,43 @@ extension Translation {
     ///
     /// Opening and parsing the `.xcstrings` is the catalog layer's async work, and
     /// the imported-database resolve belongs to whoever opens a project
-    /// (`Workspace.open`); what is left for the run is the session's own load.
-    private func prepare(_ run: Run) throws {
+    /// (`Workspace.open`); what is left for the run is the session's own load, and
+    /// learning: every value a human verified becomes a gold memory entry.
+    private func prepare(_ run: Run) async throws {
       try run.project.loadData()
       indexRows(run)
+      learn(run)
+    }
+
+    /// Learning, with no model call: each verified slot's value is written to translation
+    /// memory as gold, so the same source resolves to it in every project and no request
+    /// carries it again. An entry that already holds the value is left alone.
+    private func learn(_ run: Run) {
+      let memory = Memory(project: project)
+      var learned = 0
+      do {
+        for row in run.project.data where row.isCatalogRow && row.translatable {
+          let source = row.content.isEmpty ? row.key : row.content.catalogValue
+          guard !source.isEmpty else { continue }
+          for slot in row.targets where slot.status == .verified && !slot.target.isEmpty {
+            let value = slot.target.catalogValue
+            if let known = try memory.resolve(source: source, language: slot.language),
+              known.grade == .gold, known.value == value
+            { continue }
+            try memory.upsert(
+              Memory.Entry(
+                key: row.key, source: source, language: slot.language, value: value, grade: .gold,
+                versions: slot.versions),
+              saving: false)
+            learned += 1
+          }
+        }
+        if learned > 0 { try store.save() }
+      } catch {
+        store.rollback()
+        fail(run, message: error.localizedDescription, retryable: true)
+      }
+      run.tally.learned += learned
     }
 
     /// True when this operation's batches are already in the run and cut.
@@ -847,10 +806,6 @@ extension Translation {
       switch operation {
       case .prepare:
         return
-      case .prelearn:
-        batches = self.batches(of: try project.verticalPrelearn())
-      case .learn:
-        batches = self.batches(of: try project.verticalLearn())
       case .vertical:
         batches = self.batches(of: try project.verticalTranslate())
       case .horizontal:
@@ -893,55 +848,6 @@ extension Translation {
               target: operation.target,
               comment: operation.comment,
               maxWidth: operation.maxWidth)
-          },
-          characters: group.items.reduce(0) { $0 + $1.characters })
-      }
-    }
-
-    /// Prelearn's groups as the runner's batches: the same shape as a language batch,
-    /// because the prompt is the same shape and the reply is written to `machine`
-    /// only.
-    ///
-    /// The item carries NO width guideline (`maxWidth: 0`, and `Prompt` omits the
-    /// field when it is 0): whether prelearn's request carries one is the prelearn
-    /// card's open decision, and the executor does not make it on the way past.
-    private func batches(of stage: VerticalPrelearn) -> [Run.Batch] {
-      stage.operations.enumerated().map { ordinal, group in
-        Run.Batch(
-          id: "\(Stage.prelearn.rawValue).\(group.language).\(ordinal)",
-          stage: .prelearn,
-          language: group.language,
-          items: group.items.map { operation in
-            Run.Item(
-              key: operation.key,
-              language: group.language,
-              source: operation.source,
-              target: operation.target,
-              comment: operation.comment,
-              maxWidth: 0)
-          },
-          characters: group.items.reduce(0) { $0 + $1.characters })
-      }
-    }
-
-    /// Learn's groups as the runner's batches. The item carries the machine's attempt
-    /// beside the human's value, because that delta IS the lesson; its `target` is the
-    /// human's value, which is what the fold folds in.
-    private func batches(of stage: VerticalLearn) -> [Run.Batch] {
-      stage.operations.enumerated().map { ordinal, group in
-        Run.Batch(
-          id: "\(Stage.learn.rawValue).\(group.language).\(ordinal)",
-          stage: .learn,
-          language: group.language,
-          items: group.items.map { operation in
-            Run.Item(
-              key: operation.key,
-              language: group.language,
-              source: operation.source,
-              target: operation.target,
-              comment: operation.comment,
-              maxWidth: 0,
-              machine: operation.machine)
           },
           characters: group.items.reduce(0) { $0 + $1.characters })
       }
@@ -1258,11 +1164,7 @@ extension Translation {
       var scanner = Validator.Scanner()
       var raw = ""
       var broke: Error?
-      // Only the stages that answer ROWS have anything to write per row. The learn fold
-      // answers document text: it has no ids, its reply is not a set of candidates, and a
-      // slot must come out of it untouched (5.3/5.4) — so its text is only collected.
       let perRow = batch.stage == .vertical || batch.stage == .horizontal
-        || batch.stage == .prelearn
       do {
         for try await chunk in router.stream(request, using: candidate) {
           raw += chunk
@@ -1292,16 +1194,6 @@ extension Translation {
       run.tally.byModel[candidate.model, default: 0] += 1
       readTelemetry(run)
       retain(raw, of: batch, in: run)
-
-      // The fold answers DOCUMENT TEXT: there is nothing per-id to validate
-      // or gate, because the reply is not a set of candidates (5.3/5.4 are about
-      // candidates).
-      if batch.stage == .learn {
-        await fold(raw, of: batch, in: run)
-        for index in batch.items.indices { batch.items[index].phase = .applied }
-        batch.phase = .applied
-        return batch
-      }
 
       // The reply belongs to the BATCH, and it is kept as it arrived rather than when the
       // batch returns: everything after this point — validation, a cut reply's re-ask — can
@@ -1483,38 +1375,11 @@ extension Translation {
       case .vertical:
         return Prompt.languageBatch(
           language: batch.language ?? "", items: batch.items, project: project)
-      case .prelearn:
-        return Prompt.prelearnBatch(
-          language: batch.language ?? "", items: batch.items, project: project)
       case .horizontal:
         return Prompt.rowBatch(items: batch.items, project: project)
-      case .learn:
-        let language = batch.language ?? batch.items.first?.language ?? ""
-        return Prompt.learnFold(
-          language: language,
-          lessons: lessons(of: batch),
-          document: project.language(language)?.context.context ?? "")
       case .prepare:
         // Preparation is a pass, never a request: no batch of it exists.
         return Prompt.Request()
-      }
-    }
-
-    /// The lessons one fold folds: what the machine produced against what the human
-    /// settled on. A lesson whose machine value equals the human's is not built — the
-    /// model already agreed with the human, so there is nothing to teach
-    /// (`Prompt.Lesson`).
-    private func lessons(of batch: Run.Batch) -> [Prompt.Lesson] {
-      batch.items.compactMap { item in
-        let machine = item.machine.catalogValue
-        let value = item.target.catalogValue
-        guard !machine.isEmpty, !value.isEmpty, machine != value else { return nil }
-        return Prompt.Lesson(
-          key: item.key,
-          source: item.payloadSource.catalogValue,
-          comment: item.comment,
-          machine: machine,
-          value: value)
       }
     }
 
@@ -1584,21 +1449,16 @@ extension Translation {
             slot: slot,
             // The text the value was produced FROM, which is what memory is keyed
             // by. Taken from the ITEM rather than re-read off the row: it is what
-            // the request was built against, and it is the same body the fold's
-            // gold write records.
+            // the request was built against.
             source: item.payloadSource.catalogValue,
-            target: batch.stage == .prelearn ? nil : body,
+            target: body,
             machine: body,
-            // Prelearn writes the machine record ONLY: the human owns the value, so
-            // its target, its status and its stamp stay exactly as they were (4.1).
-            status: batch.stage == .prelearn ? nil : .translated,
-            versions: batch.stage == .prelearn ? nil : item.versions,
+            status: .translated,
+            versions: item.versions,
             previous: previous,
             model: batch.model,
-            reason: batch.stage == .prelearn
-              ? "Prelearn (\(batch.model)): machine record for a verified slot"
-              : "\(batch.stage.title) (\(batch.model)): "
-                + (previous.isEmpty ? "filled empty slot" : "differs from previous machine value"),
+            reason: "\(batch.stage.title) (\(batch.model)): "
+              + (previous.isEmpty ? "filled empty slot" : "differs from previous machine value"),
             // A request produced it: no memory answered this slot.
             memory: nil))
         positions.append(position)
@@ -1943,78 +1803,6 @@ extension Translation {
         updatedAt: .now,
         projectID: owner,
         category: category)
-    }
-
-    /// The learn write-back: the reply IS the line(s) to append to the language
-    /// document, or the single word `NO_CHANGE` (3.5). Canonicalization and the change
-    /// gate belong to `Context.append` (3.8) — an identical line writes nothing and
-    /// bumps nothing — and the document is compressed after the fold, because a
-    /// language-document bump is what marks the rest of the column stale (3.6).
-    ///
-    /// The gold memory entry comes from the lessons the batch carried, which is the
-    /// human's own value (6.2): a fold's reply is prose for ONE document, never a set
-    /// of candidates, so nothing here is per-id.
-    private func fold(_ reply: String, of batch: Run.Batch, in run: Run) async {
-      let answer = reply.trimmingCharacters(in: .whitespacesAndNewlines)
-      guard let language = batch.language ?? batch.items.first?.language,
-        let document = project.language(language)?.context
-      else { return }
-      // The reply is the line(s) to append, or NO_CHANGE. A language document's line
-      // is `KEY<TAB>SOURCE<TAB>VALUE` — three fields, and each scope validates its own
-      // format (3.7) — so a reply that is prose is reported rather than folded: the
-      // document is what every later prompt of that column carries, and
-      // canonicalization (3.8) cannot turn prose into a lesson.
-      if !answer.isEmpty, answer != Self.noChange {
-        let lines = answer.split(separator: "\n")
-          .map { $0.trimmingCharacters(in: .whitespaces) }
-          .filter { !$0.isEmpty }
-        let lessons = lines.filter {
-          $0.split(separator: "\t", omittingEmptySubsequences: false).count == 3
-        }
-        if lessons.count < lines.count {
-          fail(
-            run, language: language,
-            message: "the fold answered \(lines.count - lessons.count) line(s) that are not lesson lines",
-            retryable: false)
-        }
-        if !lessons.isEmpty { document.append(value: lessons.joined(separator: "\n")) }
-      }
-      // The budget keeper runs after the fold, because a language-document bump is
-      // what marks the rest of that column stale (3.6).
-      do {
-        try await document.compressIfNeeded()
-      } catch {
-        fail(run, language: language, message: error.localizedDescription, retryable: true)
-      }
-      // The gold entries a fold writes are ONE transaction (7.6): the lessons of a batch are one
-      // unit, so the entries go through WITHOUT saving and the batch pays ONE `Store.save()` —
-      // this is a per-item save loop otherwise, on a stage that runs for every language of a
-      // project. A failure rolls the entries already written back rather than leaving half of
-      // the batch pending, and is reported once, with the entry it died on. What the fold
-      // appended to the language document is a write of its own (and is left alone, 7.6).
-      let memory = Memory(project: project)
-      var current: Run.Item?
-      do {
-        for item in batch.items {
-          current = item
-          try memory.upsert(
-            Memory.Entry(
-              key: item.key,
-              source: item.payloadSource.catalogValue,
-              language: language,
-              value: item.target.catalogValue,
-              grade: .gold,
-              versions: item.versions),
-            saving: false)
-        }
-        try store.save()
-      } catch {
-        store.rollback()
-        fail(run, key: current?.key, language: language,
-             message: error.localizedDescription, retryable: true)
-      }
-      run.tally.itemsDone += batch.items.count
-      run.tally.byStage[.learn, default: 0] += batch.items.count
     }
 
     // MARK: - checkpoint

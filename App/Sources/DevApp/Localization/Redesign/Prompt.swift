@@ -31,9 +31,7 @@
 //  model is told which forms it is filling instead of guessing which ones exist. A
 //  reply's "text" mirrors the body it answers.
 //
-//  Reply shapes, per request: `translate`/`row` answer a JSON array of
-//  `{"id": <position>, "text": <body>}`, and `learnFold`/`compress` answer document
-//  TEXT rather than a per-id map — their `ids` is therefore empty.
+//  Reply shape: `translate`/`row` answer a JSON array of `{"id": <position>, "text": <body>}`.
 
 import Foundation
 
@@ -60,18 +58,6 @@ extension Translation {
         l0: l0,
         rest: l1 + ["ITEMS\n" + payload],
         ids: positions(count: items.count))
-    }
-
-    /// Prelearn: a machine version of a source whose human value has no machine
-    /// record. Same shape as a language batch, and the reply is written to
-    /// `machine` only.
-    ///
-    /// "Same shape" is taken literally — the same system text, the same blocks and
-    /// the same payload — so the L0 prefix is byte-identical to the translate
-    /// batch's and the provider cache covers both. Prelearn differs in what it
-    /// WRITES, which is not the prompt's business.
-    static func prelearnBatch(language: String, items: [Run.Item], project: Project) -> Request {
-      languageBatch(language: language, items: items, project: project)
     }
 
     /// A row batch: L0 then ITEMS. The comment, the width guideline, the plural data
@@ -101,63 +87,11 @@ extension Translation {
         ids: positions(count: items.count))
     }
 
-    // MARK: - learn
-
-    /// The learn fold: what the model produced vs what the human settled on, into
-    /// one document line per (key, source). Change-gated at the write, not here:
-    /// this only builds the request.
-    ///
-    /// The reply is DOCUMENT TEXT, not a per-id map and not the whole document: the
-    /// canonical line to append per lesson folded (one line per (key, source),
-    /// `KEY<TAB>SOURCE<TAB>VALUE`, escaped), the single word `NO_CHANGE` when the
-    /// document already covers every lesson it was given, and nothing else. The
-    /// canonicalization in `Context.append` is what dedupes to one line per
-    /// (key, source) and drops a no-op, which is why the model never has to rewrite
-    /// the lines it does not touch. `ids` is empty: there is nothing to match.
-    static func learnFold(language: String, lessons: [Lesson], document: String) -> Request {
-      let lines: [[String: Any]] = lessons.map { lesson in
-        [
-          "key": lesson.key,
-          "source": lesson.source,
-          "comment": clamp(lesson.comment, to: Limits.commentCharacters),
-          "machine": lesson.machine,
-          "value": lesson.value,
-        ]
-      }
-      let user = """
-      LESSONS — what the machine produced vs what the human settled on
-      \(json(lines))
-
-      CURRENT \(language.uppercased()) DOCUMENT — \(document.count) characters, \
-      budget \(Limits.languageContext)
-      \(document.isEmpty ? "(the document is empty)" : document)
-      """
-      return Request(system: systemPrompt(.learn(language: language)), user: user)
-    }
-
-    /// The budget keeper — one call per over-budget document, never one per line.
-    ///
-    /// The reply is the COMPLETE rewritten document body, or the single word
-    /// `NO_CHANGE` when it cannot be usefully shortened. `ids` is empty for the same
-    /// reason as `learnFold`: the reply is a document, not a per-id map.
-    static func compress(language: String, document: String, limit: Int) -> Request {
-      let user = """
-      CURRENT \(language.uppercased()) DOCUMENT — \(document.count) characters, \
-      budget at most \(limit)
-
-      \(document)
-      """
-      return Request(
-        system: systemPrompt(.compress(language: language, limit: limit)), user: user)
-    }
-
     /// A request as the router sends it. `ids` is what the validator matches the
     /// reply against; `cacheablePrefix` is the L0 block, which is what the
     /// telemetry counts when it reports the cached share.
     ///
-    /// `ids` are the items' POSITIONS in the batch, as strings — never keys. It is
-    /// empty exactly when the reply is not a per-id map: `learnFold` and `compress`
-    /// answer document text.
+    /// `ids` are the items' POSITIONS in the batch, as strings — never keys.
     ///
     /// `cacheablePrefix` is the leading run the provider can cache: the system
     /// prompt plus the L0 blocks, laid out exactly as the two messages are laid out,
@@ -169,17 +103,6 @@ extension Translation {
       var user: String = ""
       var ids: [String] = []
       var cacheablePrefix: String = ""
-    }
-
-    /// One lesson: the machine's attempt, the human's value, and the row's own
-    /// context. A lesson with `machine == value` is not built — the model already
-    /// agreed with the human, so there is nothing to teach.
-    struct Lesson {
-      let key: String
-      let source: String
-      let comment: String
-      let machine: String
-      let value: String
     }
 
     // MARK: - request assembly
@@ -420,9 +343,6 @@ extension Translation {
     private enum Shape {
       case translate
       case row
-      /// The learn fold and the compression pass name their own language and cap.
-      case learn(language: String)
-      case compress(language: String, limit: Int)
     }
 
     private static func systemPrompt(_ shape: Shape) -> String {
@@ -431,10 +351,6 @@ extension Translation {
         return translateSystem(direction: .targetLanguageSection)
       case .row:
         return translateSystem(direction: .perItemLanguage)
-      case .learn(let language):
-        return learnSystem(language: language)
-      case .compress(let language, let limit):
-        return compressSystem(language: language, limit: limit)
       }
     }
 
@@ -517,77 +433,5 @@ extension Translation {
       """
     }
 
-    /// The learn fold: the machine's attempt vs the human's value, folded into one
-    /// document line per (key, source). The language is named here because no L0
-    /// block exists on this request — it carries no project context.
-    private static func learnSystem(language: String) -> String {
-      """
-      You are the learning engine of a software-localization pipeline. You maintain \
-      ONE plain-text document of accumulated lessons for the target language \
-      "\(language)". You receive the document as it stands and the LESSONS of this \
-      fold: for each one, what the machine produced for a source and what the human \
-      settled on for it, with the catalog key and the developer comment.
-
-      Your job is the line (or lines) this fold APPENDS to the document — not the \
-      document, not a summary of the lessons.
-
-      Line format — every lesson occupies exactly ONE line, its three fields \
-      separated by a real tab character (U+0009), exactly like this one:
-      cancel\tCancel\tОтмена
-      The fields are KEY, SOURCE and VALUE in that order. The separators are REAL \
-      tab characters, never the two-character text \\t. A literal tab, newline or \
-      backslash INSIDE a field is escaped as \\t, \\n, \\\\ — reproduce those escapes \
-      exactly.
-
-      Rules:
-      1. Reply ONLY with the line(s): one line per lesson you fold, in the given \
-      order, and nothing else — no prose, no markdown fences, no commentary, and no \
-      copy of the lines you did not change.
-      2. The VALUE field is the settled value itself, written the way this document \
-      already words things: terminology, capitalisation and register consistent with \
-      the lines around it. Never a description of the lesson, never the machine \
-      wording the human rejected.
-      3. One line per (key, source): never emit two lines for the same pair, and \
-      never emit a line for a pair the document already covers in its own words.
-      4. Never invent a lesson the input does not imply, and never restate a lesson \
-      that is already in the document.
-      5. If the document already covers EVERY lesson you were given, reply with \
-      exactly the single line NO_CHANGE.
-      """
-    }
-
-    /// The compression instruction: dedupe, merge, keep every term and convention,
-    /// fit the cap. The line format is restated exactly, because the reply is stored
-    /// as the document's new body.
-    private static func compressSystem(language: String, limit: Int) -> String {
-      """
-      You are the budget keeper of a software-localization document: ONE plain-text \
-      document of accumulated lessons for the target language "\(language)". You \
-      receive the document as it stands, and it is over its character budget. Return \
-      it COMPRESSED and DEDUPLICATED.
-
-      Line format is unchanged — every lesson occupies exactly ONE line, its three \
-      fields separated by a real tab character (U+0009), exactly like this one:
-      cancel\tCancel\tОтмена
-      The fields are KEY, SOURCE and VALUE in that order. Separators are REAL tab \
-      characters, never the two-character text \\t. A tab, newline or backslash \
-      INSIDE a field is escaped as \\t, \\n, \\\\ — reproduce those escapes exactly.
-
-      Rules:
-      1. Reply ONLY with the complete rewritten document — no explanations, no \
-      markdown fences, no commentary.
-      2. Keep exactly ONE line per (key, source) pair. When two lines contradict \
-      each other for the same pair, keep the LAST one: lines are appended over time, \
-      so the last is the newest.
-      3. Merge duplicates and redundant wording. Never drop a term, a proper noun, a \
-      transliteration rule or a register convention.
-      4. Never invent a lesson the input does not imply, and never change a value \
-      that carries no duplicate.
-      5. The result MUST be at most \(limit) characters. Drop the most generic and \
-      the oldest lines first; keep the newest and the most specific ones.
-      6. If the document cannot be usefully shortened, reply with exactly the single \
-      line NO_CHANGE.
-      """
-    }
   }
 }

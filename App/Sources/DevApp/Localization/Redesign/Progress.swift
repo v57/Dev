@@ -21,8 +21,8 @@ extension Translation {
 
     /// The history a run's plan is kept under: one per stage and mode, since a run without
     /// the learning steps is a different list of stages.
-    static func operation(_ stage: Stage, mode: Run.Mode) -> String {
-      "\(prefix).\(stage.rawValue).\(mode.rawValue)"
+    static func operation(_ stage: Stage) -> String {
+      "\(prefix).\(stage.rawValue)"
     }
 
     /// The history a re-ask of a finished run's failed batches is kept under (5.11).

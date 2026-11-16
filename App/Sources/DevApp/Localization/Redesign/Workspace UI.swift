@@ -181,23 +181,7 @@ extension Translation {
       if let run, let binding, let step = displayed(run) {
         switch step {
         case .prepare:
-          EmptyState(systemImage: "gearshape", title: "Preparing", message: "Reading the project's rows and the imported database. No model call.", status: .working)
-        case .prelearn:
-          if binding.prelearn.isEmpty {
-            EmptyState(systemImage: "wand.and.stars", title: "\(step.title) had nothing to do", message: "No settled slot is missing its machine record.")
-          } else {
-            VerticalPrelearn.Content(
-              index: binding.pageIndex(step), operations: binding.prelearn,
-              exchanges: binding.exchanges(.prelearn))
-          }
-        case .learn:
-          if binding.learn.isEmpty {
-            EmptyState(systemImage: "graduationcap", title: "\(step.title) had nothing to do", message: "No correction differs from what the model produced.")
-          } else {
-            VerticalLearn.Content(
-              index: binding.pageIndex(step), operations: binding.learn,
-              exchanges: binding.exchanges(.learn))
-          }
+          EmptyState(systemImage: "gearshape", title: "Preparing", message: "Reading the project's rows and learning the verified translations. No model call.", status: .working)
         case .vertical:
           if binding.vertical.isEmpty {
             EmptyState(systemImage: "translate", title: "\(step.title) had nothing to do", message: "Every slot of every column is already settled.")
@@ -320,18 +304,7 @@ extension Translation {
           Button("Start") { Task { try? await workspace.start() } }
             .buttonStyle(.kitPrimary)
             .disabled(!workspace.canStartRun)
-            .kitHelp(String(localized: "Start"), meta: workspace.museNote ?? String(localized: "Runs prepare, prelearn, learn, translate and the row pass"))
-          // The SECOND way in, immediately after Start (reader, 2026-09-14: "Place it right after
-          // start button with `forward.fill` icon"): the same run with the two learning steps left
-          // out. Icon-only, because Start is the button that needs a word — this one differs from
-          // it by ONE thing, and its tooltip is where that thing is spelled out. Same shape as
-          // Start: the same disabled rule (`canStartRun`), the same `museNote` fallback.
-          Button("Start Without Learning", systemImage: "forward.fill") {
-            Task { try? await workspace.startSkippingLearning() }
-          }
-          .buttonStyle(.kitIcon)
-          .disabled(!workspace.canStartRun)
-          .kitHelp(String(localized: "Start Without Learning"), meta: workspace.museNote ?? Run.skipLearningHelp, systemImage: "forward.fill")
+            .kitHelp(String(localized: "Start"), meta: workspace.museNote ?? String(localized: "Runs prepare, translate and the row pass"))
         }
       }
     }
@@ -527,53 +500,8 @@ extension Translation {
     private var exchangesByStep: [Stage: [Run.Exchange]] = [:]
 
     // Each step's pages are built on first read and kept for the life of the binding.
-    private(set) lazy var prelearn = makePrelearn()
-    private(set) lazy var learn = makeLearn()
     private(set) lazy var vertical = makeVertical()
     private(set) lazy var rows = makeRows()
-
-    /// Prelearn's pages: a source and the machine version being produced for a slot a
-    /// human already settled. It is never a translation anybody reads (4.1).
-    private func makePrelearn() -> [VerticalPrelearn.Operations] {
-      batches(.prelearn).map { batch in
-        VerticalPrelearn.Operations(
-          language: batch.language ?? "",
-          items: batch.items.map { item in
-            VerticalPrelearn.Operation(
-              key: item.key,
-              index: position(item.key),
-              comment: item.comment,
-              source: item.source,
-              machine: machine(item),
-              // The row's own state, so the page marks the ROW and not the batch (8.1).
-              phase: item.phase)
-          },
-          isCompleted: batch.phase == .applied,
-          isFailed: batch.phase == .failed)
-      }
-    }
-
-    /// Learn's pages: the difference between what the model produced and what the human
-    /// settled on, and the document line each one becomes (4.1).
-    private func makeLearn() -> [VerticalLearn.Operations] {
-      batches(.learn).map { batch in
-        VerticalLearn.Operations(
-          language: batch.language ?? "",
-          items: batch.items.map { item in
-            VerticalLearn.Operation(
-              key: item.key,
-              index: position(item.key),
-              comment: item.comment,
-              source: item.source,
-              machine: machine(item),
-              target: target(item),
-              // The row's own state, so the page marks the ROW and not the batch (8.1).
-              phase: item.phase)
-          },
-          isCompleted: batch.phase == .applied,
-          isFailed: batch.phase == .failed)
-      }
-    }
 
     /// The column pages: one page per language batch, its items in the run's order.
     private func makeVertical() -> [VerticalTranslate.Operations] {
@@ -907,35 +835,16 @@ extension Translation {
     /// there is no other way in: `canStart` reads the same workspace, so the button this path
     /// belongs to is only enabled once the pane has handed it over.
     func start(_ catalogURL: URL) async {
-      await start(catalogURL, mode: .full)
-    }
-
-    /// The toolbar's SECOND Start (reader, 2026-09-14): the same path with the learning steps
-    /// left out of the plan. One implementation for both, because the two buttons differ by
-    /// exactly one thing — the mode the run is built with — and everything else about starting
-    /// (the focus, the pages coming back up, the run's own reporting) is the same act.
-    func startSkippingLearning(_ catalogURL: URL) async {
-      await start(catalogURL, mode: .skipLearning)
-    }
-
-    private func start(_ catalogURL: URL, mode: Translation.Run.Mode) async {
       guard let catalog = catalogs[catalogURL.path] else { return }
       guard let workspace = await focus(catalogURL: catalogURL, catalog: catalog) else { return }
       workspace.reopenOverlay()
-      try? await workspace.run(.vertical, mode: mode)
+      try? await workspace.run(.vertical)
     }
 
     /// The Start button's help: why it is not available, or what it runs. A run in flight
     /// is the nearer reason of the two — the button is offering a WAIT, not a broken app.
     func startHelp(_ catalogURL: URL) -> String {
-      help(catalogURL, saying: String(localized: "Run prepare, prelearn, learn, translate, then the row pass (8.1)"))
-    }
-
-    /// The skip-learning button's help — the same shape, saying what THIS button does. The
-    /// sentence itself lives on `Run` beside the plan it describes, so the toolbar's button and
-    /// the pane's bar cannot end up describing two different runs.
-    func skipLearningHelp(_ catalogURL: URL) -> String {
-      help(catalogURL, saying: Translation.Run.skipLearningHelp)
+      help(catalogURL, saying: String(localized: "Run prepare, translate, then the row pass (8.1)"))
     }
 
     /// What a start button says about itself, for either of the two: why it is not available,

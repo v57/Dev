@@ -145,7 +145,7 @@ struct ServerRunBar: View {
 
   private var skipLearningHelp: LocalizedStringKey {
     if run.isRunning { return "A run is in progress — stop it first" }
-    return "\(Translation.Run.skipLearningHelp) — here it skips folding this server's verified values in first."
+    return "Start without the learning step: prepare, translate, then the row pass — here it skips folding this server's verified values in first."
   }
 }
 

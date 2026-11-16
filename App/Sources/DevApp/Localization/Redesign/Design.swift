@@ -29,11 +29,10 @@ enum Translation {
     static let globalContext = 10_000
     /// Human-authored prose rules for one project.
     static let projectContext = 10_000
-    /// Accumulated lessons for one language — cross-key conventions only.
+    /// Style rules for one language (formality, how commands read, punctuation).
     /// Per-key knowledge lives in translation memory, which resolves an exact
-    /// (source, key, value) hit with no prompt at all. That is why this one is
-    /// small on purpose.
-    static let languageContext = 1_000
+    /// (source, value) hit with no prompt at all, so this holds only rules.
+    static let languageContext = 2_000
     /// Source characters per translate request (vertical and horizontal).
     static let batch = 10_000
     /// Model-response RETRIES after a batch's first attempt (5.9): a retryable failure
@@ -53,8 +52,8 @@ enum Translation {
   // MARK: - context documents
 
   /// A versioned context document: one global, one per project, one per
-  /// language. Growth is autonomous and append-ordered; the character budget is
-  /// kept by compression, not by truncation.
+  /// language. Every one is prose rules, appended in order; the prompt keeps the
+  /// newest lines when one outgrows its budget.
   @Observable @MainActor class Context: Identifiable {
     /// Which document this is. The id is DERIVED from the scope and never built
     /// by interpolating an object (`"\(project)"` prints the object, not its
@@ -64,7 +63,7 @@ enum Translation {
       /// Project-wide human rules — prose, no model call, an exact-line
       /// membership test. The widest blast radius after global.
       case project(String)
-      /// One project's lessons for one language. Per project on purpose: a lesson
+      /// One project's style rules for one language. Per project on purpose: a rule
       /// is usually that project's own vocabulary, and one shared document per
       /// language code would flatten every project into the most generic lines it
       /// can agree on. The id carries both halves — `"project/<id>/language/<code>"`
@@ -84,10 +83,7 @@ enum Translation {
         case .language: Limits.languageContext
         }
       }
-      /// The language code of a language document, nil for the two prose scopes.
-      /// A document's format is its scope's (3.7): lesson lines are a language
-      /// document's, so only a language document has a compression shape, and a
-      /// caller doing the format's work asks this instead of re-deriving the id.
+      /// The language code of a language document, nil for the other scopes.
       var languageCode: String? {
         switch self {
         case .global, .project: nil
@@ -116,15 +112,6 @@ enum Translation {
     /// (`TranslationData`), so the reads and writes below are synchronous lookups, not
     /// suspension points.
     let store: Store
-    /// The client a compression call goes out through. A document does not own a run,
-    /// so it takes the client it is handed and otherwise makes its own: a `Router` is
-    /// a model id plus its pacing state, and `Router.stream` is the redesign's only
-    /// transport, so there is no second way to make the call. A runner that has a
-    /// client of its own hands it in, which is what would put the tokens a
-    /// compression spends into that run's tally; until a runner does, the call still
-    /// reaches Muse and still parks Muse when it is refused, and only the telemetry
-    /// stays out of the run's report.
-    private let router: Router
     /// The body. Append-ordered, which is what makes tail-preserving truncation
     /// mean "the newest lessons survive".
     var context: String = ""
@@ -144,11 +131,10 @@ enum Translation {
     /// the raw `version`.
     var publishedVersion: Int { hasDocument ? version : 0 }
     var limit: Int
-    init(scope: Scope, store: Store, router: Router? = nil) throws {
+    init(scope: Scope, store: Store) throws {
       self.id = scope.id
       self.scope = scope
       self.store = store
-      self.router = router ?? Router()
       self.limit = scope.limit
       try loadContext()
     }
@@ -180,11 +166,8 @@ enum Translation {
     func save() throws {
       try store.saveDocument(scope, body: context, version: version)
     }
-    /// Appends one line, canonical for this scope: a language document carries
-    /// `KEY<TAB>SOURCE<TAB>VALUE` (escaped, exactly three fields), deduped to one
-    /// line per (key, source) with the newest value winning, and a cleared value
-    /// RETRACTS its line. A project document carries plain prose rules. An append
-    /// that changes nothing returns without bumping the version.
+    /// Appends rule lines that are not there yet. An append that changes nothing
+    /// returns without bumping the version.
     func append(value: String) {
       let incoming = Self.lines(in: value)
       guard !incoming.isEmpty else { return }
@@ -254,62 +237,8 @@ enum Translation {
       // model could not shorten, and a failed store write leaves the cut in memory.
       try? save()
     }
-    /// One model call per over-budget document, run after every learn fold, so
-    /// the STORED body fits what a prompt can send. ASYNC because it is a model
-    /// call — the store read that follows it is not. Change-gated, for the same
-    /// reason `append` is: a no-op rewrite must write nothing.
-    ///
-    /// One call, never one per line (3.6). Four ways out, and three of them keep the
-    /// stored body as the model left it: a body the model says it cannot usefully
-    /// shorten (`NO_CHANGE`), a rewrite that canonicalizes to the body already stored
-    /// (the change gate), and a rewrite still over the cap. All three fall through to
-    /// the tail-preserving cut, which is the documented fallback. Only an unusable
-    /// reply is an error, and it is thrown rather than swallowed: the caller (a fold)
-    /// reports it on the run, and the cut still keeps the stored body bounded.
-    func compressIfNeeded() async throws {
-      guard context.count > limit else { return }
-      // Only a LANGUAGE document has a compression shape. A project or global document
-      // is human prose, and `Prompt.compress` states the lesson-line format its answer
-      // has to come back in (3.7: the two formats are not interchangeable) — asking a
-      // model to keep prose rules in that shape would corrupt the rules, and cutting
-      // them would destroy authored text that no memory entry backs. A prose document
-      // therefore stays as it is, and the prompt builder clamps what it sends.
-      guard let language = scope.languageCode else { return }
-      let before = context
-      let answer = try await compressed(language: language)
-      if answer == Self.noChange {
-        truncateToLimit()
-        return
-      }
-      let canonical = Self.merging(
-        existing: [], incoming: Self.lines(in: answer), scope: scope)
-      guard !canonical.isEmpty else { throw CompressionError.unusableReply }
-      let body = canonical.joined(separator: "\n")
-      guard body != before else {
-        truncateToLimit()
-        return
-      }
-      context = body
-      version += 1
-      hasDocument = true
-      // A published change: the version is what re-marks the column, so this write is
-      // throwing rather than best-effort — the fold reports a failed one.
-      try save()
-      // The model was asked for at most `limit` characters; a body that is nonetheless
-      // over it goes through the cut, so what is STORED always fits what can be sent.
-      if isOverLimit { truncateToLimit() }
-    }
     // MARK: - the document's own format
 
-    /// The word a fold and a compression answer with when the document already covers
-    /// everything they were handed.
-    private static let noChange = "NO_CHANGE"
-    /// The literal two-character escape a model sometimes writes instead of a real tab
-    /// separator (it reads the instruction as "write \\t"). Tolerated on read and
-    /// canonicalized to a real tab on write — the same tolerance the current
-    /// implementation's `GlossaryFormat` has, restated here because the redesign calls
-    /// nothing in that file.
-    private static let literalSeparator = "\\t"
     /// A document body as its lines: one per line, trimmed, empties dropped. A stored
     /// body is canonical, so a "before" and an "after" compare line for line.
     ///
@@ -324,105 +253,16 @@ enum Translation {
     }
     /// The characters a document line may lose without changing what it says.
     private static let edges = CharacterSet(charactersIn: " \r\n")
-    /// A raw line as its canonical lesson line, or nil when it is not a lesson line at
-    /// all. A language document holds `KEY<TAB>SOURCE<TAB>VALUE` and nothing else
-    /// (3.7), so a line that does not split into exactly three fields is dropped
-    /// instead of stored as prose — the fold already reports those to the run, which
-    /// is where a malformed reply belongs.
-    private static func lesson(_ line: String) -> String? {
-      if line.split(separator: "\t", omittingEmptySubsequences: false).count == 3 {
-        return line
-      }
-      guard !line.contains("\t"), line.contains(literalSeparator) else { return nil }
-      let parts = line.components(separatedBy: literalSeparator)
-      guard parts.count == 3 else { return nil }
-      return parts.joined(separator: "\t")
-    }
-    /// The (key, source) pair a canonical lesson line is filed under. The escaped field
-    /// text is compared as written: the pair is what makes a lesson unique, and an
-    /// escape is part of the field's text, not part of the identity.
-    private static func identity(of line: String) -> String? {
-      let fields = line.split(separator: "\t", omittingEmptySubsequences: false)
-      guard fields.count == 3 else { return nil }
-      return "\(fields[0])\t\(fields[1])"
-    }
-    /// The body an append produces, per scope (3.8).
-    ///
-    /// A LANGUAGE document is deduped to one line per (key, source) with the newest
-    /// value winning IN PLACE — the line keeps its position, so document order stays
-    /// append-order and the tail-preserving cut keeps meaning "the newest lessons
-    /// survive". A cleared value retracts its line. A PROJECT document is prose: an
-    /// exact-line membership test, appended in order (3.5). The global document is
-    /// prose too — who may write it is decision 10.2's subject, not this function's.
+    /// The body an append produces (3.8): every document is prose rules, an exact-line
+    /// membership test, appended in order (3.5).
     private static func merging(
       existing: [String], incoming: [String], scope: Scope
     ) -> [String] {
       var merged = existing
-      switch scope {
-      case .global, .project:
-        for line in incoming where !merged.contains(line) {
-          merged.append(line)
-        }
-      case .language:
-        for raw in incoming {
-          guard let line = lesson(raw), let pair = identity(of: line) else { continue }
-          let fields = line.split(separator: "\t", omittingEmptySubsequences: false)
-          guard fields.count == 3 else { continue }
-          if fields[2].isEmpty {
-            merged.removeAll { identity(of: $0) == pair }
-          } else if let position = merged.firstIndex(where: { identity(of: $0) == pair }) {
-            merged[position] = line
-          } else {
-            merged.append(line)
-          }
-        }
+      for line in incoming where !merged.contains(line) {
+        merged.append(line)
       }
       return merged
-    }
-    /// One compression call, to Muse and nowhere else (3.6). The request is built by
-    /// `Prompt.compress`, which restates the line format because the reply IS the
-    /// document's new body, and the reply is read as TEXT: like the learn fold, this
-    /// answers a document rather than a per-id map, so there is nothing to match and
-    /// nothing to validate against ids — the chunks are simply collected.
-    private func compressed(language: String) async throws -> String {
-      let request = Prompt.compress(language: language, document: context, limit: limit)
-      let candidate = try await candidate()
-      try await router.admit(candidate)
-      var text = ""
-      for try await chunk in router.stream(request, using: candidate) { text += chunk }
-      return Self.strippingFence(text)
-    }
-    /// Muse, or a wait. `next()` answers nil exactly while Muse is parked, and there is
-    /// no second candidate to fall back to, so waiting the park out is the only thing
-    /// that is not giving up (5.2). The runner has the same three lines for a batch.
-    private func candidate() async throws -> Router.Candidate {
-      while true {
-        try Task.checkCancellation()
-        if let candidate = router.next() { return candidate }
-        let wait = router.cooldownUntil?.timeIntervalSinceNow ?? Router.cooldownWindow
-        try await Task.sleep(nanoseconds: UInt64(max(wait, 1) * 1_000_000_000))
-      }
-    }
-    /// A reply as its text. A fence pair a model insists on is stripped, because a
-    /// document body must not start with one; everything else is kept exactly as it
-    /// arrived.
-    private static func strippingFence(_ raw: String) -> String {
-      let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-      guard text.hasPrefix("```") else { return text }
-      return text.replacingOccurrences(of: "```json", with: "")
-        .replacingOccurrences(of: "```", with: "")
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-    /// A reply that is not a document at all: no lesson line, no `NO_CHANGE`. Reported
-    /// rather than swallowed, because a document that is over its budget and could not
-    /// be rewritten is worth knowing about.
-    enum CompressionError: LocalizedError {
-      case unusableReply
-      var errorDescription: String? {
-        switch self {
-        case .unusableReply: "the compression reply holds no lesson line"
-        }
-      }
     }
   }
 
@@ -1199,18 +1039,6 @@ enum Translation {
         project: context.publishedVersion,
         language: languages[language]?.context.publishedVersion ?? 0)
     }
-    /// A language-document bump auto-enqueues (that is how a lesson re-applies to the
-    /// rest of the column); a project-document bump deliberately does NOT — it would
-    /// sweep every record of the project, and reaches existing slots only through an
-    /// explicit run the user asked for.
-    func verticalPrelearn() throws -> VerticalPrelearn {
-      try loadData()
-      return VerticalPrelearn(project: self)
-    }
-    func verticalLearn() throws -> VerticalLearn {
-      try loadData()
-      return VerticalLearn(project: self)
-    }
     func verticalTranslate() throws -> VerticalTranslate {
       try loadData()
       return VerticalTranslate(project: self)
@@ -1226,7 +1054,7 @@ enum Translation {
   @Observable @MainActor class Language {
     let id: String
     unowned let project: Project
-    /// This language's accumulated lessons.
+    /// This language's style rules.
     var context: Context
     var global: Global { project.global }
     init(id: String, project: Project) throws {
@@ -1441,25 +1269,6 @@ enum Translation {
     /// comparison and never a guess; a single Int cannot express it, because
     /// three scopes bump independently.
     var versions: Context.Version = .none
-    /// Nothing to teach: the model already agreed with the human, or the slot has
-    /// not moved since it was confirmed. Requires machine output, so it is
-    /// disjoint from `needsPrelearn` by construction — which is what makes
-    /// "prelearn, then learn, then translate" a total order.
-    var toLearn: StringBody? {
-      guard status == .verified else { return nil }
-      guard !machine.isEmpty, !target.isEmpty else { return nil }
-      guard machine != target else { return nil }
-      guard let reviewed else { return target }
-      guard reviewed != target else { return nil }
-      return target
-    }
-    /// A human settled this slot with no machine output on record, so there is
-    /// nothing to diff. Prelearn asks for a machine version of the SOURCE first
-    /// and writes it to `machine` only — never to `target`, never to `status`:
-    /// the human owns the value.
-    var needsPrelearn: Bool {
-      status == .verified && !target.isEmpty && machine.isEmpty
-    }
     /// Work to do. `.stale` counts: a language-document bump is exactly what
     /// makes the rest of that column stale, and a slot that is skipped here never
     /// picks the new lesson up. `.ignore` and `.verified` never enter a run, and
@@ -1551,16 +1360,12 @@ enum Translation {
   /// user asks for — and that is the only way it runs alone.
   enum Stage: String, CaseIterable, Identifiable {
     case prepare
-    case prelearn
-    case learn
     case vertical
     case horizontal
     var id: String { rawValue }
     var title: String {
       switch self {
       case .prepare: String(localized: "Prepare")
-      case .prelearn: String(localized: "Prelearn")
-      case .learn: String(localized: "Learn")
       case .vertical: String(localized: "Translate")
       case .horizontal: String(localized: "Translate by row")
       }

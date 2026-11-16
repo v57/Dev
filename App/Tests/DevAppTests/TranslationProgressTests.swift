@@ -57,14 +57,14 @@ private func near(_ value: Double?, _ expected: Double, _ tolerance: Double = 0.
     #expect(first.size != second.size)
     let french = RunProgress.stage(for: batch(.vertical, "fr", strings: 10), model: model)
     let otherModel = RunProgress.stage(for: batch(.vertical, "de", strings: 10), model: "local:other")
-    let prelearn = RunProgress.stage(for: batch(.prelearn, "de", strings: 10), model: model)
-    #expect(Set([first.id, french.id, otherModel.id, prelearn.id]).count == 4)
+    let row = RunProgress.stage(for: batch(.horizontal, nil, strings: 10, languages: ["de"]), model: model)
+    #expect(Set([first.id, french.id, otherModel.id, row.id]).count == 4)
   }
 
   @Test func localStagesAreDiskAndCPU() {
     #expect(RunProgress.prepare.resource == .disk)
     #expect(RunProgress.scan(.vertical).resource == .cpu)
-    #expect(RunProgress.scan(.vertical).id != RunProgress.scan(.learn).id)
+    #expect(RunProgress.scan(.vertical).id != RunProgress.scan(.horizontal).id)
   }
 
   @Test func freshRunPlansScansAndLastRunsBatches() {
@@ -78,8 +78,6 @@ private func near(_ value: Double?, _ expected: Double, _ tolerance: Double = 0.
     #expect(
       plan.map(\.id) == [
         RunProgress.prepare.id,
-        RunProgress.scan(.prelearn).id,
-        RunProgress.scan(.learn).id,
         RunProgress.scan(.vertical).id, lastVertical.id, lastVertical.id,
         RunProgress.scan(.horizontal).id, lastRow.id,
       ])

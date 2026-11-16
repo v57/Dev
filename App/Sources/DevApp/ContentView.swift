@@ -185,21 +185,14 @@ struct ContentView: View {
         }
       }
       // One Translate button for the project whose Localization pane is showing:
-      // it runs the whole plan (prepare, prelearn, learn, translate, the row pass);
-      // its menu holds the same run without the two learning steps. Disabled while
+      // it runs the whole plan (prepare, translate, the row pass). Disabled while
       // a run is in flight: such a run is paused or cancelled from its own pages,
       // and pressing Translate again resumes it.
       if let catalogURL = paneCatalogURL {
         KitToolbarItem(placement: .primaryAction) {
           ToolGroup {
-            KitSplitButton("Translate", systemImage: "play.fill") {
+            Button("Translate", systemImage: "play.fill") {
               Task { await translation.start(catalogURL) }
-            } menu: {
-              Button("Translate Without Learning", systemImage: "forward.fill") {
-                Task { await translation.startSkippingLearning(catalogURL) }
-              }
-              .help(translation.skipLearningHelp(catalogURL))  // .help: inside a kit menu
-              .kitMenuPreview("Translates without first learning from what you changed by hand.")
             }
             .kitHelp("Translate", meta: "\(translation.startHelp(catalogURL))", systemImage: "play.fill")
           }

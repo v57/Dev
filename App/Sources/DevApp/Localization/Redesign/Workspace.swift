@@ -79,11 +79,6 @@ extension Translation {
       /// The run's own state, so the bar can say "paused" from "finished". Nil when
       /// this project has never run that stage.
       var state: Run.State?
-      /// WHICH PLAN the run is on (`Run.Mode`, 8.1). The bar names it for a plan that differs
-      /// from the usual one: a run of three steps whose line said nothing would let the two
-      /// absent steps read as steps that did nothing, when they are absent by choice. Nil when
-      /// this project has never run that stage.
-      var mode: Run.Mode?
       /// Items done against the items the run has CUT. The plan is discovered one
       /// operation at a time — a stage's batches exist only once it is scanned — so
       /// the total grows as the run walks its steps rather than being known up front.
@@ -112,7 +107,6 @@ extension Translation {
           case .cancelled: String(localized: "Cancelled")
           case .finished: String(localized: "Finished")
           }
-        if let mode, mode != .full { line += String(localized: " · \(mode.title)") }
         if let step { line += String(localized: " · \(step.title)") }
         if total > 0 { line += String(localized: " · \(done)/\(total)") }
         if failures > 0 { line += String(localized: " · \(failures) failed") }
@@ -125,7 +119,6 @@ extension Translation {
         guard let run else { return }
         state = run.state
         isRunning = run.state == .running || run.state == .scanning
-        mode = run.mode
         step = run.operation
         done = run.tally.itemsDone
         total = run.tally.items
@@ -166,8 +159,8 @@ extension Translation {
 
     // MARK: - runs
 
-    /// THE ONE BUTTON. Runs the main flow's whole plan in order — prepare, prelearn,
-    /// learn, translate, then the row pass — instead of walking stages one at a time.
+    /// THE ONE BUTTON. Runs the main flow's whole plan in order — prepare (which learns
+    /// the verified values), translate, then the row pass.
     /// The row pass is ALWAYS part of it (10.17 resolved): after the columns are
     /// translated it is what adapts machine output to anything a human has verified,
     /// so pressing this again once a verification session is over is how those
@@ -177,22 +170,6 @@ extension Translation {
     /// stacked.
     func start() async throws {
       try await run(.vertical)
-    }
-
-    /// THE SECOND WAY IN (reader, 2026-09-14): the same run WITHOUT the learning steps —
-    /// prepare, translate, then the row pass.
-    ///
-    /// Nothing else differs: the same runner, the same stages, the same write-back, the same
-    /// retry and the same saving rules. What it does not do is prelearn (the machine record a
-    /// human-verified slot is missing) and learn (folding what the human changed into the
-    /// project's language document) — right for a project whose documents already carry what
-    /// they should.
-    ///
-    /// Preparation is NOT skipped and cannot be: it is what reads the rows and resolves the
-    /// imported database, so without it there is nothing for the translate stages to find (4.8).
-    /// The plan is decided in ONE place (`Run.plan`), never by trimming an array here.
-    func startSkippingLearning() async throws {
-      try await run(.vertical, mode: .skipLearning)
     }
 
     /// Loads the rows from the open catalog, the language documents and the last cursor,
@@ -289,18 +266,13 @@ extension Translation {
 
     // MARK: - runs
 
-    /// Runs a stage's plan: `vertical` is prepare -> prelearn -> learn -> translate
-    /// -> the row pass (prelearn, learn and the row pass are operations OF that run,
-    /// not controls of their own), and `horizontal` alone re-runs just the sweep.
-    ///
-    /// `mode` is which plan a translate run performs (8.1): `.full` is the five steps above,
-    /// `.skipLearning` is the same run without the two learning steps. It reaches the runner
-    /// and lives on the run, so nothing else here has to know: the rail, the pages and the bar
-    /// all read the run's own plan.
+    /// Runs a stage's plan: `vertical` is prepare -> translate -> the row pass (the row
+    /// pass is an operation OF that run, not a control of its own), and `horizontal`
+    /// alone re-runs just the sweep over every row.
     ///
     /// A run needs a usable provider before it starts, so an unconfigured app fails at
     /// the button instead of per batch.
-    func run(_ stage: Stage, mode: Run.Mode = .full) async throws {
+    func run(_ stage: Stage) async throws {
       // One workspace shows one run at a time, so the rail and the bar follow the run
       // that was just asked for.
       self.stage = stage
@@ -318,7 +290,7 @@ extension Translation {
       // memory is loaded off the main actor the first time.
       await store.data.loadMemory()
       do {
-        try await runner.run(stage, mode: mode)
+        try await runner.run(stage)
       } catch {
         self.error = error.localizedDescription
         throw error
@@ -359,7 +331,7 @@ extension Translation {
         // The batches a resume landed are the run's results like any other: the app's
         // catalog is what a Save would write, so it learns about them now (5.8).
         await publish()
-      case .cancelled, .finished: try await self.run(stage, mode: run.mode)
+      case .cancelled, .finished: try await self.run(stage)
       // Already going: a second start is a wait, not a second run (8.1).
       case .scanning, .running: return
       }
