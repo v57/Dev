@@ -44,8 +44,11 @@ extension Translation {
     var index: Int = 0
     var operations = [Operations]()
     let project: Project
-    init(project: Project) {
+    /// The rows to review; nil reviews every row.
+    let keys: Set<String>?
+    init(project: Project, keys: Set<String>? = nil) {
       self.project = project
+      self.keys = keys
       scan()
     }
     /// One pass over the rows: `translatable`, the 4.7 eligibility test on the
@@ -73,6 +76,7 @@ extension Translation {
       for index in 0..<project.data.count {
         let item = project.data[index]
         guard item.isCatalogRow, item.translatable, item.hasEnglishCharacters else { continue }
+        if let keys, !keys.contains(item.key) { continue }
         // A row with NO language at all is SKIPPED (reader, 2026-09-14): it has
         // nothing to carry and nothing to write, and it would expand to a batch with
         // zero items — a request whose item list is empty.
@@ -92,7 +96,7 @@ extension Translation {
         var operations = [Operations]()
         var current = Operations()
         var size = 0
-        let maxSize = Limits.batch / 4
+        let maxSize = Limits.rowBatch
         for item in self.items {
           let chars = item.characters
           // A batch always takes at least one item, so a source that is over the budget

@@ -556,50 +556,62 @@ extension Translation.HorizontalTranslate {
       // request asked for. The ru column is the human's and travels as context; its answer
       // is discarded (4.6), which is why it repeats the value the row already holds.
       """
-      [{"id": 0, "text": "Настройки"},
-       {"id": 1, "text": "Einstellungen"},
-       {"id": 2, "text": "設定"},
-       {"id": 3, "text": "Сохранить"},
-       {"id": 4, "text": "Sichern"},
-       {"id": 5, "text": "保存"},
-       {"id": 6, "text": "Отмена"},
-       {"id": 7, "text": "Abbrechen"},
-       {"id": 8, "text": "キャンセル"},
-       {"id": 9, "text": "Удалить"},
-       {"id": 10, "text": "Entfernen"},
-       {"id": 11, "text": "削除"},
-       {"id": 12, "text": "Проекты"},
-       {"id": 13, "text": "Projekte"},
-       {"id": 14, "text": "プロジェクト"},
-       {"id": 15, "text": "Сеансы"},
-       {"id": 16, "text": "Sitzungen"},
-       {"id": 17, "text": "セッション"},
-       {"id": 18, "text": {"one": "%d строка", "few": "%d строки", "many": "%d строк", "other": "%d строки"}},
-       {"id": 19, "text": {"one": "%d Eintrag", "other": "%d Einträge"}},
-       {"id": 20, "text": {"other": "%d件"}},
-       {"id": 21, "text": {"one": "%d файл выбран", "few": "%d файла выбрано", "many": "%d файлов выбрано", "other": "%d файла выбрано"}},
-       {"id": 22, "text": {"one": "%d Datei ausgewählt", "other": "%d Dateien ausgewählt"}},
-       {"id": 23, "text": {"other": "%d件のファイル"}},
-       {"id": 24, "text": {"one": "%d строка выбрана", "few": "%d строки выбрано", "many": "%d строк выбрано", "other": "%d строки выбрано"}},
-       {"id": 25, "text": {"one": "%d Eintrag ausgewählt", "other": "%d Einträge ausgewählt"}},
-       {"id": 26, "text": {"other": "%d件を選択中"}},
-       {"id": 27, "text": "Экспорт %d из %d…"},
-       {"id": 28, "text": "Exportiere %d von %d…"},
-       {"id": 29, "text": "%d / %d を書き出し中…"}]
+      0\tНастройки
+      1\tEinstellungen
+      2\t設定
+      3\tСохранить
+      4\tSichern
+      5\t保存
+      6\tОтмена
+      7\tAbbrechen
+      8\tキャンセル
+      9\tУдалить
+      10\tEntfernen
+      11\t削除
+      12\tПроекты
+      13\tProjekte
+      14\tプロジェクト
+      15\tСеансы
+      16\tSitzungen
+      17\tセッション
+      18.one\t%d строка
+      18.few\t%d строки
+      18.many\t%d строк
+      18.other\t%d строки
+      19.one\t%d Eintrag
+      19.other\t%d Einträge
+      20.other\t%d件
+      21.one\t%d файл выбран
+      21.few\t%d файла выбрано
+      21.many\t%d файлов выбрано
+      21.other\t%d файла выбрано
+      22.one\t%d Datei ausgewählt
+      22.other\t%d Dateien ausgewählt
+      23.other\t%d件のファイル
+      24.one\t%d строка выбрана
+      24.few\t%d строки выбрано
+      24.many\t%d строк выбрано
+      24.other\t%d строки выбрано
+      25.one\t%d Eintrag ausgewählt
+      25.other\t%d Einträge ausgewählt
+      26.other\t%d件を選択中
+      27\tЭкспорт %d из %d…
+      28\tExportiere %d von %d…
+      29\t%d / %d を書き出し中…
+      END
       """,
       // The failed batch, and the reason the pane is worth having: the model stopped
       // mid-array after three of the ten rows, so this is ALL that came back. A cut reply is
       // reported as truncation and re-asked in halves (5.3) — the answers it did complete
       // are the ones a reader can check against the rows.
       """
-      [{"id": 0, "text": "Произошла ошибка"},
-       {"id": 1, "text": "Ein Fehler ist aufgetreten"},
-       {"id": 2, "text": "エラーが発生しました"},
-       {"id": 3, "text": "Повторить"},
-       {"id": 4, "text": "Wiederholen"},
-       {"id": 5, "text": "再試行"},
-       {"id": 6, "text": "Hermes хранит проекты, сеансы и переводы в одном месте."},
-       {"id": 7, "text": "Projekte, Sitzungen und Übersetzungen — alles an einem Ort."
+      0\tПроизошла ошибка
+      1\tEin Fehler ist aufgetreten
+      2\tエラーが発生しました
+      3\tПовторить
+      4\tWiederholen
+      5\t再試行
+      6\tHermes хранит проекты, сеансы и переводы в одном месте.
       """,
       // The batch nobody has sent yet: the reply it answers with when the preview's fake run
       // lands it — built from the sample's OWN text (`lateAnswer`).
@@ -616,11 +628,11 @@ extension Translation.HorizontalTranslate {
       var elements: [String] = []
       for row in sample[2].items {
         for slot in row.targets {
-          elements.append("{\"id\": \(id), \"text\": \"\(slot.target.catalogValue)\"}")
+          elements.append("\(id)\t\(slot.target.catalogValue)")
           id += 1
         }
       }
-      return "[" + elements.joined(separator: ",\n ") + "]"
+      return (elements + ["END"]).joined(separator: "\n")
     }
 
     /// The INPUT of every page, aligned with `sample` (8.1): the request the row pass sends — L0,
@@ -631,15 +643,7 @@ extension Translation.HorizontalTranslate {
     /// same batch.
     static var requests: [Translation.Prompt.Request] {
       sample.map { batch in
-        Translation.SampleRequest.rowBatch(
-          items: batch.items.flatMap { row in
-            row.targets.map { slot in
-              Translation.SampleRequest.Item(
-                source: Translation.SampleRequest.body(row.source),
-                target: Translation.SampleRequest.body(slot.target),
-                comment: row.comment, maxWidth: row.maxWidth, language: slot.language)
-            }
-          })
+        Translation.SampleRequest.rowBatch(rows: batch.items)
       }
     }
 

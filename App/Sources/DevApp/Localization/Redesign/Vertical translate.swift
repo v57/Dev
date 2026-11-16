@@ -63,18 +63,25 @@ extension Translation {
         self.language = language
         self.items = items
       }
-      /// Sized by CHARACTERS, never by count (4.4): items join a batch until the
-      /// next one would cross `Limits.batch`, an item that alone exceeds the budget
-      /// gets a request of its own (a batch always takes at least one item, so
-      /// nothing is ever skipped), and an item that crosses the line starts the NEXT
-      /// batch rather than being dropped between the two.
+      /// Sized by the ANSWER it asks for (4.4): items join a batch until its estimated
+      /// answer would cross `Limits.outputTokens` or it holds `Limits.batchItems`. An
+      /// item that alone exceeds the budget gets a request of its own (a batch always
+      /// takes at least one item, so nothing is ever skipped), and an item that crosses
+      /// the line starts the NEXT batch rather than being dropped between the two.
       func split() -> [Operations] {
         var operations = [Operations]()
         var current = Operations(language: language)
         var size = 0
-        let maxSize = Limits.batch
+        let maxSize = Limits.outputTokens
+        let perCharacter = Languages.script(of: language).tokensPerEnglishCharacter
+        let forms = Plurals(language: language).values.count
         for item in self.items {
-          let chars = item.characters
+          let chars = item.answerTokens(perCharacter: perCharacter, forms: forms)
+          if current.items.count >= Limits.batchItems {
+            operations.append(current)
+            current = Operations(language: language)
+            size = 0
+          }
           if chars >= maxSize {
             if !current.items.isEmpty {
               operations.append(current)
@@ -109,6 +116,18 @@ extension Translation {
     /// `target` is the current value when there is one, or the empty plural skeleton
     /// of the target language when there is not.
     struct Operation: VerticalOperation, Identifiable, Hashable {
+      /// About how many tokens this item's answer takes: its English per form the target
+      /// language writes, in the target's script, plus the line's id and break.
+      func answerTokens(perCharacter: Double, forms: Int) -> Int {
+        let english: Int
+        switch source {
+        case .value(let text): english = text.isEmpty ? key.count : text.count
+        case .plural(let plural):
+          let longest = plural.values.map(\.value.count).max() ?? 0
+          english = longest * max(forms, 1)
+        }
+        return Int((Double(english) * perCharacter).rounded(.up)) + 4
+      }
       var id: String { key }
       /// Catalog key. The reply is matched by id, and the memory and the journal
       /// address the row by this — never by `index`.

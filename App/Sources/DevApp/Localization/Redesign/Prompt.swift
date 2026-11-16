@@ -4,434 +4,369 @@
 //
 //  Created by Dmitry on 13.09.26.
 //
-//  Every prompt in the redesign is assembled here, because the block ORDER is a
-//  cache contract: reordering L0/L1/L2 silently destroys the provider cache hit
-//  rate, and the run reports a cached-token share that would then read zero.
-//  Semantics are in "docs/Translation design notes.md", section 4.3; the WORDING follows
-//  Dev/Translation/Backends/ContextPromptBuilder.swift, which is read as the
-//  reference and never called.
+//  Every prompt is assembled here, because the block ORDER is a cache contract: what is
+//  the same for every batch of a run comes first, so a provider's prompt cache covers it.
 //
 //  THE WIRE CONTRACT
 //
-//    A language batch : L0 (system + CONTEXT — GLOBAL + CONTEXT — PROJECT)
-//                       L1 (TARGET LANGUAGE + its lesson document + the register
-//                       sample) then L2 (ITEMS), the payload last.
-//    A row batch      : L0 then ITEMS, each item naming its own language. There is
-//                       no L1 block and no register sample of its own — the row's
-//                       settled columns ARE its reference (4.6).
+//    A language batch : system, then the user message: L0 (CONTEXT — GLOBAL, CONTEXT —
+//                       PROJECT, identical for every language), L1 (TARGET LANGUAGE and its
+//                       STYLE, identical for every batch of one language), then what this
+//                       batch alone carries (GLOSSARY, KEEP) and ITEMS last.
+//    A row batch      : system, L0, then ROWS: each row's English, the settled translations
+//                       as references and the machine ones it may correct.
 //
-//  An item's fields are the CLOSED SET `comment`, `maxWidth`, `source`, `target`,
-//  plus `language` on a row batch. The KEY is never sent: the ids the model echoes
-//  are the items' POSITIONS in the batch, and the key stays app-side, where it
-//  applies a reply, addresses memory and journals the edit.
+//  Both are LINES, not JSON: an item is `<id><TAB><English>` (a plural form
+//  `<id>.<form><TAB><English>`) with indented `note:`, `max:`, `forms:`, `now:` and
+//  `problem:` lines under it, and the answer is `<id><TAB><text>` per line, then `END`.
+//  JSON spent about as many tokens on keys, quotes and braces as on the strings, and the
+//  answer is where tokens cost most. A real line break or tab inside a text travels as the
+//  two characters `\n` / `\t` (`escaped`), and the reader turns them back (`unescaped`).
 //
-//  A BODY on the wire is either a string (a flat value) or a JSON object of plural
-//  category -> text. A plural slot that has no value yet travels as the EMPTY
-//  SKELETON of the target language (every category the language has, empty), so the
-//  model is told which forms it is filling instead of guessing which ones exist. A
-//  reply's "text" mirrors the body it answers.
-//
-//  Reply shape: `translate`/`row` answer a JSON array of `{"id": <position>, "text": <body>}`.
+//  The KEY is never sent: the ids the model echoes are the items' POSITIONS in the batch,
+//  and the key stays app-side, where it applies a reply, addresses memory and journals the
+//  edit. A row batch answers only the ids it corrects; a language batch answers every id.
 
 import Foundation
 
 extension Translation {
   enum Prompt {
-    // MARK: - language batches
+    // MARK: - requests
 
-    /// A language batch: L0 (system + global + project), L1 (target language +
-    /// that language's lesson document + the register sample), L2 (items),
-    /// payload last.
-    ///
-    /// Each item sends `comment`, `maxWidth`, `source` and `target` — and nothing
-    /// else. The KEY is never sent: it does not matter to the translation, and the id
-    /// the model echoes back is the item's position in the batch. `source` is the
-    /// row's content (its key stands in when nothing was authored); `target` is the
-    /// current value when there is one, or the empty plural skeleton of the target
-    /// language, so the model knows which forms it is filling.
+    /// A language batch: every item of one target language, answered in full.
     static func languageBatch(language: String, items: [Run.Item], project: Project) -> Request {
-      let l0 = sharedBlocks(project: project)
-      let l1 = languageBlocks(language: language, project: project)
-      let payload = json(rows(items, batchLanguage: language, namedLanguage: false))
-      return request(
-        system: systemPrompt(.translate),
-        l0: l0,
-        rest: l1 + ["ITEMS\n" + payload],
-        ids: positions(count: items.count))
+      languageRequest(
+        language: language, items: items, shared: sharedBlocks(project: project),
+        style: style(language: language, project: project),
+        glossary: registerSample(language: language, project: project, excluding: Set(items.map(\.key))))
     }
 
-    /// A row batch: L0 then ITEMS. The comment, the width guideline, the plural data
-    /// and the target language travel per item — never the key, same as everywhere
-    /// else — no L1 block exists, and neighbours are omitted by construction. Cost:
-    /// the L0 block is paid once per row instead of once per language batch.
+    /// The language batch from its parts, with no project: what the design preview and the
+    /// tests assemble, and what `languageBatch` hands its project's parts to.
+    static func languageRequest(
+      language: String, items: [Run.Item], shared: [String], style: String, glossary: [String],
+      keep: [String] = []
+    ) -> Request {
+      var stable = ["TARGET LANGUAGE\n\(Languages.name(of: language)) (\(language))"]
+      if !style.isEmpty { stable.append("STYLE\n\(style)") }
+      var varying: [String] = []
+      if !glossary.isEmpty { varying.append("GLOSSARY\n" + glossary.joined(separator: "\n")) }
+      if !keep.isEmpty { varying.append("KEEP\n" + keep.joined(separator: ", ")) }
+      varying.append("ITEMS\n" + itemLines(items, language: language))
+      return request(
+        system: translateSystem, prefix: shared + stable, rest: varying, ids: positions(count: items.count))
+    }
+
+    /// A row batch: the rows' machine translations, each with every settled translation of
+    /// its row as the reference, answered with the corrections only.
     ///
-    /// EVERY language of the row is an item, settled columns included — that is what
-    /// gives the request its register reference, and it is the one way a row request
-    /// can learn what this project already calls things in its finished columns.
-    /// The payload makes no distinction between an item that will be written and one
-    /// that will not: that is decided from the slot's status when the reply is
-    /// applied, so a verified slot's answer is simply discarded.
-    ///
-    /// Note the deviation from the current implementation: today's
-    /// `ContextPromptBuilder.assembleRowBatch` has no EXISTING TRANSLATIONS section
-    /// at all (its system prompt says so outright), so a row request currently gets
-    /// no reference values. The redesign carries them per item INSIDE the ITEMS
-    /// block, which keeps the L0 prefix byte-identical and therefore still cacheable.
+    /// `items` are the slots the pass may correct, grouped by row in the order given. The
+    /// settled columns are read off the project here rather than carried as items: nothing
+    /// is written to them, so nothing is asked about them.
     static func rowBatch(items: [Run.Item], project: Project) -> Request {
-      let l0 = sharedBlocks(project: project)
-      let payload = json(rows(items, batchLanguage: nil, namedLanguage: true))
+      rowRequest(items: items, shared: sharedBlocks(project: project)) { key in
+        (project.row(key)?.targets ?? []).compactMap { slot in
+          guard !slot.target.isEmpty, slot.status == .verified || slot.status == .imported else { return nil }
+          return (slot.language, slot.target.catalogValue)
+        }
+      }
+    }
+
+    /// The row batch from its parts: `settled` answers a row's settled translations.
+    static func rowRequest(
+      items: [Run.Item], shared: [String], settled: (String) -> [(language: String, value: String)]
+    ) -> Request {
+      var rows: [(key: String, item: Run.Item, editable: [(id: Int, item: Run.Item)])] = []
+      for (index, item) in items.enumerated() {
+        if let last = rows.indices.last, rows[last].key == item.key {
+          rows[last].editable.append((index, item))
+        } else {
+          rows.append((item.key, item, [(index, item)]))
+        }
+      }
+      var lines: [String] = []
+      for row in rows {
+        lines.append("ROW\t" + escaped(row.item.payloadSource.catalogValue))
+        lines += notes(of: row.item)
+        let editable = Set(row.editable.map { $0.item.language ?? "" })
+        for slot in settled(row.key) where !editable.contains(slot.language) {
+          lines.append("\(slot.language)\t\(escaped(slot.value))")
+        }
+        for (id, item) in row.editable {
+          lines.append("\(id)\t\(item.language ?? "")\t\(escaped(item.target.catalogValue))")
+        }
+      }
       return request(
-        system: systemPrompt(.row),
-        l0: l0,
-        rest: ["ITEMS\n" + payload],
+        system: rowSystem, prefix: shared, rest: ["ROWS\n" + lines.joined(separator: "\n")],
         ids: positions(count: items.count))
     }
 
-    /// A request as the router sends it. `ids` is what the validator matches the
-    /// reply against; `cacheablePrefix` is the L0 block, which is what the
-    /// telemetry counts when it reports the cached share.
+    /// A request as the router sends it. `ids` is what the validator matches the reply
+    /// against: the items' POSITIONS in the batch, as strings — never keys.
     ///
-    /// `ids` are the items' POSITIONS in the batch, as strings — never keys.
-    ///
-    /// `cacheablePrefix` is the leading run the provider can cache: the system
-    /// prompt plus the L0 blocks, laid out exactly as the two messages are laid out,
-    /// so it is a byte-prefix of what is sent. It is identical for every target
-    /// language of a run, which is what makes a non-zero cached share possible; a
-    /// flat zero means the prefix moved.
+    /// `prefix` is the stable head of the user message (L0, and a language batch's L1),
+    /// and `cacheablePrefix` the system prompt plus that head, laid out exactly as sent:
+    /// what a provider's prompt cache can hold, and what the telemetry counts.
     struct Request {
       var system: String = ""
       var user: String = ""
       var ids: [String] = []
       var cacheablePrefix: String = ""
+      var prefix: String = ""
     }
 
-    // MARK: - request assembly
+    // MARK: - assembly
 
-    /// The one place the block order is expressed: L0, then the language blocks,
-    /// then the payload last. `cacheablePrefix` is built from the same pieces in the
-    /// same order, so what the telemetry counts is a real prefix of what is sent.
-    private static func request(
-      system: String,
-      l0: [String],
-      rest: [String],
-      ids: [String]
-    ) -> Request {
+    static let blockSeparator = "\n\n"
+
+    private static func request(system: String, prefix: [String], rest: [String], ids: [String]) -> Request {
       Request(
         system: system,
-        user: (l0 + rest).joined(separator: "\n\n"),
+        user: (prefix + rest).joined(separator: blockSeparator),
         ids: ids,
-        cacheablePrefix: ([system] + l0).joined(separator: "\n\n"))
+        cacheablePrefix: ([system] + prefix).joined(separator: blockSeparator),
+        prefix: prefix.joined(separator: blockSeparator))
     }
 
     private static func positions(count: Int) -> [String] {
       (0..<count).map { String($0) }
     }
 
-    // MARK: - item payload
+    // MARK: - items
 
-    /// The ITEMS rows, in batch order. `batchLanguage` builds a plural skeleton when
-    /// an item has no value yet and does not name its own language; `namedLanguage`
-    /// emits the per-item language of a row batch.
-    private static func rows(
-      _ items: [Run.Item],
-      batchLanguage: String?,
-      namedLanguage: Bool
-    ) -> [[String: Any]] {
-      items.enumerated().map { index, item in
-        let language = item.language ?? batchLanguage ?? ""
-        var row: [String: Any] = [
-          "id": index,
-          "source": body(payloadSource(item)),
-          "target": body(payloadTarget(item, language: language)),
-        ]
-        if !item.comment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-          row["comment"] = clamp(item.comment, to: Limits.commentCharacters)
+    /// The ITEMS lines of a language batch, in batch order.
+    static func itemLines(_ items: [Run.Item], language: String) -> String {
+      var lines: [String] = []
+      for (index, item) in items.enumerated() {
+        switch item.payloadSource {
+        case .value(let text):
+          lines.append("\(index)\t\(escaped(text))")
+        case .plural(let forms):
+          for form in forms.values where !form.value.isEmpty {
+            lines.append("\(index).\(form.rule.rawValue)\t\(escaped(form.value))")
+          }
         }
-        if item.maxWidth > 0 {
-          row["maxWidth"] = item.maxWidth
+        lines += notes(of: item)
+        if expectsPlural(item) {
+          lines.append("  forms: " + Plurals(language: language).values.map(\.rule.rawValue).joined(separator: " "))
         }
-        if namedLanguage, let code = item.language {
-          row["language"] = code
+        switch item.target {
+        case .value(let text) where !text.isEmpty:
+          lines.append("  now: \(escaped(text))")
+        case .plural(let forms):
+          for form in forms.values where !form.value.isEmpty {
+            lines.append("  now.\(form.rule.rawValue): \(escaped(form.value))")
+          }
+        default:
+          break
         }
-        return row
+        if !item.problem.isEmpty { lines.append("  problem: \(escaped(item.problem))") }
       }
+      return lines.joined(separator: "\n")
     }
 
-    /// `source` is the row's CONTENT, not the authored source field: a row whose
-    /// source unit is missing sends its KEY, because that is what the artifact itself
-    /// shows (4.3). "No source" is therefore never a reason to skip a row.
-    private static func payloadSource(_ item: Run.Item) -> StringBody {
-      item.source.isEmpty ? .value(item.key) : item.source
+    /// The `note:` and `max:` lines an item or a row carries.
+    private static func notes(of item: Run.Item) -> [String] {
+      var lines: [String] = []
+      let comment = item.comment.trimmingCharacters(in: .whitespacesAndNewlines)
+      if !comment.isEmpty { lines.append("  note: " + escaped(clamp(comment, to: Limits.commentCharacters))) }
+      if item.maxWidth > 0 { lines.append("  max: \(item.maxWidth)") }
+      return lines
     }
 
-    /// The current value when there is one — a stale slot carries its old value — or
-    /// the EMPTY PLURAL SKELETON of the target language when there is not, so the
-    /// model is told which forms it is filling. The categories come from
-    /// `Plurals(language:)`, which is the single table the app reads for them.
-    private static func payloadTarget(_ item: Run.Item, language: String) -> StringBody {
-      guard item.target.isEmpty else { return item.target }
-      if case .plural = item.target { return .plural(Plurals(language: language)) }
-      if case .plural = item.source { return .plural(Plurals(language: language)) }
-      return item.target
+    /// A string whose source or target is plural is answered form by form.
+    static func expectsPlural(_ item: Run.Item) -> Bool {
+      if case .plural = item.target { return true }
+      if case .plural = item.source { return true }
+      return false
     }
 
-    /// One body as JSON: a string for a flat value, an object of category -> text for
-    /// a plural one. An empty skeleton therefore travels as the same categories with
-    /// empty strings, which is exactly the "fill these" signal.
-    private static func body(_ body: StringBody) -> Any {
-      switch body {
-      case .value(let text):
-        return text
-      case .plural(let plural):
-        var forms: [String: String] = [:]
-        for form in plural.values {
-          forms[form.rule.rawValue] = form.value
-        }
-        return forms
-      }
+    // MARK: - escapes
+
+    /// A text as one line: a real line break or tab becomes the two characters `\n` / `\t`.
+    static func escaped(_ text: String) -> String {
+      text.replacingOccurrences(of: "\r\n", with: "\\n")
+        .replacingOccurrences(of: "\n", with: "\\n")
+        .replacingOccurrences(of: "\t", with: "\\t")
     }
 
-    /// True when a candidate is already over its width guideline. A candidate that
-    /// is not a string (a plural object) is measured by its text.
+    /// An answer's text with `\n` and `\t` turned back into a line break and a tab — only
+    /// those the SOURCE had, so a source that spells a backslash and an n keeps them.
+    static func unescaped(_ text: String, like source: String) -> String {
+      var text = text
+      if source.contains("\n") { text = text.replacingOccurrences(of: "\\n", with: "\n") }
+      if source.contains("\t") { text = text.replacingOccurrences(of: "\\t", with: "\t") }
+      return text
+    }
 
-    // MARK: - L0 and L1 blocks
+    // MARK: - L0, L1 and the reference
 
     /// L0: identical for every target language, which is what makes it cacheable.
-    /// The system prompt's own text is part of this level — see `systemPrompt`.
     private static func sharedBlocks(project: Project) -> [String] {
       var blocks: [String] = []
       appendContext(
-        &blocks,
-        title: "CONTEXT — GLOBAL",
-        text: project.global.context.context,
-        limit: Limits.globalContext)
+        &blocks, title: "CONTEXT — GLOBAL", text: project.global.context.context, limit: Limits.globalContext)
       appendContext(
-        &blocks,
-        title: "CONTEXT — PROJECT",
-        text: project.context.context,
-        limit: Limits.projectContext)
+        &blocks, title: "CONTEXT — PROJECT", text: project.context.context, limit: Limits.projectContext)
       return blocks
     }
 
-    /// L1: identical for every record of one target language.
-    private static func languageBlocks(language: String, project: Project) -> [String] {
-      var blocks = ["TARGET LANGUAGE\n\(language)"]
-      appendContext(
-        &blocks,
-        title: "CONTEXT — LANGUAGE (\(language))",
-        text: project.language(language)?.context.context ?? "",
-        limit: Limits.languageContext)
-      let sample = registerSample(language: language, project: project)
-      if !sample.isEmpty {
-        blocks.append("EXISTING TRANSLATIONS (\(language))\n" + sample.joined(separator: "\n"))
-      }
-      return blocks
+    /// The language's style rules: its document when the project has written one, else the
+    /// built-in rules for the language (`StyleRules`).
+    static func style(language: String, project: Project) -> String {
+      let written = clampTail(
+        deduplicated(project.language(language)?.context.context ?? ""), to: Limits.languageContext)
+      return written.isEmpty ? StyleRules.rules(for: language) : written
     }
 
-    /// The register sample: what this project already ships in one language, as
-    /// `source = value` pairs — the register AND the terminology the project has
-    /// committed to, which is what a new string has to sound like.
-    ///
-    /// Values a human settled (`.verified`, `.imported`) come first: they are the
-    /// strongest evidence the project has. Then the machine's own output, which is
-    /// only a sample of how the column reads. It is recomputed on every assembly
-    /// because a write-back changes the column the next batch samples from (4.5).
-    /// The caps are the neighbours budget: `Limits.neighbors` pairs of at most
-    /// `Limits.neighborCharacters` characters each.
-    private static func registerSample(language: String, project: Project) -> [String] {
+    /// What this project already ships in one language, as `English = translation` lines:
+    /// values a human settled (`.verified`, `.imported`) first, then the machine's own.
+    /// Recomputed per batch because a write-back changes the column (4.5); the batch's own
+    /// rows are left out, since they are what is being asked.
+    private static func registerSample(language: String, project: Project, excluding keys: Set<String>) -> [String] {
       var settled: [String] = []
       var machine: [String] = []
-      for row in project.data {
+      for row in project.data where !keys.contains(row.key) {
         guard let slot = row.target(language), !slot.target.isEmpty else { continue }
         let source = row.content.catalogValue
         let value = slot.target.catalogValue
         guard !value.isEmpty, value != source else { continue }
-        let line = clamp("\(source) = \(value)", to: Limits.neighborCharacters)
+        let line = escaped(clamp("\(source) = \(value)", to: Limits.neighborCharacters))
         switch slot.status {
-        case .verified, .imported:
-          settled.append(line)
-        case .stale, .translated, .needsTranslate, .ignore:
-          machine.append(line)
+        case .verified, .imported: settled.append(line)
+        case .stale, .translated, .needsTranslate, .ignore: machine.append(line)
         }
       }
       var seen = Set<String>()
       var kept: [String] = []
-      for line in settled + machine {
-        guard !seen.contains(line) else { continue }
-        seen.insert(line)
+      for line in settled + machine where seen.insert(line).inserted {
         kept.append(line)
         if kept.count == Limits.neighbors { break }
       }
       return kept
     }
 
-    // MARK: - JSON
-
-    /// Deterministic JSON: sorted keys and no escaped slashes, so the same batch
-    /// assembles byte-for-byte and a cached prefix stays cached.
-    private static func json(_ rows: [[String: Any]]) -> String {
-      guard !rows.isEmpty,
-        let data = try? JSONSerialization.data(
-          withJSONObject: rows, options: [.sortedKeys, .withoutEscapingSlashes]),
-        let text = String(data: data, encoding: .utf8)
-      else { return "[]" }
-      return text
-    }
-
     // MARK: - context blocks
 
-    /// Deduplicates a document body line by line (order preserved), then keeps the
-    /// TAIL: documents are append-ordered, so when one outgrows its cap the OLDEST
-    /// lines are what must go — a head-keeping cut would hide everything learned
-    /// since. An empty block is omitted entirely.
-    private static func appendContext(
-      _ blocks: inout [String],
-      title: String,
-      text: String,
-      limit: Int
-    ) {
+    /// A document body deduplicated line by line, order preserved.
+    private static func deduplicated(_ text: String) -> String {
       var seen = Set<String>()
       var kept: [String] = []
       for rawLine in text.split(separator: "\n", omittingEmptySubsequences: true) {
         let line = rawLine.trimmingCharacters(in: .whitespaces)
-        guard !line.isEmpty, !seen.contains(line) else { continue }
-        seen.insert(line)
+        guard !line.isEmpty, seen.insert(line).inserted else { continue }
         kept.append(line)
       }
-      let deduped = kept.joined(separator: "\n")
-      guard !deduped.isEmpty else { return }
-      blocks.append("\(title)\n\(clampTail(deduped, to: limit))")
+      return kept.joined(separator: "\n")
     }
 
-    /// Character-prefix truncation on grapheme boundaries, with a marker so the model
-    /// knows a section was cut. Used where the head carries the meaning.
-    private static func clamp(_ text: String, to limit: Int) -> String {
+    /// Appends a titled document, keeping its TAIL when it outgrows its cap: documents are
+    /// append-ordered, so the oldest lines are what must go. An empty one is omitted.
+    private static func appendContext(_ blocks: inout [String], title: String, text: String, limit: Int) {
+      let body = deduplicated(text)
+      guard !body.isEmpty else { return }
+      blocks.append("\(title)\n\(clampTail(body, to: limit))")
+    }
+
+    /// Character-prefix truncation on grapheme boundaries.
+    static func clamp(_ text: String, to limit: Int) -> String {
       guard text.count > limit else { return text }
-      return String(text.prefix(limit)) + "\n[section truncated]"
+      return String(text.prefix(limit)) + "…"
     }
 
-    /// Line-aware, tail-preserving truncation, with a marker naming what was dropped.
-    /// A single line longer than the whole budget keeps its own tail, so the block is
-    /// still bounded and never empty.
+    /// Line-aware, tail-preserving truncation. A single line longer than the whole budget
+    /// keeps its own tail, so the block is bounded and never empty.
     private static func clampTail(_ text: String, to limit: Int) -> String {
       guard text.count > limit else { return text }
-      let marker = "[section truncated — oldest lines dropped]"
-      let budget = max(0, limit - marker.count - 1)
       var kept: [String] = []
       var used = 0
       for rawLine in text.split(separator: "\n", omittingEmptySubsequences: false).reversed() {
         let line = String(rawLine)
         let cost = line.count + (kept.isEmpty ? 0 : 1)
-        if kept.isEmpty, cost > budget {
-          kept.append(String(line.suffix(budget)))
+        if kept.isEmpty, cost > limit {
+          kept.append(String(line.suffix(limit)))
           break
         }
-        guard used + cost <= budget else { break }
+        guard used + cost <= limit else { break }
         kept.append(line)
         used += cost
       }
-      return marker + "\n" + kept.reversed().joined(separator: "\n")
+      return kept.reversed().joined(separator: "\n")
     }
 
     // MARK: - system prompts
 
-    /// Which prompt a request is: the translate shapes (a uniform language batch, the
-    /// mixed-language row batch) are different system texts
-    /// because the DIRECTION has to be described differently, and the L0 prefix is
-    /// per-shape for exactly that reason. It stays stable within a shape, which is
-    /// what the cache needs.
-    private enum Shape {
-      case translate
-      case row
-    }
+    /// The translate system prompt. It names no language, so it is byte-identical for every
+    /// batch of a run: the outermost cacheable prefix.
+    static let translateSystem = """
+      You translate the user-interface strings of a software project from English into the \
+      language named in TARGET LANGUAGE.
 
-    private static func systemPrompt(_ shape: Shape) -> String {
-      switch shape {
-      case .translate:
-        return translateSystem(direction: .targetLanguageSection)
-      case .row:
-        return translateSystem(direction: .perItemLanguage)
-      }
-    }
+      ITEMS has one string per line: `<id><TAB><English>`. A plural string has one line per \
+      English form: `<id>.<form><TAB><English>`. Indented lines under a string describe it:
+        note: where it appears
+        max: the most characters its translation should take
+        forms: the plural forms to write in the target language
+        now: its current translation, to keep if right or improve
+        problem: why your earlier answer was rejected
 
-    /// Where the target language comes from: one L1 block for the whole batch, or the
-    /// item's own `language` field when the request spans several.
-    private enum Direction {
-      case targetLanguageSection
-      case perItemLanguage
-      var isPerItem: Bool {
-        if case .perItemLanguage = self { return true }
-        return false
-      }
-    }
-
-    /// Fixed role text: job, direction and output rules. The TARGET language is
-    /// deliberately absent so this block is byte-identical for every target language
-    /// in a run — it is the outermost cacheable prefix. The SOURCE language is absent
-    /// too: it belongs to the catalog, and no signature here carries it.
-    private static func translateSystem(direction: Direction) -> String {
-      let opening = direction.isPerItem
-        ? """
-        You are a careful software-localization translator. The items in the \
-        "ITEMS" section of the user message are the SAME string in EVERY target \
-        language of the project: one item per language, each naming its own \
-        "language". Translate each item into the language it names.
-        """
-        : """
-        You are a careful software-localization translator. The items to translate \
-        are in the "ITEMS" section of the user message; the target language is named \
-        in the "TARGET LANGUAGE" section.
-        """
-      let itemOrder = direction.isPerItem
-        ? "one element per input item, in the same order, each translated into the language that item names."
-        : "one element per input item, in the same order."
-      let register = direction.isPerItem
-        ? """
-        6. There is no "EXISTING TRANSLATIONS" section: this request spans several \
-        languages at once, and each item's already-filled "target" is what this \
-        project has settled for that language — the strongest evidence of the \
-        register and terminology it uses. Stay consistent with those values and keep \
-        the row's answers consistent with each other; a value that is already filled \
-        is context, and answering it again must not contradict it.
-        """
-        : """
-        6. "EXISTING TRANSLATIONS" shows the register and terminology this project \
-        already uses in the target language; stay consistent with it.
-        """
-      return """
-      \(opening)
+      Answer with one line per string, `<id><TAB><translation>`, in the same order; for a \
+      plural string, one line per form named in `forms`: `<id>.<form><TAB><translation>`. \
+      Then a last line: END. Write nothing else: no notes, no code fences.
 
       Rules:
-      1. Output ONLY a JSON array — no prose, no markdown fences. Each element is \
-      {"id": <the item's id>, "text": <the translation>}, \(itemOrder)
-      2. An item's "id" is its position in this batch: echo it back unchanged, never \
-      renumber, never drop an item.
-      3. Preserve placeholders (%@, %1$@, %lld, {name}), format specifiers, URLs, \
-      markup and code tokens exactly as written. Never add or drop a placeholder.
-      4. Context sections in the user message are authoritative: follow glossary, \
-      rules and terminology there over your defaults.
-      5. "COMMENT" states where the string appears — keep the translation idiomatic \
-      for that spot.
-      \(register)
-      7. When an item's "source" and "target" are OBJECTS of plural categories, the \
-      string is a localized plural: translate EVERY category the item lists and \
-      answer with the same object shape, one entry per category. Translate each \
-      category with the number agreement it calls for. A category covers every number \
-      the target language's plural rules give it (Russian "one" is 1, 21, 31…; \
-      Polish "few" is 2–4, 22–24…), so keep the number placeholder in every form \
-      except one that stands for a single number only (English "one", Arabic "zero" \
-      and "two"), keep the other placeholders intact, and leave no category out. Empty \
-      category values are the forms you are being asked to fill.
-      8. A filled "target" is the current value of that slot: produce the better \
-      translation for the same slot, in the same shape, or answer with the same \
-      value when it is already right.
-      9. When an item carries "maxWidth", keep the translation within that many \
-      characters if you can do it without losing meaning: a UI element that cannot \
-      fit is a defect. Never drop or shorten a placeholder to fit.
-      When a translation is ambiguous, pick the most natural option and translate \
-      it — never ask back, never refuse.
-      """
-    }
+      - Keep every placeholder (%@, %lld, %1$@, {name}), URL, markup and code token exactly \
+      as written; never add or drop one.
+      - \\n stands for a line break and \\t for a tab: write them the same way, never as a \
+      real line break.
+      - In a plural form, keep the number's placeholder unless the form stands for exactly \
+      one number (like English "one").
+      - Follow CONTEXT and STYLE, use the GLOSSARY's translations for the terms it covers, \
+      and keep the KEEP terms as written.
+      - Translate as user-interface text: natural, concise and consistent with the platform's \
+      conventions in that language. Keep a string within its max when you can without \
+      losing meaning.
+      - When a string is ambiguous, choose the most natural reading. Never ask or refuse.
 
+      Example, into German:
+      ITEMS
+      0\tOpen Project
+      1\tDelete “%@”?
+        note: confirmation title
+      2.one\t%lld file
+      2.other\t%lld files
+        forms: one other
+      Answer:
+      0\tProjekt öffnen
+      1\t„%@“ löschen?
+      2.one\t%lld Datei
+      2.other\t%lld Dateien
+      END
+      """
+
+    /// The row pass: corrections only, across the languages of each row.
+    static let rowSystem = """
+      You review the translations of a software project's user-interface strings across \
+      languages.
+
+      ROWS lists strings. Each starts with `ROW<TAB><English>`, with indented `note:` and \
+      `max:` lines describing it, and its translations follow, one per line:
+        `<language><TAB><translation>`: settled by a person. Correct; use it as the reference.
+        `<id><TAB><language><TAB><translation>`: machine-made. You may correct it.
+
+      Correct a machine translation only when it is wrong: the wrong meaning for this \
+      string, English left untranslated, a placeholder lost or changed, broken grammar, or \
+      a term that contradicts the settled translations of its row. Never rephrase a correct \
+      one.
+
+      Answer with one line per correction, `<id><TAB><corrected translation>`, then a last \
+      line: END. When nothing needs correcting, answer only END. Write nothing else.
+
+      Rules:
+      - Keep every placeholder (%@, %lld, %1$@, {name}), URL, markup and code token exactly \
+      as written.
+      - \\n stands for a line break and \\t for a tab: write them the same way.
+      - Follow CONTEXT.
+      """
   }
 }

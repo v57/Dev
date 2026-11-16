@@ -78,7 +78,7 @@ extension Translation {
     func send(
       system: String,
       user: String,
-      temperature: Double = 0.2,
+      temperature: Double = 0,
       onChunk: (String) -> Void
     ) async throws -> Usage? {
       return try await attempt(

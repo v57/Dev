@@ -82,6 +82,9 @@ extension Translation {
     /// Where the bar stood when the tracker in `progress` started: a resumed run's tracker
     /// counts only what is left, and the bar goes on from where the pause left it.
     var progressBase = 0.0
+    /// The keys whose values the column pass wrote in this run: the rows the row pass then
+    /// reviews. A row nothing changed in was reviewed when it last changed.
+    var touched: Set<String> = []
 
     init(stage: Stage, project: Project) {
       self.stage = stage
@@ -247,6 +250,9 @@ extension Translation {
       /// goes out (5.5). Per ITEM rather than per batch because a row batch spans
       /// several languages, and each of them has its own language document.
       var versions: Context.Version = .none
+      /// Why an earlier answer for this item was rejected, sent as its `problem:` line when
+      /// the item is asked again. Empty on a first ask.
+      var problem: String = ""
 
       /// The text a request actually sends for this row: the row's CONTENT, the
       /// catalog key standing in when nothing was authored (4.3). `Prompt` applies
@@ -809,7 +815,9 @@ extension Translation {
       case .vertical:
         batches = self.batches(of: try project.verticalTranslate())
       case .horizontal:
-        batches = self.batches(of: try project.horizontalTranslate())
+        // After a column pass, only the rows it changed; run on its own, every row.
+        let keys = run.stage == .vertical ? run.touched : nil
+        batches = self.batches(of: try project.horizontalTranslate(keys: keys))
       }
       // One lookup per (source, language) pair per scan: the resolve is a store fetch,
       // and a project's rows share their sources. Rebuilt for every operation, so a
@@ -853,27 +861,31 @@ extension Translation {
       }
     }
 
-    /// A row stage's groups as the runner's batches. One row becomes ONE item per
-    /// language of the row — settled columns included, which is what gives the
-    /// request its register reference (4.6) — and each item names its own language,
-    /// so the batch itself names none.
+    /// A row stage's groups as the runner's batches. An item is one MACHINE value of a
+    /// row the pass may correct: a writable, flat, non-empty slot. The settled columns are
+    /// the request's reference (`Prompt.rowBatch` reads them off the row), not items.
     private func batches(of stage: HorizontalTranslate) -> [Run.Batch] {
-      stage.operations.enumerated().map { ordinal, group in
-        Run.Batch(
+      stage.operations.enumerated().compactMap { ordinal, group in
+        let items = group.items.flatMap { operation in
+          operation.targets.compactMap { slot -> Run.Item? in
+            guard Run.writable(slot.status), case .value(let text) = slot.target, !text.isEmpty,
+              case .value = operation.source
+            else { return nil }
+            return Run.Item(
+              key: operation.key,
+              language: slot.language,
+              source: operation.source,
+              target: slot.target,
+              comment: operation.comment,
+              maxWidth: operation.maxWidth)
+          }
+        }
+        guard !items.isEmpty else { return nil }
+        return Run.Batch(
           id: "\(Stage.horizontal.rawValue).\(ordinal)",
           stage: .horizontal,
           language: nil,
-          items: group.items.flatMap { operation in
-            operation.targets.map { slot in
-              Run.Item(
-                key: operation.key,
-                language: slot.language,
-                source: operation.source,
-                target: slot.target,
-                comment: operation.comment,
-                maxWidth: operation.maxWidth)
-            }
-          },
+          items: items,
           characters: group.items.reduce(0) { $0 + $1.characters })
       }
     }
@@ -1230,6 +1242,18 @@ extension Translation {
         batch.items[id].phase = .validated
       }
 
+      // The row pass answers CORRECTIONS only: an id it did not answer is a value it found
+      // right, a correction that fails the checks is dropped (the value it would have
+      // replaced stays), and a cut reply keeps what it corrected — nothing is re-asked.
+      if batch.stage == .horizontal {
+        apply(report.accepted, of: &batch, in: run)
+        for position in batch.items.indices where batch.items[position].phase == .sent {
+          batch.items[position].phase = .validated
+        }
+        settle(&batch)
+        return batch
+      }
+
       // A reply the model CUT OFF is not a set of bad answers: everything it did
       // complete is real output, and the ids it never reached were lost to the cut.
       // So what arrived is written, and the remainder is re-asked IN HALVES — never
@@ -1441,6 +1465,11 @@ extension Translation {
         let body = Validator.decode(answer, for: item, language: language)
         guard !body.isEmpty else { continue }
         let previous = project.data[row].targets[slot].target
+        // A row-pass "correction" that repeats the value changes nothing.
+        if batch.stage == .horizontal, body == previous {
+          batch.items[position].phase = .validated
+          continue
+        }
         writes.append(
           SlotWrite(
             key: item.key,
@@ -1497,6 +1526,11 @@ extension Translation {
       guard writable(position, in: batch) else { return }
       let body = Validator.decode(row.text, for: item, language: language)
       guard Validator.defects(body, of: item, language: language).isEmpty else {
+        // A row-pass correction that fails the checks is dropped: the value stays.
+        if batch.stage == .horizontal {
+          batch.items[position].phase = .validated
+          return
+        }
         batch.items[position].phase = .failed
         fail(
           run, key: item.key, language: language,
@@ -1744,6 +1778,7 @@ extension Translation {
       }
       // A write memory answered is not one of this step's CUT items: it is counted where
       // the report can see it, beside the items the step sent (5.7).
+      if batch.stage == .vertical, write.memory != .gold { run.touched.insert(write.key) }
       if write.memory == nil {
         run.tally.itemsDone += 1
         run.tally.byStage[batch.stage, default: 0] += 1
@@ -2186,7 +2221,10 @@ extension Translation {
     /// answer to a plural item fills the form the artifact reads (`other` when the
     /// language has it), because turning the slot flat would break that parallel.
     static func decode(_ answer: String, for item: Run.Item, language: String) -> StringBody {
-      let text = answer.trimmingCharacters(in: .whitespacesAndNewlines)
+      let source = everything(item.payloadSource)
+      // The wire is one line per text, so a line break or a tab travels escaped (`Prompt.escaped`).
+      let trimmed = answer.trimmingCharacters(in: .whitespacesAndNewlines)
+      let text = Prompt.unescaped(trimmed, like: source)
       guard expectsPlural(item) else {
         // The reply is trimmed on the way in (a model pads freely), so the source's own
         // leading and trailing whitespace — `"Name: "` — is put back rather than lost.
@@ -2194,10 +2232,11 @@ extension Translation {
         return .value(keepingEdges(of: source, text))
       }
       var plural = Plurals(language: language)
-      if let object = object(from: text) {
+      // The forms arrive as a JSON object (`Scanner`), each form's text still escaped.
+      if let object = object(from: trimmed) {
         for index in plural.values.indices {
           if let value = object[plural.values[index].rule.rawValue] {
-            plural.values[index].value = value
+            plural.values[index].value = Prompt.unescaped(value, like: source)
           }
         }
         return .plural(plural)

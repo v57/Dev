@@ -35,6 +35,14 @@ enum Translation {
     static let languageContext = 2_000
     /// Source characters per translate request (vertical and horizontal).
     static let batch = 10_000
+    /// About how many answer tokens a language batch is cut to: a long answer is where a
+    /// model drifts and where a cut reply loses most, and the answer is what costs most.
+    /// Estimated per item from the target script (`Languages.Script`).
+    static let outputTokens = 3_000
+    /// Items per language batch at most, however short they are.
+    static let batchItems = 120
+    /// Characters a row batch carries: every row's English and all of its translations.
+    static let rowBatch = 12_000
     /// Model-response RETRIES after a batch's first attempt (5.9): a retryable failure
     /// re-asks the same request, so one batch costs at most `retries + 1` sends.
     ///
@@ -1043,9 +1051,10 @@ enum Translation {
       try loadData()
       return VerticalTranslate(project: self)
     }
-    func horizontalTranslate() throws -> HorizontalTranslate {
+    /// The row pass over `keys`, or over every row when nil.
+    func horizontalTranslate(keys: Set<String>? = nil) throws -> HorizontalTranslate {
       try loadData()
-      return HorizontalTranslate(project: self)
+      return HorizontalTranslate(project: self, keys: keys)
     }
   }
 
@@ -1441,6 +1450,6 @@ extension Translation.RowOperation {
   /// for as context. That is the deliberate price of row-wide consistency, and the
   /// write-back is what keeps it from being a rewrite of finished work.
   var characters: Int {
-    source.characters * targets.count
+    source.characters + targets.reduce(0) { $0 + $1.target.characters + 8 }
   }
 }

@@ -453,44 +453,66 @@ extension Translation.VerticalTranslate {
     static let answers: [String] = [
       // The settled ru column.
       """
-      [{"id": 0, "text": "Настройки"},
-       {"id": 1, "text": "Сохранить"},
-       {"id": 2, "text": "Отмена"},
-       {"id": 3, "text": "Удалить"},
-       {"id": 4, "text": {"one": "%d строка", "few": "%d строки", "many": "%d строк", "other": "%d строки"}},
-       {"id": 5, "text": {"one": "%d файл выбран", "few": "%d файла выбрано", "many": "%d файлов выбрано", "other": "%d файла выбрано"}},
-       {"id": 6, "text": {"one": "%d строка выбрана", "few": "%d строки выбрано", "many": "%d строк выбрано", "other": "%d строки выбрано"}},
-       {"id": 7, "text": "Экспорт %d из %d…"},
-       {"id": 8, "text": "Что-то пошло не так"},
-       {"id": 9, "text": "Hermes хранит проекты, сеансы и переводы в одном месте."}]
+      0\tНастройки
+      1\tСохранить
+      2\tОтмена
+      3\tУдалить
+      4.one\t%d строка
+      4.few\t%d строки
+      4.many\t%d строк
+      4.other\t%d строки
+      5.one\t%d файл выбран
+      5.few\t%d файла выбрано
+      5.many\t%d файлов выбрано
+      5.other\t%d файла выбрано
+      6.one\t%d строка выбрана
+      6.few\t%d строки выбрано
+      6.many\t%d строк выбрано
+      6.other\t%d строки выбрано
+      7\tЭкспорт %d из %d…
+      8\tЧто-то пошло не так
+      9\tHermes хранит проекты, сеансы и переводы в одном месте.
+      END
       """,
       // The column's second batch — what a character-budget split looks like.
       """
-      [{"id": 0, "text": "Проектов пока нет. Добавьте проект, чтобы начать."},
-       {"id": 1, "text": "Основные"},
-       {"id": 2, "text": "Оформление"},
-       {"id": 3, "text": "Дополнительно"},
-       {"id": 4, "text": "Автоматически сохранять изменения"},
-       {"id": 5, "text": "Поиск строк"},
-       {"id": 6, "text": "Ограничение ширины (символы)"},
-       {"id": 7, "text": "Каталог %@ не найден."},
-       {"id": 8, "text": "Требует проверки"},
-       {"id": 9, "text": "Проверено"}]
+      0\tПроектов пока нет. Добавьте проект, чтобы начать.
+      1\tОсновные
+      2\tОформление
+      3\tДополнительно
+      4\tАвтоматически сохранять изменения
+      5\tПоиск строк
+      6\tОграничение ширины (символы)
+      7\tКаталог %@ не найден.
+      8\tТребует проверки
+      9\tПроверено
+      END
       """,
       // Arabic, whose plural slots answer SIX categories (zero / one / two / few / many /
       // other) — the plural shape arrives here as an object, and the raw pane is where you
       // see that it did.
       """
-      [{"id": 0, "text": "الإعدادات"},
-       {"id": 1, "text": "حفظ"},
-       {"id": 2, "text": "حذف"},
-       {"id": 3, "text": {"zero": "لا ملفات محددة", "one": "ملف واحد محدد", "two": "ملفان محددان", "few": "%d ملفات محددة", "many": "%d ملفاً محدداً", "other": "%d ملف محدد"}},
-       {"id": 4, "text": {"zero": "لا نصوص محددة", "one": "نص واحد محدد", "two": "نصان محددان", "few": "%d نصوص محددة", "many": "%d نصاً محدداً", "other": "%d نص محدد"}},
-       {"id": 5, "text": "جارٍ تصدير %d من %d…"},
-       {"id": 6, "text": "حدث خطأ ما"},
-       {"id": 7, "text": "إعادة المحاولة"},
-       {"id": 8, "text": "يحفظ Hermes مشاريعك وجلساتك وترجماتك في مكان واحد."},
-       {"id": 9, "text": "لا توجد مشاريع بعد. أضف مشروعاً للبدء."}]
+      0\tالإعدادات
+      1\tحفظ
+      2\tحذف
+      3.zero\tلا ملفات محددة
+      3.one\tملف واحد محدد
+      3.two\tملفان محددان
+      3.few\t%d ملفات محددة
+      3.many\t%d ملفاً محدداً
+      3.other\t%d ملف محدد
+      4.zero\tلا نصوص محددة
+      4.one\tنص واحد محدد
+      4.two\tنصان محددان
+      4.few\t%d نصوص محددة
+      4.many\t%d نصاً محدداً
+      4.other\t%d نص محدد
+      5\tجارٍ تصدير %d من %d…
+      6\tحدث خطأ ما
+      7\tإعادة المحاولة
+      8\tيحفظ Hermes مشاريعك وجلساتك وترجماتك في مكان واحد.
+      9\tلا توجد مشاريع بعد. أضف مشروعاً للبدء.
+      END
       """,
       // The failed batch: this is ALL that came back — whitespace. An empty answer is a
       // defect (5.3), which is exactly why this batch is the failed one, and the pane has
@@ -499,16 +521,17 @@ extension Translation.VerticalTranslate {
       // The last batch, which the fixture leaves UNSENT: the reply the preview's own fake run
       // answers it with when it lands it.
       """
-      [{"id": 0, "text": "Allgemein"},
-       {"id": 1, "text": "Darstellung"},
-       {"id": 2, "text": "Erweitert"},
-       {"id": 3, "text": "Änderungen automatisch sichern"},
-       {"id": 4, "text": "Strings durchsuchen"},
-       {"id": 5, "text": "Breitenbegrenzung (Zeichen)"},
-       {"id": 6, "text": "Der Katalog %@ wurde nicht gefunden."},
-       {"id": 7, "text": "Prüfung erforderlich"},
-       {"id": 8, "text": "Überprüft"},
-       {"id": 9, "text": "Drücken Sie ⌘F, um zu suchen"}]
+      0\tAllgemein
+      1\tDarstellung
+      2\tErweitert
+      3\tÄnderungen automatisch sichern
+      4\tStrings durchsuchen
+      5\tBreitenbegrenzung (Zeichen)
+      6\tDer Katalog %@ wurde nicht gefunden.
+      7\tPrüfung erforderlich
+      8\tÜberprüft
+      9\tDrücken Sie ⌘F, um zu suchen
+      END
       """,
     ]
 
@@ -522,8 +545,7 @@ extension Translation.VerticalTranslate {
           language: batch.language,
           items: batch.items.map { item in
             Translation.SampleRequest.Item(
-              source: Translation.SampleRequest.body(item.source),
-              target: Translation.SampleRequest.body(item.target),
+              source: item.source, target: item.target,
               comment: item.comment, maxWidth: item.maxWidth)
           })
       }
@@ -973,69 +995,14 @@ extension Translation {
   ///
   /// It is a FIXTURE, not a second builder: nothing in the run reads it, nothing here writes
   /// anything, and it lives beside the pane it feeds rather than beside `Prompt`.
-  enum SampleRequest {
-    /// A body on the wire: a flat value, or an object of plural category -> text (4.3).
-    enum Body: Equatable {
-      case text(String)
-      case forms([String: String])
-    }
-
-    /// One item as the payload carries it.
+  @MainActor enum SampleRequest {
+    /// One item as the fixture describes it.
     struct Item {
-      let source: Body
-      let target: Body
+      let source: Translation.StringBody
+      let target: Translation.StringBody
       let comment: String
       var maxWidth: Int = 0
-      /// A row batch names each item's language; a language batch names its own instead.
-      var language: String? = nil
     }
-
-    /// A `StringBody` as the payload carries it.
-    static func body(_ body: Translation.StringBody) -> Body {
-      switch body {
-      case .value(let text):
-        return .text(text)
-      case .plural(let plural):
-        return .forms(
-          Dictionary(
-            plural.values.map { ($0.rule.rawValue, $0.value) },
-            uniquingKeysWith: { first, _ in first }))
-      }
-    }
-
-    /// A lesson, as the fold's own request carries it (`Prompt.Lesson`).
-    struct Lesson {
-      let key: String
-      let source: String
-      let comment: String
-      let machine: String
-      let value: String
-    }
-
-    /// The system message. The real one is per shape and long, so the fixture carries the shape
-    /// — job, direction, the JSON array asked for — abridged rather than invented, because the
-    /// system text is the outermost part of the cacheable prefix and a fixture that changed the
-    /// shape would mark the boundary in the wrong place.
-    static let system = """
-      You are a careful software-localization translator. The items to translate are in the \
-      "ITEMS" section of the user message; the target language is named in the \
-      "TARGET LANGUAGE" section.
-
-      Rules:
-      1. Output ONLY a JSON array — no prose, no markdown fences. Each element is \
-      {"id": <the item's id>, "text": <the translation>}, one element per input item, in the \
-      same order.
-      2. An item's "id" is its position in this batch: echo it back unchanged.
-      3. Preserve placeholders (%@, %11$@, %lld, {name}), format specifiers and code tokens \
-      exactly as written.
-      4. Context sections in the user message are authoritative.
-      5. When an item's "source" and "target" are OBJECTS of plural categories, answer with the \
-      same object shape, one entry per category.
-      6. A filled "target" is the current value of that slot: produce the better translation for \
-      the same slot, or answer with the same value when it is already right.
-      7. When an item carries "maxWidth", keep the translation within that many characters if \
-      you can do it without losing meaning.
-      """
 
     /// L0: the same for every target language of a project, which is the whole reason it is the
     /// cacheable part (4.3). One project, so the fixtures share one L0.
@@ -1052,150 +1019,45 @@ extension Translation {
       """,
     ]
 
-    /// The lesson lines the fixtures' language documents carry, by language, in the redesign's own
-    /// format (3.7: KEY<TAB>SOURCE<TAB>VALUE, real tabs) — the L1 block a batch of that language
-    /// travels with.
-    static let documents: [String: [String]] = [
-      "ru": [
-        "button.save\tSave\tСохранить",
-        "sidebar.projects\tProjects\tПроекты",
-        "alert.title\tSomething went wrong\tПроизошла ошибка",
-      ],
-      "de": [
-        "button.save\tSave\tSichern",
-        "tabs.general\tGeneral\tAllgemein",
-        "status.reviewed\tReviewed\tGeprüft",
-      ],
-      "ja": [
-        "button.save\tSave\t保存",
-        "items.count\t%d strings\t%d件",
-        "settings.title\tSettings\t設定",
-      ],
-      "ar": [
-        "settings.title\tSettings\tالإعدادات",
-        "button.delete\tDelete\tحذف",
-        "tabs.advanced\tAdvanced\tمتقدّم",
-      ],
-    ]
-
-    /// The register sample (`EXISTING TRANSLATIONS`): what this project already says in the
-    /// language, as the source = value pairs the block is made of (4.3).
-    static let register: [String: [String]] = [
+    /// The glossary a batch of each language travels with: terms the project already settled.
+    static let glossary: [String: [String]] = [
       "ru": ["Settings = Настройки", "Cancel = Отмена", "Delete = Удалить"],
       "de": ["Cancel = Abbrechen", "Delete = Löschen", "Settings = Einstellungen"],
       "ja": ["Cancel = キャンセル", "Delete = 削除", "General = 一般"],
       "ar": ["Save = حفظ", "Cancel = إلغاء", "Delete = حذف"],
     ]
 
-    /// A language batch: L0 (global, project), L1 (target language, its lesson document, the
-    /// register sample), then L2 — the ITEMS payload last (`Prompt.languageBatch`).
+    /// A language batch, assembled by the app's own `Prompt.languageRequest`.
     static func languageBatch(language: String, items: [Item]) -> Prompt.Request {
-      var rest = ["TARGET LANGUAGE\n" + language]
-      if let lines = documents[language], !lines.isEmpty {
-        rest.append("CONTEXT — LANGUAGE (\(language))\n" + lines.joined(separator: "\n"))
-      }
-      if let lines = register[language], !lines.isEmpty {
-        rest.append("EXISTING TRANSLATIONS (\(language))\n" + lines.joined(separator: "\n"))
-      }
-      rest.append("ITEMS\n" + json(items))
-      return request(system: system, l0: shared, rest: rest, ids: positions(count: items.count))
+      Prompt.languageRequest(
+        language: language,
+        items: items.enumerated().map { index, item in
+          Run.Item(
+            key: "sample.\(index)", language: language, source: item.source, target: item.target,
+            comment: item.comment, maxWidth: item.maxWidth)
+        },
+        shared: shared, style: StyleRules.rules(for: language), glossary: glossary[language] ?? [],
+        keep: ["Hermes"])
     }
 
-    /// A row batch: L0 then ITEMS, each item naming its own language — no L1 block at all
-    /// (`Prompt.rowBatch`), because the row's settled columns ARE its reference.
-    static func rowBatch(items: [Item]) -> Prompt.Request {
-      request(
-        system: system, l0: shared, rest: ["ITEMS\n" + json(items)],
-        ids: positions(count: items.count))
-    }
-
-    /// The learn fold: a request of its own shape, with NO L0/L1 blocks and no ids — its reply is
-    /// document TEXT rather than a per-id map (`Prompt.learnFold`), which is exactly why the pane
-    /// marks no cacheable boundary on it.
-    static func learnFold(language: String, lessons: [Lesson], document: [String]) -> Prompt.Request {
-      let lines: [[String: Any]] = lessons.map { lesson in
-        [
-          "key": lesson.key, "source": lesson.source, "comment": lesson.comment,
-          "machine": lesson.machine, "value": lesson.value,
-        ]
-      }
-      let body = document.joined(separator: "\n")
-      let user = """
-        LESSONS — what the machine produced vs what the human settled on
-        \(jsonRows(lines))
-
-        CURRENT \(language.uppercased()) DOCUMENT — \(body.count) characters, budget \(Limits.languageContext)
-        \(body.isEmpty ? "(the document is empty)" : body)
-        """
-      return Prompt.Request(
-        system: """
-          You are the learning engine of a software-localization pipeline. You maintain ONE \
-          plain-text document of accumulated lessons for the target language "\(language)". Your \
-          job is the line (or lines) this fold APPENDS to the document — the fields are KEY, \
-          SOURCE and VALUE, separated by real tab characters, one line per lesson, and nothing \
-          else. Reply with exactly the single line NO_CHANGE when the document already covers \
-          every lesson.
-          """,
-        user: user)
-    }
-
-    // MARK: - assembly
-
-    /// The order `Prompt.request` uses, and the same prefix rule: the system message plus the L0
-    /// blocks, laid out exactly as the two messages are laid out, which is what makes the
-    /// boundary the pane draws a real one.
-    private static func request(
-      system: String, l0: [String], rest: [String], ids: [String]
-    ) -> Prompt.Request {
-      Prompt.Request(
-        system: system,
-        user: (l0 + rest).joined(separator: RawExchangePane.messageSeparator),
-        ids: ids,
-        cacheablePrefix: ([system] + l0).joined(separator: RawExchangePane.messageSeparator))
-    }
-
-    private static func positions(count: Int) -> [String] {
-      (0..<count).map { String($0) }
-    }
-
-    /// The ITEMS payload, deterministic the way `Prompt.json` is (sorted keys, no escaped
-    /// slashes) so a fixture's request reads like the one the wire carries.
-    private static func json(_ items: [Item]) -> String {
-      let rows: [[String: Any]] = items.enumerated().map { index, item in
-        var row: [String: Any] = [
-          "id": index, "source": jsonBody(item.source), "target": jsonBody(item.target),
-        ]
-        if !item.comment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-          row["comment"] = item.comment
+    /// A row batch, assembled by the app's own `Prompt.rowRequest`: the machine values are
+    /// the items, the settled columns the reference.
+    static func rowBatch(rows: [HorizontalTranslate.Operation]) -> Prompt.Request {
+      let items = rows.flatMap { row in
+        row.targets.compactMap { slot -> Run.Item? in
+          guard Run.writable(slot.status), !slot.target.isEmpty else { return nil }
+          return Run.Item(
+            key: row.key, language: slot.language, source: row.source, target: slot.target,
+            comment: row.comment, maxWidth: row.maxWidth)
         }
-        if item.maxWidth > 0 {
-          row["maxWidth"] = item.maxWidth
-        }
-        if let language = item.language {
-          row["language"] = language
-        }
-        return row
       }
-      return jsonRows(rows)
-    }
-
-    /// A body as JSON: a string for a flat value, an object of category -> text for a plural
-    /// one. An empty skeleton therefore travels as the same categories with empty strings, which
-    /// is the "fill these" signal the model is given (4.3).
-    private static func jsonBody(_ body: Body) -> Any {
-      switch body {
-      case .text(let text): return text
-      case .forms(let forms): return forms
+      let targets = Dictionary(rows.map { ($0.key, $0.targets) }, uniquingKeysWith: { first, _ in first })
+      return Prompt.rowRequest(items: items, shared: shared) { key in
+        (targets[key] ?? []).compactMap { slot in
+          guard !slot.target.isEmpty, slot.status == .verified || slot.status == .imported else { return nil }
+          return (slot.language, slot.target.catalogValue)
+        }
       }
-    }
-
-    private static func jsonRows(_ rows: [[String: Any]]) -> String {
-      guard !rows.isEmpty,
-        let data = try? JSONSerialization.data(
-          withJSONObject: rows, options: [.sortedKeys, .withoutEscapingSlashes]),
-        let text = String(data: data, encoding: .utf8)
-      else { return "[]" }
-      return text
     }
   }
 }
