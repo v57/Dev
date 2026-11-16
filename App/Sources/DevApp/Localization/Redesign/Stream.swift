@@ -89,7 +89,39 @@ extension Translation {
     ) async throws -> Usage? {
       return try await attempt(
         system: system, user: user, temperature: temperature,
-        includeUsage: true, reasoning: reasoningEffort, onChunk: onChunk)
+        includeUsage: true, reasoning: EffortMemory.shared.effort(reasoningEffort, for: effortKey),
+        onChunk: onChunk)
+    }
+
+    /// The provider and model a refused effort is remembered for.
+    private var effortKey: String { "\(endpoint.absoluteString)|\(model)" }
+
+    /// The efforts a provider refused this session, and what was sent instead. A refusal is
+    /// a 400 before any text, so it costs a round trip — once, not once per batch.
+    final class EffortMemory: @unchecked Sendable {
+      static let shared = EffortMemory()
+      private let lock = NSLock()
+      private var replacements: [String: String?] = [:]
+
+      /// The effort to send for `asked`: itself, or what replaced it after a refusal.
+      func effort(_ asked: String?, for key: String) -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        var current = asked
+        while let level = current, let replaced = replacements["\(key)|\(level)"] { current = replaced }
+        return current
+      }
+
+      /// What to try after `refused`: the lowest effort most reasoning APIs know, `low`,
+      /// for the levels below it that fewer of them do; no field at all after that (the
+      /// provider's own default, which for a reasoning model is the costliest).
+      func refuse(_ refused: String, for key: String) -> String? {
+        let next: String? = ["none", "minimal"].contains(refused) ? "low" : nil
+        lock.lock()
+        replacements["\(key)|\(refused)"] = .some(next)
+        lock.unlock()
+        return next
+      }
     }
 
     // MARK: - one attempt
@@ -179,12 +211,15 @@ extension Translation {
             system: system, user: user, temperature: nil,
             includeUsage: includeUsage, reasoning: reasoning, onChunk: onChunk)
         }
-        // A model that does not reason refuses the effort field the same way.
-        if http.statusCode == 400, reasoning != nil,
+        // A model that does not reason refuses the effort field the same way, and one that
+        // reasons may refuse only the level (`minimal` where it knows `low`): the next level
+        // up is tried before the field is dropped.
+        if http.statusCode == 400, let reasoning,
            ["reasoning", "effort", "output_config"].contains(where: { excerpt?.localizedCaseInsensitiveContains($0) == true }) {
           return try await attempt(
             system: system, user: user, temperature: temperature,
-            includeUsage: includeUsage, reasoning: nil, onChunk: onChunk)
+            includeUsage: includeUsage, reasoning: EffortMemory.shared.refuse(reasoning, for: effortKey),
+            onChunk: onChunk)
         }
         if http.statusCode == 400, includeUsage, wire == .chatCompletions {
           return try await attempt(

@@ -194,4 +194,16 @@ import Testing
     #expect(!Router.saysProviderIsDown(.emptyResult("model")))
     #expect(!Router.saysProviderIsDown(.badStatus(400, "bad request")))
   }
+
+  @Test func aRefusedEffortStepsDownToLowThenToNone() {
+    let memory = Translation.ChatStream.EffortMemory()
+    let key = "https://example.test/v1|model"
+    #expect(memory.effort("minimal", for: key) == "minimal")
+    #expect(memory.refuse("minimal", for: key) == "low")
+    #expect(memory.effort("minimal", for: key) == "low")
+    #expect(memory.refuse("low", for: key) == nil)
+    #expect(memory.effort("minimal", for: key) == nil)
+    #expect(memory.effort("high", for: key) == "high")
+    #expect(memory.effort("minimal", for: "other|model") == "minimal")
+  }
 }
