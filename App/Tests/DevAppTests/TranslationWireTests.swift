@@ -185,4 +185,13 @@ import Testing
     let request = Prompt.languageRequest(language: "ru", items: [item], shared: [], style: "", glossary: [])
     #expect(request.user.contains("  problem: your answer “Settings”: it is still in English"))
   }
+
+  @Test func onlyAProviderFailureParksTheProvider() {
+    typealias Router = Translation.Router
+    #expect(Router.saysProviderIsDown(.network("lost")))
+    #expect(Router.saysProviderIsDown(.rateLimited(429, nil, nil)))
+    #expect(Router.saysProviderIsDown(.badStatus(503, nil)))
+    #expect(!Router.saysProviderIsDown(.emptyResult("model")))
+    #expect(!Router.saysProviderIsDown(.badStatus(400, "bad request")))
+  }
 }

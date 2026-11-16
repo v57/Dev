@@ -264,7 +264,7 @@ extension Translation {
             // Any escape from the error taxonomy still has to park Muse rather than abort
             // the run.
             let backendError = (error as? BackendError) ?? .network(error.localizedDescription)
-            if !arrived {
+            if !arrived, Self.saysProviderIsDown(backendError) {
               coolDown(candidate, retryAfter: Self.cooldown(for: backendError))
             }
             continuation.finish(throwing: backendError)
@@ -273,6 +273,19 @@ extension Translation {
         // The caller stopped reading — a cancel, a pause, a run going away — and the call
         // itself is what has to stop: the byte stream is aborted by cancelling its own task.
         continuation.onTermination = { _ in task.cancel() }
+      }
+    }
+
+    /// Whether a failure is the provider's (down, refusing, over quota) rather than one
+    /// answer's. A reply that came back 200 and held no text — a reasoning model that
+    /// thought and then wrote nothing — or one that could not be read says nothing about
+    /// the provider: parking it would stop every batch in flight for the whole window over
+    /// one empty answer, which the batch's own retry re-asks at once.
+    static func saysProviderIsDown(_ error: BackendError) -> Bool {
+      switch error {
+      case .network, .rateLimited: true
+      case .badStatus(let code, _): code >= 500
+      case .emptyResult, .decoding, .notConfigured: false
       }
     }
 
