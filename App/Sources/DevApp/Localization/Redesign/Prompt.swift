@@ -243,9 +243,13 @@ extension Translation {
           let slot = row.target(language), case .value(let value) = slot.target, !value.isEmpty, value != source
         else { continue }
         switch slot.status {
-        case .verified, .imported: settled.append((source, value))
+        case .verified: settled.append((source, value))
         case .translated: machine.append((source, value))
-        case .stale, .needsTranslate, .ignore: break
+        // The imported database matches a string by its English alone, across every app it
+        // was taken from: a one-word label there is often another app's sense of the word
+        // ("Audio" as headphones), and as a glossary term it would carry that sense into
+        // every sentence of the batch.
+        case .imported, .stale, .needsTranslate, .ignore: break
         }
       }
       // Gold memory for the batch's short phrases, from any project.
@@ -399,8 +403,8 @@ extension Translation {
       real line break.
       - In a plural form, keep the number's placeholder unless the form stands for exactly \
       one number (like English "one").
-      - Follow CONTEXT and STYLE, use the GLOSSARY's translations for the terms it covers, \
-      and keep the KEEP terms as written.
+      - Follow CONTEXT and STYLE, use the GLOSSARY's translations for the terms it covers \
+      (inflected, and capitalized as the sentence needs), and keep the KEEP terms as written.
       - Translate as user-interface text: natural, concise and consistent with the platform's \
       conventions in that language. Keep a string within its max when you can without \
       losing meaning.
