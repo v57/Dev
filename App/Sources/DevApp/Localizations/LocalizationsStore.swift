@@ -28,6 +28,9 @@ nonisolated struct LocalizationsState: Codable, Sendable {
   /// Source -> what it is, in a phrase ("a folder-based code editor for Mac, iPhone and iPad"): the model is told,
   /// so it translates for that app. Optional so a state file from before it still reads.
   var descriptions: [String: String]?
+  /// Every source's finished translations, the newest last (`LocalizationsRunRecord`). Optional so a state file from
+  /// before it still reads.
+  var records: [LocalizationsRunRecord]?
 
   /// The languages apps bundle by default (Ideas/Localization.md), English aside.
   static let defaultLanguages = ["de", "fr", "es", "ja", "zh-Hans", "pt-BR", "ko", "it", "ru"]
@@ -201,7 +204,27 @@ final class LocalizationsStore {
   private(set) var summary: String?
   private var task: Task<Void, Never>?
   private var process: LocalizationsProcess?
-  private var translator: LocalizationsTranslator?
+  /// The translator of the source being translated: its workspace's run is what the pages show live.
+  private(set) var translator: LocalizationsTranslator?
+  /// The job running now, and the one that ran last (its source states stay shown until the next job).
+  private(set) var job: LocalizationsJob?
+  private(set) var lastJob: LocalizationsJob?
+  private(set) var jobStartedAt: Date?
+  private(set) var jobFinishedAt: Date?
+  /// The job's sources (translate, build) in order, and where each one is.
+  private(set) var queue: [String] = []
+  private(set) var sourceStates: [String: LocalizationsSourceState] = [:]
+  /// The source being translated or committed, or the app being built.
+  private(set) var current: String?
+  /// Strings the translate job set out to translate.
+  private(set) var plannedStrings = 0
+  /// The scan's place: apps built and apps to build.
+  private(set) var scanIndex = 0
+  private(set) var scanTotal = 0
+  #if DEBUG
+    /// The page the `show` debug command opens: "" the overview, else a source.
+    var debugShow: String?
+  #endif
   private let stateURL: URL
 
   init(stateURL: URL = LocalizationsState.url) {
@@ -400,17 +423,37 @@ final class LocalizationsStore {
     task?.cancel()
   }
 
-  private func start(_ title: String, _ work: @escaping @MainActor () async -> Void) {
+  private func start(_ title: String, job: LocalizationsJob? = nil, _ work: @escaping @MainActor () async -> Void) {
     guard task == nil else { return }
     error = nil
     summary = nil
     log = []
     activity = title
+    self.job = job
+    if job != nil {
+      queue = []
+      sourceStates = [:]
+      current = nil
+      jobStartedAt = .now
+      jobFinishedAt = nil
+    }
     task = Task {
       await work()
       activity = nil
       process = nil
       translator = nil
+      if let job = self.job {
+        lastJob = job
+        jobFinishedAt = .now
+        // A source the job never reached says so, rather than waiting forever.
+        for name in queue where sourceStates[name] == .waiting || sourceStates[name] == .translating
+          || sourceStates[name] == .committing
+        {
+          sourceStates[name] = .stopped
+        }
+      }
+      self.job = nil
+      current = nil
       task = nil
       persist()
       refreshProgress()
@@ -423,9 +466,13 @@ final class LocalizationsStore {
   func scan(_ names: [String]? = nil) {
     let targets = state.apps.filter { names?.contains($0.name) ?? $0.included }
     guard let repoURL, !targets.isEmpty else { return }
-    start(String(localized: "Scanning")) { [self] in
-      for app in targets {
+    scanTotal = targets.count
+    scanIndex = 0
+    start(String(localized: "Scanning"), job: .scan) { [self] in
+      for (index, app) in targets.enumerated() {
         guard !Task.isCancelled else { break }
+        scanIndex = index
+        current = app.name
         activity = String(localized: "Building \(app.name)")
         if let scan = await build(app) {
           state.scans[app.name] = scan
@@ -434,6 +481,8 @@ final class LocalizationsStore {
           persist()
         }
       }
+      scanIndex = targets.count
+      current = nil
       replan()
       activity = String(localized: "Writing catalogs")
       writeCatalogs(in: repoURL)
@@ -517,11 +566,16 @@ final class LocalizationsStore {
     guard !sources.isEmpty, !languages.isEmpty else { return }
     // The shipped translations (Dev's imported translation database) fill what they can before any model call.
     ImportedTranslationDB.shared.restoreIfNeeded()
-    start(String(localized: "Translating")) { [self] in
+    start(String(localized: "Translating"), job: .translate) { [self] in
+      queue = sources
+      for name in sources { sourceStates[name] = .waiting }
+      plannedStrings = sources.reduce(0) { $0 + (progress[$1] == nil ? 0 : missing($1)) }
       var done = 0
       for name in sources {
         guard !Task.isCancelled else { break }
         activity = String(localized: "Translating \(name)")
+        current = name
+        sourceStates[name] = .translating
         let translator = LocalizationsTranslator(shell: shell)
         self.translator = translator
         do {
@@ -530,12 +584,24 @@ final class LocalizationsStore {
             about: about(name), code: sourceCode(name))
           say("\(name): \(outcome)")
           if outcome.changed { note(name, "translated into \(languages.joined(separator: ", "))") }
+          if outcome.items == 0 {
+            sourceStates[name] = .upToDate
+          } else {
+            let record = outcome.record(source: name, stopped: Task.isCancelled)
+            sourceStates[name] = .translated(record)
+            var records = state.records ?? []
+            records.append(record)
+            state.records = Array(records.suffix(200))
+            persist()
+          }
           done += 1
         } catch {
           say("\(name): \(error.localizedDescription)")
           self.error = "\(name): \(error.localizedDescription)"
+          sourceStates[name] = Task.isCancelled ? .stopped : .failed(error.localizedDescription)
           if Task.isCancelled { break }
         }
+        self.translator = nil
         refreshProgress()
       }
       summary = String(localized: "Translated \(done.formatted()) of \(sources.count) sources")
@@ -548,7 +614,7 @@ final class LocalizationsStore {
   /// that changed, with `manifest.json` in the first: `<Source>: <what changed>`.
   func buildAndCommit() {
     guard let repoURL else { return }
-    start(String(localized: "Building")) { [self] in
+    start(String(localized: "Building"), job: .build) { [self] in
       let process = LocalizationsProcess()
       self.process = process
       let lines = LineSink()
@@ -561,18 +627,28 @@ final class LocalizationsStore {
         return
       }
       activity = String(localized: "Committing")
-      var commits = 0
+      var changed: [String] = []
       for source in LocalizationsRepo.sources(in: repoURL) {
-        guard await hasChanges(source, in: repoURL) else { continue }
+        if await hasChanges(source, in: repoURL) { changed.append(source) }
+      }
+      queue = changed
+      for source in changed { sourceStates[source] = .waiting }
+      var commits = 0
+      for source in changed {
+        guard !Task.isCancelled else { break }
+        current = source
+        sourceStates[source] = .committing
         let message = commitMessage(for: source)
         let paths = [source, "manifest.json"]
         guard await git(["add", "-A", "--"] + paths, in: repoURL) == 0,
           await git(["commit", "-q", "-m", message, "--"] + paths, in: repoURL) == 0
         else {
           error = String(localized: "Committing \(source) failed. The log has git's answer.")
+          sourceStates[source] = .failed(String(localized: "The commit failed"))
           return
         }
         say("committed: \(message)")
+        sourceStates[source] = .committed(await head(in: repoURL))
         state.notes[source] = nil
         commits += 1
       }
@@ -597,6 +673,13 @@ final class LocalizationsStore {
     _ = await LocalizationsProcess().run(
       "/usr/bin/git", ["status", "--porcelain", "--", path], in: repo) { lines.add($0) }
     return lines.take().contains { !$0.isEmpty }
+  }
+
+  /// The short hash of the repository's HEAD.
+  private func head(in repo: URL) async -> String {
+    let lines = LineSink()
+    _ = await LocalizationsProcess().run("/usr/bin/git", ["rev-parse", "--short", "HEAD"], in: repo) { lines.add($0) }
+    return lines.take().first { !$0.isEmpty } ?? ""
   }
 
   private func git(_ arguments: [String], in repo: URL) async -> Int32 {
@@ -624,6 +707,7 @@ final class LocalizationsStore {
         case "translate": translate(rest.isEmpty ? nil : rest, shell: shell)
         case "build": buildAndCommit()
         case "cancel": cancel()
+        case "show": debugShow = rest.first ?? ""
         case "include": if rest.count == 2 { setIncluded(rest[0], rest[1] == "yes") }
         case "addapp": if !rest.isEmpty { addApp(at: URL(fileURLWithPath: rest.joined(separator: " "))) }
         case "describe": if let source = rest.first { setDescription(rest.dropFirst().joined(separator: " "), of: source) }
@@ -718,10 +802,15 @@ nonisolated final class LineSink: @unchecked Sendable {
 /// translate, the row pass) and its Save writes the file. The same path the toolbar's Translate takes, so translation
 /// memory, context rules and the run's history are the ones the tab uses.
 @MainActor
+@Observable
 final class LocalizationsTranslator {
   let shell: Translation.Shell
-  private var workspace: Translation.Workspace?
-  private var cancelled = false
+  /// The source's workspace once it is open: its runner's run is the live progress.
+  private(set) var workspace: Translation.Workspace?
+  @ObservationIgnored private var cancelled = false
+  /// The catalog's store: the shell and the workspace hold it weakly (a pane's store is the pane's), so the run's
+  /// save would find it gone without this.
+  @ObservationIgnored private var catalogStore: LocalizationStore?
 
   init(shell: Translation.Shell) {
     self.shell = shell
@@ -731,6 +820,8 @@ final class LocalizationsTranslator {
     var items = 0
     var done = 0
     var failures = 0
+    /// The languages of the failed batches.
+    var failedLanguages: [String] = []
     var changed = false
     /// What the run cost: requests that came back, tokens in (and how many the provider's cache served),
     /// tokens out, and its time, so a run's log line says what it spent.
@@ -750,6 +841,13 @@ final class LocalizationsTranslator {
       text += "; \(requests) requests, \(promptTokens) tokens in (\(cached)% cached), \(completionTokens) out"
       text += ", \(Int(seconds.rounded())) s"
       return text
+    }
+
+    func record(source: String, stopped: Bool) -> LocalizationsRunRecord {
+      LocalizationsRunRecord(
+        source: source, date: .now, items: items, done: done, failures: failures, failedLanguages: failedLanguages,
+        requests: requests, promptTokens: promptTokens, cachedTokens: cachedTokens, completionTokens: completionTokens,
+        seconds: seconds, checked: checked, corrected: corrected, stopped: stopped)
     }
   }
 
@@ -782,6 +880,7 @@ final class LocalizationsTranslator {
       _ = data.insertProject(name: "\(source) (Localizations)", catalogURL: url)
     }
     let store = LocalizationStore(registersAsActive: false)
+    catalogStore = store
     await store.open(url)
     guard store.isLoaded, store.catalogURL == url, let opened = store.catalog else {
       throw Failure.open(
@@ -821,7 +920,12 @@ final class LocalizationsTranslator {
     let hasWork = workspace.project.data.contains { row in
       row.isCatalogRow && row.targets.contains(where: \.needsMachineTranslate)
     }
-    guard hasWork || !missing.isEmpty else { return Outcome() }
+    guard hasWork || !missing.isEmpty else {
+      // Still saved: the records may hold values the file lacks (a run whose save failed), and a save publishes them.
+      await workspace.save()
+      if let failure = workspace.error { throw Failure.open(failure) }
+      return Outcome()
+    }
     try await workspace.run(.vertical)
     let run = workspace.runner.runs[.vertical]
     await workspace.save()
@@ -833,6 +937,7 @@ final class LocalizationsTranslator {
     let corrected = tally.byStage[.horizontal] ?? 0
     return Outcome(
       items: tally.items - checked, done: tally.itemsDone - corrected, failures: run?.failures.count ?? 0,
+      failedLanguages: Array(Set(run?.failures.compactMap(\.language) ?? [])).sorted(),
       changed: tally.itemsDone > 0 || !missing.isEmpty, requests: tally.requests, promptTokens: tally.promptTokens,
       cachedTokens: tally.cachedTokens, completionTokens: tally.completionTokens,
       seconds: run.flatMap { run in run.startedAt.map { (run.finishedAt ?? .now).timeIntervalSince($0) } } ?? 0,

@@ -102,6 +102,14 @@ struct ContentView: View {
         model.selection = .tool(.icon)
       }
     }
+    #if DEBUG
+      // `show [source]` on dev.v57.dev.localizations: the Translations tool, for screenshots without clicks.
+      .onChange(of: LocalizationsStore.shared.debugShow) { _, show in
+        if show != nil { model.selection = .translations }
+      }
+      // Here, not on the tool's sidebar row: a collapsed Tools section doesn't make the row, nor start its tasks.
+      .task { await LocalizationsStore.shared.listenForDebugCommands(shell: translation) }
+    #endif
     .task {
       for await _ in NotificationCenter.default.notifications(named: .devAddProject) {
         model.addProjectsFromPanel()
