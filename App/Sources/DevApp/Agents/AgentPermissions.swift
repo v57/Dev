@@ -15,6 +15,14 @@ nonisolated enum AgentPermissions {
   enum Level: String, CaseIterable, Identifiable, Sendable {
     case allow, ask, never
     var id: String { rawValue }
+    /// Never < Ask First < Allow.
+    var strictness: Int {
+      switch self {
+      case .never: 0
+      case .ask: 1
+      case .allow: 2
+      }
+    }
     var title: String {
       switch self {
       case .allow: String(localized: "Allow")
@@ -75,8 +83,8 @@ nonisolated enum AgentPermissions {
     stored.save()
   }
 
-  /// The settings as kept in the keychain (one item, JSON). Levels an earlier Dev wrote to UserDefaults are
-  /// dropped, not adopted: anyone could have written them.
+  /// The settings as kept in the keychain (one item, JSON). Of the levels and the switch an earlier Dev wrote to
+  /// UserDefaults only stricter values are taken over (`migrateDefaults`): anyone could have written them.
   struct Stored: Codable, Equatable {
     var enabled: Bool?
     var levels: [String: String] = [:]
@@ -85,7 +93,11 @@ nonisolated enum AgentPermissions {
     static let account = "permissions"
 
     static func load() -> Stored {
-      forgetDefaults()
+      migrateDefaultsOnce()
+      return read()
+    }
+
+    private static func read() -> Stored {
       guard let text = DevKeychain.read(service: service, account: account),
             let stored = try? JSONDecoder().decode(Stored.self, from: Data(text.utf8))
       else { return Stored() }
@@ -99,11 +111,34 @@ nonisolated enum AgentPermissions {
 
     private static let forgotten = Mutex(false)
 
-    private static func forgetDefaults() {
+    private static func migrateDefaultsOnce() {
       guard !forgotten.withLock({ let was = $0; $0 = true; return was }) else { return }
-      let defaults = UserDefaults.standard
-      defaults.removeObject(forKey: "agents.enabled")
-      for action in Action.allCases { defaults.removeObject(forKey: "agents.permission." + action.rawValue) }
+      migrateDefaults(from: .standard)
+    }
+
+    /// Takes over what an earlier Dev kept in UserDefaults when it's stricter than the default (agents off; a level
+    /// below the action's default, Never < Ask First < Allow) and the keychain item has no value for it yet, then
+    /// removes the keys. A value equal to the default or looser is ignored, so a `defaults write` can only take
+    /// permission away.
+    static func migrateDefaults(from defaults: UserDefaults) {
+      let enabledKey = "agents.enabled"
+      func levelKey(_ action: Action) -> String { "agents.permission." + action.rawValue }
+      var stored = read()
+      var changed = false
+      if defaults.object(forKey: enabledKey) as? Bool == false, stored.enabled == nil {
+        stored.enabled = false
+        changed = true
+      }
+      for action in Action.allCases where stored.levels[action.rawValue] == nil {
+        guard let level = defaults.string(forKey: levelKey(action)).flatMap(Level.init),
+          level.strictness < action.defaultLevel.strictness
+        else { continue }
+        stored.levels[action.rawValue] = level.rawValue
+        changed = true
+      }
+      if changed { stored.save() }
+      defaults.removeObject(forKey: enabledKey)
+      for action in Action.allCases { defaults.removeObject(forKey: levelKey(action)) }
     }
   }
 

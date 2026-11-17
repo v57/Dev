@@ -5,7 +5,8 @@ import Testing
 @testable import DevApp
 
 /// Workflows from the repository or an agent don't run on their own (security audit H6), and the agent settings
-/// live where `defaults write` can't reach them (M16). The keychain is swapped for memory.
+/// live where `defaults write` can't reach them (M16); earlier values in UserDefaults are taken over only when stricter.
+/// The keychain is swapped for memory.
 @Suite(.serialized) struct WorkflowApprovalTests {
   init() {
     DevKeychain.memory.withLock { $0 = [:] }
@@ -54,6 +55,56 @@ import Testing
     #expect(UserDefaults.standard.string(forKey: "agents.permission.run") == nil)
     AgentPermissions.setLevel(.allow, for: .run)
     #expect(AgentPermissions.level(.run) == .allow)
+  }
+
+  private func legacyDefaults() -> UserDefaults {
+    UserDefaults(suiteName: "dev.tests.\(UUID().uuidString)")!
+  }
+
+  private var legacyKeys: [String] {
+    ["agents.enabled"] + AgentPermissions.Action.allCases.map { "agents.permission." + $0.rawValue }
+  }
+
+  @Test func stricterEarlierPermissionsAreKept() {
+    let defaults = legacyDefaults()
+    defaults.set("never", forKey: "agents.permission.read")
+    defaults.set("ask", forKey: "agents.permission.edit")
+    defaults.set("never", forKey: "agents.permission.run")
+    defaults.set(false, forKey: "agents.enabled")
+    AgentPermissions.Stored.migrateDefaults(from: defaults)
+    #expect(AgentPermissions.level(.read) == .never)
+    #expect(AgentPermissions.level(.edit) == .ask)
+    #expect(AgentPermissions.level(.run) == .never)
+    #expect(!AgentPermissions.isEnabled)
+    for key in legacyKeys { #expect(defaults.object(forKey: key) == nil) }
+  }
+
+  @Test func looserOrEqualEarlierPermissionsAreIgnored() {
+    let defaults = legacyDefaults()
+    defaults.set("allow", forKey: "agents.permission.run")
+    defaults.set("allow", forKey: "agents.permission.publish")
+    defaults.set("ask", forKey: "agents.permission.run")
+    defaults.set("allow", forKey: "agents.permission.read")
+    defaults.set(true, forKey: "agents.enabled")
+    AgentPermissions.Stored.migrateDefaults(from: defaults)
+    #expect(AgentPermissions.level(.run) == .ask)
+    #expect(AgentPermissions.level(.publish) == .ask)
+    #expect(AgentPermissions.level(.read) == .allow)
+    #expect(AgentPermissions.isEnabled)
+    #expect(DevKeychain.memory.withLock { $0 } == [:])
+    for key in legacyKeys { #expect(defaults.object(forKey: key) == nil) }
+  }
+
+  @Test func earlierPermissionsNeverReplaceStoredOnes() {
+    AgentPermissions.setLevel(.allow, for: .read)
+    AgentPermissions.setEnabled(true)
+    let defaults = legacyDefaults()
+    defaults.set("never", forKey: "agents.permission.read")
+    defaults.set(false, forKey: "agents.enabled")
+    AgentPermissions.Stored.migrateDefaults(from: defaults)
+    #expect(AgentPermissions.level(.read) == .allow)
+    #expect(AgentPermissions.isEnabled)
+    for key in legacyKeys { #expect(defaults.object(forKey: key) == nil) }
   }
 
   @Test func setWorkflowWithCommandNeedsRunPermission() throws {
