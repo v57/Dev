@@ -589,8 +589,8 @@ import Testing
                  "relationships": ["preReleaseVersion": ["data": ["id": "P1", "type": "preReleaseVersions"]]]] as [String: Any]
     let stub = Stub([
       "GET /v1/apps?filter[bundleId]=dev.v57.app": (200, ["data": [attributes("A1", ["name": "App", "sku": "app"])]]),
-      "GET /v1/builds?filter[app]=A1&filter[preReleaseVersion.platform]=IOS&sort=-uploadedDate&limit=10&include=preReleaseVersion":
-        (200, ["data": [build], "included": [attributes("P1", ["version": "1.0"])]]),
+      "GET /v1/builds?filter[app]=A1&sort=-uploadedDate&limit=10&include=preReleaseVersion":
+        (200, ["data": [build], "included": [attributes("P1", ["version": "1.0", "platform": "IOS"])]]),
       "GET /v1/apps/A1/appStoreVersions?filter[platform]=IOS&limit=20&include=build": (200, ["data": [
         attributes("V1", ["versionString": "1.0", "appVersionState": "PREPARE_FOR_SUBMISSION"]),
       ]]),
@@ -611,7 +611,7 @@ import Testing
     let status = try await AppStoreStatus.read(api: api, bundleID: "dev.v57.app", platform: "ios", version: "1.0")
     let builds = status["builds"] as? [[String: Any]] ?? []
     #expect(builds.first?["build"] as? String == "42" && builds.first?["version"] as? String == "1.0")
-    #expect(builds.first?["processingState"] as? String == "VALID")
+    #expect(builds.first?["processingState"] as? String == "VALID" && builds.first?["platform"] as? String == "IOS")
     let selected = status["selected"] as? [String: Any]
     #expect(selected?["build"] is NSNull)
     let locales = selected?["locales"] as? [[String: Any]]

@@ -27,19 +27,24 @@ nonisolated enum AppStoreStatus {
     var missing: [String] = []
 
     // Builds, newest first, with the marketing version each belongs to
+    // Every platform's: an upload for the wrong one shows up instead of nothing
     let buildsJSON = try await api.request(
-      "GET", "/v1/builds?filter[app]=\(appID)&filter[preReleaseVersion.platform]=\(ascPlatform)"
-        + "&sort=-uploadedDate&limit=10&include=preReleaseVersion")
-    let preReleases = Dictionary(
-      ((buildsJSON["included"] as? [[String: Any]]) ?? []).compactMap { item in
-        (item["id"] as? String).map { ($0, AppStoreConnectAPI.attribute(item, "version") as? String ?? "") }
-      }, uniquingKeysWith: { first, _ in first })
+      "GET", "/v1/builds?filter[app]=\(appID)&sort=-uploadedDate&limit=10&include=preReleaseVersion")
+    let preReleaseItems = ((buildsJSON["included"] as? [[String: Any]]) ?? []).compactMap { item in
+      (item["id"] as? String).map { ($0, item) }
+    }
+    let preReleases = Dictionary(preReleaseItems.map { ($0.0, AppStoreConnectAPI.attribute($0.1, "version") as? String ?? "") },
+                                 uniquingKeysWith: { first, _ in first })
+    let preReleasePlatforms = Dictionary(
+      preReleaseItems.map { ($0.0, AppStoreConnectAPI.attribute($0.1, "platform") as? String ?? "") },
+      uniquingKeysWith: { first, _ in first })
     let builds = AppStoreConnectAPI.data(buildsJSON).map { build -> [String: Any] in
       let preRelease = ((build["relationships"] as? [String: Any])?["preReleaseVersion"] as? [String: Any])?["data"]
         as? [String: Any]
       return [
         "id": build["id"] as Any, "build": attribute(build, "version"),
         "version": preRelease.flatMap { ($0["id"] as? String).flatMap { preReleases[$0] } } ?? NSNull(),
+        "platform": preRelease.flatMap { ($0["id"] as? String).flatMap { preReleasePlatforms[$0] } } ?? NSNull(),
         "processingState": attribute(build, "processingState"), "uploaded": attribute(build, "uploadedDate"),
         "expired": attribute(build, "expired"), "usesNonExemptEncryption": attribute(build, "usesNonExemptEncryption"),
       ]
@@ -150,7 +155,7 @@ nonisolated enum AppStoreStatus {
       }
       if let rating = await optional("/v1/appInfos/\(infoID)/ageRatingDeclaration").flatMap({ AppStoreConnectAPI.data($0).first }) {
         let attributes = rating["attributes"] as? [String: Any] ?? [:]
-        let unanswered = attributes.filter { $0.value is NSNull }.map(\.key).sorted()
+        let unanswered = attributes.filter { $0.value is NSNull && !optionalAgeRatingFields.contains($0.key) }.map(\.key).sorted()
         info["ageRating"] = ["unanswered": unanswered]
         if !unanswered.isEmpty { missing.append("Age rating: \(unanswered.count) questions unanswered") }
       } else {
@@ -174,6 +179,13 @@ nonisolated enum AppStoreStatus {
       "missing": missing,
     ]
   }
+
+  /// Age rating attributes App Store Connect leaves empty unless they apply: a region's own rating, an override, a
+  /// kids' age band, the developer's page about it.
+  static let optionalAgeRatingFields: Set<String> = [
+    "kidsAgeBand", "developerAgeRatingInfoUrl", "gracRatingClassificationNumber", "koreaAgeRatingOverride",
+    "ageRatingOverride", "ageRatingOverrideV2",
+  ]
 
   /// Attaches a build App Store Connect already processed to its version (made when the app has none), without
   /// waiting: one still processing fails, and the call can be made again. Nothing is submitted for review.
