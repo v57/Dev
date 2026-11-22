@@ -147,6 +147,40 @@ extension ScreenshotConfig {
     return ios?.devices.first.map(Self.platform(ofDevice:))
   }
 
+  /// Every platform the config captures, the framed one first: the Mac, then each kind of device. The App Store wants
+  /// iPhone and iPad pictures alike, so each one is framed (`framing(for:)`).
+  public var framedPlatforms: [Platform] {
+    var platforms: [Platform] = framedPlatform.map { [$0] } ?? []
+    if mac != nil, !platforms.contains(.mac) { platforms.append(.mac) }
+    for device in ios?.devices ?? [] {
+      let platform = Self.platform(ofDevice: device)
+      if !platforms.contains(platform) { platforms.append(platform) }
+    }
+    return platforms
+  }
+
+  /// How a platform's pictures are framed: `framing` itself for the platform it frames; for the others its look (the
+  /// backgrounds, the caption's catalog, colour, weight, lines and place, the window's shadow, alignment and corners)
+  /// at that platform's own App Store size, caption size and window scale. Without `framing`, the platform's starter.
+  public func framing(for platform: Platform) -> Framing {
+    guard let framing else { return .starter(for: platform) }
+    if platform == framedPlatform { return framing }
+    var adapted = Framing.starter(for: platform)
+    adapted.background = framing.background
+    adapted.backgrounds = framing.backgrounds
+    adapted.caption.catalog = framing.caption.catalog
+    adapted.caption.color = framing.caption.color
+    adapted.caption.bold = framing.caption.bold
+    adapted.caption.maxLines = framing.caption.maxLines
+    adapted.caption.top = framing.caption.top
+    adapted.window.shadow = framing.window.shadow
+    adapted.window.align = framing.window.align
+    adapted.window.cornerRadius = framing.window.cornerRadius
+    adapted.updatedBy = framing.updatedBy
+    adapted.updatedAt = framing.updatedAt
+    return adapted
+  }
+
   /// From a simulator's name; a UDID counts as an iPhone.
   public static func platform(ofDevice name: String) -> Platform {
     name.localizedCaseInsensitiveContains("ipad") ? .ipad : .iphone

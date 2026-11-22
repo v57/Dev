@@ -253,6 +253,25 @@ struct ScreenshotFramingTests {
     #expect(ScreenshotConfig.Framing.starter(for: .iphone).problems().isEmpty)
   }
 
+  @Test func everyCapturedPlatformIsFramedAtItsOwnSize() {
+    var config = ScreenshotConfig(mac: .init(), ios: .init(devices: ["iPhone 18 Pro Max", "iPad Pro 13-inch (M5)"]))
+    #expect(config.framedPlatforms == [ScreenshotConfig.Platform.mac, .iphone, .ipad])
+    #expect(config.framing(for: .ipad) == .starter(for: .ipad))
+    var framing = ScreenshotConfig.Framing(width: 2880, height: 1800, background: "#102030", backgrounds: ["a": "#FF0000"])
+    framing.caption.color = "#000000"
+    framing.window.align = .center
+    config.framing = framing
+    #expect(config.framing(for: .mac) == framing)
+    let iphone = config.framing(for: .iphone)
+    #expect(iphone.width == 1320 && iphone.height == 2868)
+    #expect(iphone.background == "#102030" && iphone.background(of: "a") == "#FF0000")
+    #expect(iphone.caption.color == "#000000" && iphone.caption.fontSize == 96)
+    #expect(iphone.window.align == .center && iphone.window.scale == 0.86)
+    #expect(iphone.problems().isEmpty)
+    config.framing?.platform = .ipad
+    #expect(config.framedPlatforms == [ScreenshotConfig.Platform.ipad, .mac, .iphone])
+  }
+
   @Test func appStoreSizes() {
     #expect(ScreenshotConfig.Framing.isAppStoreSize(width: 2880, height: 1800))
     #expect(ScreenshotConfig.Framing.isAppStoreSize(width: 2868, height: 1320))

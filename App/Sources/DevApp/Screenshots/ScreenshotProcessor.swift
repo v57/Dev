@@ -69,12 +69,16 @@ nonisolated struct ScreenshotLibrary: Sendable {
     shots.filter { $0.locale == locale && (target == nil || $0.target == target) }
   }
 
-  /// The pictures App Store Connect gets, per locale: the framed ones of the first appearance and device.
-  func uploadFiles() -> [String: [URL]] {
+  /// The pictures App Store Connect gets for a platform (`macos` or `ios`), per locale: the framed ones of the first
+  /// appearance, the Mac's for macOS, and for iOS the first iPhone's and the first iPad's (one display type each),
+  /// in the scenes' order.
+  func uploadFiles(platform: String = "macos") -> [String: [URL]] {
     let appearance = config?.appearances.first ?? .light
     let framed = shots.filter { $0.final != nil && $0.appearance == appearance }
-    let target = framed.first?.target
-    return Dictionary(grouping: framed.filter { $0.target == target }, by: \.locale)
+    let kinds: [ScreenshotConfig.Platform] = platform == "ios" ? [.iphone, .ipad] : [.mac]
+    // One device per kind: a second iPhone of the same display type would replace the first one's pictures.
+    let targets = kinds.compactMap { kind in framed.first { $0.platform == kind }?.target }
+    return Dictionary(grouping: framed.filter { targets.contains($0.target) }, by: \.locale)
       .mapValues { $0.compactMap(\.final) }
   }
 
@@ -99,7 +103,6 @@ nonisolated struct ScreenshotLibrary: Sendable {
     let states = Dictionary(status.scenes.map { ($0.id, $0.state) }) { first, _ in first }
     let order = Dictionary(config.scenes.enumerated().map { ($1.id, $0) }) { first, _ in first }
 
-    let framing = config.framing ?? config.framedPlatform.map(ScreenshotConfig.Framing.starter(for:))
     var shots: [Shot] = []
     // The manifest's pictures of the config's scenes, in its order; removed scenes and deleted files drop out.
     for shot in manifest.shots where order[shot.scene] != nil {
@@ -110,8 +113,8 @@ nonisolated struct ScreenshotLibrary: Sendable {
       shots.append(Shot(
         name: shot.scene, locale: shot.locale, platform: shot.platform, device: shot.device,
         appearance: shot.appearance, file: shot.file, captured: captured, final: rendered ? framed : nil,
-        pixelWidth: shot.width, pixelHeight: shot.height, framedWidth: framing?.width ?? 0,
-        framedHeight: framing?.height ?? 0, taken: shot.taken, state: states[shot.scene] ?? .missing))
+        pixelWidth: shot.width, pixelHeight: shot.height, framedWidth: config.framing(for: shot.platform).width,
+        framedHeight: config.framing(for: shot.platform).height, taken: shot.taken, state: states[shot.scene] ?? .missing))
     }
     let targetOrder = ["Mac"] + (config.ios?.devices ?? [])
     func rank<T: Equatable>(_ value: T, in list: [T]) -> Int { list.firstIndex(of: value) ?? list.count }
@@ -177,35 +180,42 @@ nonisolated enum ScreenshotProcessor {
       report.lines.append(library.configError ?? "No \(ScreenshotConfig.path): describe the scenes there first.")
       return report
     }
-    guard let platform = config.framedPlatform else {
+    let platforms = config.framedPlatforms
+    guard !platforms.isEmpty else {
       report.succeeded = false
       report.lines.append("The config captures on no platform to frame.")
       return report
     }
-    let shots = library.shots.filter { $0.platform == platform }
-    guard !shots.isEmpty else {
+    // Every captured platform at its own size: the App Store wants the iPhone's and the iPad's alike.
+    let captions = Dictionary(config.scenes.map { ($0.id, $0.caption) }) { first, _ in first }
+    var sizes: [String] = []
+    for platform in platforms {
+      let shots = library.shots.filter { $0.platform == platform }
+      guard !shots.isEmpty else { continue }
+      let framing = config.framing(for: platform)
+      let catalog = CaptionCatalog.load(root.appendingPathComponent(framing.caption.catalog))
+      for shot in shots {
+        let caption = (captions[shot.name] ?? nil).map { CaptionCatalog.caption($0, locale: shot.locale, in: catalog) }
+        do {
+          let lines = try ScreenshotFramer.render(
+            shot.captured, caption: caption, background: framing.background(of: shot.name), framing: framing,
+            to: config.framedURL(of: shot.file, in: root))
+          if lines > framing.caption.maxLines { report.overflowing.append(shot.file) }
+          report.rendered += 1
+        } catch {
+          report.succeeded = false
+          report.lines.append("\(shot.file): \(error.localizedDescription)")
+        }
+      }
+      sizes.append("\(framing.width) × \(framing.height)")
+    }
+    guard !sizes.isEmpty else {
       report.succeeded = false
-      report.lines.append("No captured \(platform.rawValue) screenshots: capture first.")
+      report.lines.append("No captured screenshots: capture first.")
       return report
     }
-    let framing = config.framing ?? .starter(for: platform)
-    let catalog = CaptionCatalog.load(root.appendingPathComponent(framing.caption.catalog))
-    let captions = Dictionary(config.scenes.map { ($0.id, $0.caption) }) { first, _ in first }
-    for shot in shots {
-      let caption = (captions[shot.name] ?? nil).map { CaptionCatalog.caption($0, locale: shot.locale, in: catalog) }
-      do {
-        let lines = try ScreenshotFramer.render(
-          shot.captured, caption: caption, background: framing.background(of: shot.name), framing: framing,
-          to: config.framedURL(of: shot.file, in: root))
-        if lines > framing.caption.maxLines { report.overflowing.append(shot.file) }
-        report.rendered += 1
-      } catch {
-        report.succeeded = false
-        report.lines.append("\(shot.file): \(error.localizedDescription)")
-      }
-    }
     report.lines.append(
-      "Rendered \(report.rendered) pictures at \(framing.width) × \(framing.height) into "
+      "Rendered \(report.rendered) pictures at \(sizes.joined(separator: ", ")) into "
         + "\(config.output)/\(ScreenshotConfig.Framing.folder)")
     for item in report.overflowing { report.lines.append("Caption too long: \(item)") }
     saveReport(report, in: config.framedURL(of: "", in: root))
