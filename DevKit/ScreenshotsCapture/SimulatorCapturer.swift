@@ -93,6 +93,10 @@
             let launched = try Instance(capturer: self, first: shot, locale: locale)
             instance = launched
             try launched.waitForFirstReady(delay: shot.scene.delay, timeout: timeout)
+            // A cold launch can say it's ready before its first frames reach the screen (a blank window).
+            try steadyScreenshot(to: shot.file)
+            report(shot, nil)
+            continue
           }
           try screenshot(to: shot.file)
           report(shot, nil)
@@ -229,6 +233,22 @@
         try? FileManager.default.removeItem(at: fifo)
       }
     }
+
+    /// Shoots until two pictures in a row are the same (at most `steadyTries`, `steadyInterval` apart), so a launch
+    /// still drawing its first frames isn't what's kept.
+    private func steadyScreenshot(to file: URL) throws {
+      var previous: Data?
+      for _ in 0..<Self.steadyTries {
+        try screenshot(to: file)
+        let picture = try Data(contentsOf: file)
+        if picture == previous { return }
+        previous = picture
+        Thread.sleep(forTimeInterval: Self.steadyInterval)
+      }
+    }
+
+    static let steadyTries = 8
+    static let steadyInterval: TimeInterval = 0.6
 
     private func screenshot(to file: URL) throws {
       try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
