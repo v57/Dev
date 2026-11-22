@@ -238,6 +238,7 @@
     /// still drawing its first frames isn't what's kept.
     private func steadyScreenshot(to file: URL) throws {
       var previous: Data?
+      Thread.sleep(forTimeInterval: Self.firstFrameSettle)
       for _ in 0..<Self.steadyTries {
         try screenshot(to: file)
         let picture = try Data(contentsOf: file)
@@ -247,6 +248,8 @@
       }
     }
 
+    /// A launch can hold a blank window for a while (Vault's iPhone list), which two quick pictures agree on.
+    static let firstFrameSettle: TimeInterval = 1.5
     static let steadyTries = 8
     static let steadyInterval: TimeInterval = 0.6
 
