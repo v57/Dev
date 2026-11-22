@@ -78,9 +78,15 @@ nonisolated struct ScreenshotLibrary: Sendable {
     let kinds: [ScreenshotConfig.Platform] = platform == "ios" ? [.iphone, .ipad] : [.mac]
     // One device per kind: a second iPhone of the same display type would replace the first one's pictures.
     let targets = kinds.compactMap { kind in framed.first { $0.platform == kind }?.target }
+    // App Store Connect takes at most `appStoreLimit` pictures per display type: the first ones, in scene order.
     return Dictionary(grouping: framed.filter { targets.contains($0.target) }, by: \.locale)
-      .mapValues { $0.compactMap(\.final) }
+      .mapValues { shots in
+        targets.flatMap { target in shots.filter { $0.target == target }.prefix(Self.appStoreLimit) }.compactMap(\.final)
+      }
   }
+
+  /// The most screenshots App Store Connect keeps for one display type and locale.
+  static let appStoreLimit = 10
 
   /// Reads what is on disk now: the config, the manifest and git, so off the main actor.
   static func scan(_ root: URL) -> ScreenshotLibrary {
