@@ -7,7 +7,7 @@ import Foundation
 
 /// A version's text can change in these states (App Store Connect Help ▸ App and submission statuses); once a version
 /// is live only its promotional text can.
-private let editableVersionStates: Set<String> = [
+nonisolated private let editableVersionStates: Set<String> = [
   "PREPARE_FOR_SUBMISSION", "READY_FOR_REVIEW", "INVALID_BINARY", "WAITING_FOR_REVIEW", "ACCEPTED",
   "WAITING_FOR_EXPORT_COMPLIANCE", "REJECTED", "METADATA_REJECTED", "DEVELOPER_REJECTED",
 ]
@@ -16,8 +16,8 @@ private let editableVersionStates: Set<String> = [
 /// `appStoreVersionLocalizations` (description, keywords, promotional text, What's New, URLs), its copyright and review
 /// notes and contact (`appStoreReviewDetails`, never the demo account's name or password), the primary and secondary
 /// categories, the age rating (`ageRatingDeclarations`), and the build's `betaBuildLocalizations` (TestFlight's What to
-/// Test). App Privacy and review attachments aren't sent: App Privacy has no API, and an attachment is a file to upload
-/// by hand. Publishing changes text only: it never submits a version for review.
+/// Test), and the App Review attachment (a file on this Mac, uploaded). App Privacy isn't sent: it has no API.
+/// Publishing makes the version when App Store Connect has none, and never submits it for review.
 nonisolated struct AppStoreConnectText: StoreService {
   let api: AppStoreConnectAPI
   let bundleID: String
@@ -34,6 +34,9 @@ nonisolated struct AppStoreConnectText: StoreService {
     var reviewDetailID: String?
     var reviewNotes: String?
     var reviewContact: String?
+    /// The review detail's attachments: their ids and file names.
+    var reviewAttachments: [(id: String, name: String)] = []
+    var appID = ""
     var copyright: String?
     var category: String?
     var secondaryCategory: String?
@@ -62,6 +65,7 @@ nonisolated struct AppStoreConnectText: StoreService {
     let info = infos.first { AppStoreConnectAPI.attribute($0, "state") as? String != "READY_FOR_DISTRIBUTION" } ?? infos.first
     guard let appInfoID = info?["id"] as? String else { throw StoreTextError("The app has no app information.") }
     var context = Context(appInfoID: appInfoID)
+    context.appID = appID
     context.infoLocalizations = AppStoreConnectAPI.data(
       try await api.request("GET", "/v1/appInfos/\(appInfoID)/appInfoLocalizations?limit=50"))
     if let category = await optional("/v1/appInfos/\(appInfoID)/primaryCategory") {
@@ -97,12 +101,7 @@ nonisolated struct AppStoreConnectText: StoreService {
       context.summary = "Version \(context.versionString ?? "") · \(state(picked))"
       context.versionLocalizations = AppStoreConnectAPI.data(
         try await api.request("GET", "/v1/appStoreVersions/\(versionID)/appStoreVersionLocalizations?limit=50"))
-      if let review = await optional("/v1/appStoreVersions/\(versionID)/appStoreReviewDetail"),
-         let detail = AppStoreConnectAPI.data(review).first {
-        context.reviewDetailID = detail["id"] as? String
-        context.reviewNotes = AppStoreConnectAPI.attribute(detail, "notes") as? String
-        context.reviewContact = StoreReviewContact.json(fromAttributes: detail["attributes"] as? [String: Any] ?? [:])
-      }
+      try await readReview(of: versionID, into: &context)
     }
 
     // TestFlight's What to Test belongs to a build of the version.
@@ -116,6 +115,23 @@ nonisolated struct AppStoreConnectText: StoreService {
       }
     }
     return context
+  }
+
+  /// The version's App Review details: notes, contact and attachments (none yet answers nothing).
+  private func readReview(of versionID: String, into context: inout Context) async throws {
+    guard let review = await optional("/v1/appStoreVersions/\(versionID)/appStoreReviewDetail"),
+          let detail = AppStoreConnectAPI.data(review).first
+    else { return }
+    context.reviewDetailID = detail["id"] as? String
+    context.reviewNotes = AppStoreConnectAPI.attribute(detail, "notes") as? String
+    context.reviewContact = StoreReviewContact.json(fromAttributes: detail["attributes"] as? [String: Any] ?? [:])
+    if let id = context.reviewDetailID,
+       let attachments = await optional("/v1/appStoreReviewDetails/\(id)/appStoreReviewAttachments") {
+      context.reviewAttachments = AppStoreConnectAPI.data(attachments).compactMap { item in
+        guard let id = item["id"] as? String else { return nil }
+        return (id, AppStoreConnectAPI.attribute(item, "fileName") as? String ?? "")
+      }
+    }
   }
 
   func fetch(version: String?) async throws -> StoreLive {
@@ -154,15 +170,19 @@ nonisolated struct AppStoreConnectText: StoreService {
     add(.init(field: .copyright, locale: nil), context.copyright)
     add(.init(field: .reviewNotes, locale: nil), context.reviewNotes)
     add(.init(field: .reviewContact, locale: nil), context.reviewContact)
+    add(.init(field: .reviewAttachment, locale: nil), context.reviewAttachments.first?.name)
     add(.init(field: .ageRating, locale: nil), context.ageRating)
     live.locales = locales.sorted()
 
     let name = version.map { "version \($0)" } ?? "a version"
-    if context.versionID == nil {
+    if context.versionID == nil, let version {
+      // Publish makes it (or renames the version in preparation): App Store Connect keeps one open per platform.
+      live.summary = "Version \(version) · made when you publish"
+    } else if context.versionID == nil {
       let reason = "App Store Connect has no \(name) yet: create it first"
       for field in [
         StoreField.description, .keywords, .promotionalText, .changelog, .supportURL, .marketingURL, .copyright, .reviewNotes,
-        .reviewContact,
+        .reviewContact, .reviewAttachment,
       ] {
         live.readOnly[field] = reason
       }
@@ -170,6 +190,7 @@ nonisolated struct AppStoreConnectText: StoreService {
       let reason = "\(context.summary) can't change"
       for field in [
         StoreField.description, .keywords, .changelog, .supportURL, .marketingURL, .copyright, .reviewNotes, .reviewContact,
+        .reviewAttachment,
       ] {
         live.readOnly[field] = reason
       }
@@ -180,7 +201,19 @@ nonisolated struct AppStoreConnectText: StoreService {
 
   func publish(_ changes: [StoreChange], version: String?, progress: @Sendable (String) -> Void) async throws {
     try StorePlaceholder.refuse(changes)
-    let context = try await load(version: version)
+    var context = try await load(version: version)
+    let versionFields: Set<StoreField> = [
+      .description, .keywords, .promotionalText, .changelog, .supportURL, .marketingURL, .copyright, .reviewNotes,
+      .reviewContact, .reviewAttachment,
+    ]
+    if context.versionID == nil, let version, changes.contains(where: { versionFields.contains($0.field) }) {
+      let made = try await api.version(version, appID: context.appID, platform: platform, progress: progress)
+      context.versionID = made.id
+      context.versionEditable = editableVersionStates.contains(made.state)
+      context.versionLocalizations = AppStoreConnectAPI.data(
+        try await api.request("GET", "/v1/appStoreVersions/\(made.id)/appStoreVersionLocalizations?limit=50"))
+      try await readReview(of: made.id, into: &context)
+    }
     let attribute: (StoreField) -> String? = {
       switch $0 {
       case .name: "name"
@@ -229,8 +262,8 @@ nonisolated struct AppStoreConnectText: StoreService {
         type: "appInfoLocalizations", parent: ("appInfo", "appInfos", context.appInfoID), locale: locale,
         attributes: attributes, in: context.infoLocalizations)
     }
-    let versionFields: Set<StoreField> = [.description, .keywords, .promotionalText, .changelog, .supportURL, .marketingURL]
-    for (locale, attributes) in group(versionFields).sorted(by: { $0.key < $1.key }) {
+    let localizedFields: Set<StoreField> = [.description, .keywords, .promotionalText, .changelog, .supportURL, .marketingURL]
+    for (locale, attributes) in group(localizedFields).sorted(by: { $0.key < $1.key }) {
       guard let versionID = context.versionID else { throw StoreTextError("No version to write to.") }
       try await put(
         type: "appStoreVersionLocalizations", parent: ("appStoreVersion", "appStoreVersions", versionID), locale: locale,
@@ -276,20 +309,39 @@ nonisolated struct AppStoreConnectText: StoreService {
     if let change = changes.first(where: { $0.field == .reviewContact }) {
       review.merge(try StoreReviewContact.attributes(fromSent: change.new)) { _, contact in contact }
     }
-    if !review.isEmpty, let versionID = context.versionID {
-      if let id = context.reviewDetailID {
-        _ = try await api.request("PATCH", "/v1/appStoreReviewDetails/\(id)", body: [
-          "data": ["type": "appStoreReviewDetails", "id": id, "attributes": review],
-        ])
+    let attachment = changes.first { $0.field == .reviewAttachment }
+    var reviewDetailID = context.reviewDetailID
+    if !review.isEmpty || attachment != nil, let versionID = context.versionID {
+      if let id = reviewDetailID {
+        if !review.isEmpty {
+          _ = try await api.request("PATCH", "/v1/appStoreReviewDetails/\(id)", body: [
+            "data": ["type": "appStoreReviewDetails", "id": id, "attributes": review],
+          ])
+        }
       } else {
-        _ = try await api.request("POST", "/v1/appStoreReviewDetails", body: [
+        let created = try await api.request("POST", "/v1/appStoreReviewDetails", body: [
           "data": [
             "type": "appStoreReviewDetails", "attributes": review,
             "relationships": ["appStoreVersion": ["data": ["type": "appStoreVersions", "id": versionID]]],
           ],
         ])
+        reviewDetailID = AppStoreConnectAPI.data(created).first?["id"] as? String
       }
-      progress("App Review information")
+      if !review.isEmpty { progress("App Review information") }
+    }
+    // The attachment replaces the version's others: one demo for App Review.
+    if let attachment, let reviewDetailID {
+      let file = URL(fileURLWithPath: (attachment.new as NSString).expandingTildeInPath)
+      guard FileManager.default.isReadableFile(atPath: file.path) else {
+        throw StoreTextError("The App Review attachment \(file.path) isn't a file on this Mac.")
+      }
+      for old in context.reviewAttachments {
+        _ = try await api.request("DELETE", "/v1/appStoreReviewAttachments/\(old.id)")
+      }
+      progress("Uploading \(file.lastPathComponent)")
+      try await api.upload(
+        file, as: "appStoreReviewAttachments", relationship: ("appStoreReviewDetail", "appStoreReviewDetails", reviewDetailID))
+      progress("App Review attachment")
     }
   }
 }

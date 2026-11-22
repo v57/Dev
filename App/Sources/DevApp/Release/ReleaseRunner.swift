@@ -138,12 +138,21 @@ final class ReleaseRunner {
   /// What release.sh gets from Dev besides its arguments: this app as dev-screenshots (`Dev --screenshots`) and the
   /// archive's release link (xcodebuild-release and its tools: CodeActions' copy inside this app). Never a GitHub token:
   /// the github step only writes what to publish, and Dev publishes it in-process (`GitHubReleasePublisher`).
-  static func environment() -> [String: String] {
+  static func environment(for root: URL? = nil) -> [String: String] {
     var environment: [String: String] = [:]
     if let executable = Bundle.main.executablePath { environment["DEV_APP_EXECUTABLE"] = executable }
     if let tools = ReleaseTools.folder { environment["RELEASE_TOOLS"] = tools.path }
+    // With the build folders on (V57BuildFolders), a project's release builds go to its build folder, as Code's and
+    // the agents' builds do, and take turns with the other heavy builds on this Mac.
+    if let root, let folder = BuildFolders.standard.instance(.xcode, for: root) {
+      environment["DERIVED_DATA"] = folder.path
+      environment["RELEASE_BUILD_LOCK"] = heavyBuildLock
+    }
     return environment
   }
+
+  /// The lock file heavy builds on this Mac take turns on (`lockf`), shared with the agents' builds.
+  static let heavyBuildLock = "/tmp/v57-heavy-build.lock"
 
   func run(
     _ steps: [ReleaseStep], in root: URL, version: String, dryRun: Bool = false
@@ -159,7 +168,7 @@ final class ReleaseRunner {
     if !version.isEmpty { arguments += ["--version", version] }
     if dryRun { arguments.append("--dry-run") }
     arguments += steps.map(\.rawValue)
-    let environment = Self.environment()
+    let environment = Self.environment(for: root)
     let process = LineProcess("/bin/bash", arguments, directory: root, environment: environment)
     self.process = process
     isRunning = true

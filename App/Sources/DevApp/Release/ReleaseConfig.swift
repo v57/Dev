@@ -30,6 +30,17 @@ nonisolated struct ReleaseConfig: Equatable, Sendable {
     ("APP_STORE", ""),
   ]
 
+  /// The App Store's own version and platform, written under APP_STORE only when set: an app on GitHub for the Mac at
+  /// 0.1.0 can ship 1.0 for iPhone and iPad through the App Store.
+  static let appStoreFields: [String] = ["APP_STORE_VERSION", "APP_STORE_PLATFORM"]
+
+  /// The platform App Store Connect gets this app for (`macos` or `ios`): APP_STORE_PLATFORM, else PLATFORM, else
+  /// macOS. Store Text and the screenshot upload write to that platform's version.
+  var appStorePlatform: String {
+    let platform = self["APP_STORE_PLATFORM"].isEmpty ? self["PLATFORM"] : self["APP_STORE_PLATFORM"]
+    return platform == "ios" ? "ios" : "macos"
+  }
+
   /// The other platforms' and stores' keys, written only when set (most apps ship on Apple platforms only).
   static let platformFields: [String] = [
     "PACKAGE_PATH", "SWIFTUI_PATH", "WINDOWS_ARCHS", "WINDOWS_PRODUCT", "WINDOWS_HOST", "LINUX_PRODUCT", "LINUX_HOST",
@@ -65,7 +76,7 @@ nonisolated struct ReleaseConfig: Equatable, Sendable {
 
   static func parse(_ text: String) -> ReleaseConfig {
     var config = ReleaseConfig()
-    let known = Set(fields.map(\.key) + platformFields + AppStoreConnectKey.keys)
+    let known = Set(fields.map(\.key) + appStoreFields + platformFields + AppStoreConnectKey.keys)
     for raw in text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init) {
       let line = raw.trimmingCharacters(in: .whitespaces)
       guard !line.isEmpty, !line.hasPrefix("#"), let equals = line.firstIndex(of: "=") else {
@@ -104,6 +115,9 @@ nonisolated struct ReleaseConfig: Equatable, Sendable {
       let value = self[key]
       let needsQuotes = value.contains { $0 == " " || $0 == "#" || $0 == "\"" || $0 == "$" }
       lines.append("\(key)=" + (needsQuotes ? "'\(value)'" : value))
+      if key == "APP_STORE" {
+        for store in Self.appStoreFields where !self[store].isEmpty { lines.append("\(store)=\(self[store])") }
+      }
     }
     let platforms = Self.platformFields.filter { !self[$0].isEmpty }
     if !platforms.isEmpty {

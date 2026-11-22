@@ -17,6 +17,26 @@ import Testing
     #expect(given.contains("App 2.0 (7), macos"), "\(given)")
   }
 
+  @Test func iOSTakesTheAppStoresVersion() throws {
+    let project = try Project("APP_NAME=App\nSCHEME=App\nVERSION=0.1.0\nAPP_STORE=yes\nAPP_STORE_VERSION=1.0\nAPP_STORE_PLATFORM=ios\n")
+    let (ios, status) = try project.run(["--dry-run", "--platform", "ios", "--build", "7", "bundle"])
+    #expect(status == 0, "\(ios)")
+    #expect(ios.contains("App 1.0 (7), ios"), "\(ios)")
+    let (mac, _) = try project.run(["--dry-run", "--build", "7", "bundle"])
+    #expect(mac.contains("App 0.1.0 (7), macos"), "\(mac)")
+    let (given, _) = try project.run(["--dry-run", "--platform", "ios", "--version", "1.1", "--build", "7", "bundle"])
+    #expect(given.contains("App 1.1 (7), ios"), "\(given)")
+  }
+
+  @Test func devKeepsTheAppStoresVersionAndPlatform() {
+    let config = ReleaseConfig.parse("SCHEME=App\nPLATFORM=macos\nAPP_STORE=yes\nAPP_STORE_VERSION=1.0\nAPP_STORE_PLATFORM=ios\n")
+    #expect(config.appStorePlatform == "ios" && config.extraLines.isEmpty)
+    #expect(config.rendered().contains("APP_STORE=yes\nAPP_STORE_VERSION=1.0\nAPP_STORE_PLATFORM=ios\n"), "\(config.rendered())")
+    #expect(ReleaseConfig.parse("SCHEME=App\nPLATFORM=ios\n").appStorePlatform == "ios")
+    #expect(ReleaseConfig.parse("SCHEME=App\n").appStorePlatform == "macos")
+    #expect(!ReleaseConfig.parse("SCHEME=App\n").rendered().contains("APP_STORE_VERSION"))
+  }
+
   @Test func appleSiliconAloneArchivesArm64AndShipsItAsTheApp() throws {
     let project = try Project("APP_NAME=App\nSCHEME=App\nDIRECT_ARCHS=arm64\nNOTARY_PROFILE=notary\n")
     let (archive, status) = try project.run(["--dry-run", "--version", "0.1.0", "archive"])

@@ -222,7 +222,8 @@ extension StoreTexts {
   func importPlan(destination: StoreDestination, live: StoreLive) -> [StoreImportItem] {
     let settings = settings()
     var items: [StoreImportItem] = []
-    for (key, raw) in live.texts {
+    // An attachment comes back as a file name, not a file on this Mac: nothing to import.
+    for (key, raw) in live.texts where key.field != .reviewAttachment {
       guard let slot = destination.slot(key.field) else { continue }
       let field = key.field
       let value = destination.localForm(raw, field: field)
@@ -342,7 +343,7 @@ nonisolated enum StoreCredentials {
       return AppStoreConnectText(
         api: try AppStoreConnectAPI(config: config),
         bundleID: try await bundleID(root: root, settings: settings, config: config),
-        platform: config["PLATFORM"].isEmpty ? "macos" : config["PLATFORM"])
+        platform: config.appStorePlatform)
     case .github:
       let token = (try? KeychainTokenStore.forAccount(accountID).load())?.token ?? ""
       return GitHubStoreText(repository: config["GITHUB_REPO"], token: token)

@@ -370,7 +370,7 @@ final class WorkflowStore {
     arguments.append(name)
     // No token: the GitHub step only says what to publish, and Dev publishes it below with the project account's
     // sign-in.
-    let process = LineProcess("/bin/bash", arguments, directory: root, environment: ReleaseRunner.environment())
+    let process = LineProcess("/bin/bash", arguments, directory: root, environment: ReleaseRunner.environment(for: root))
     let requested = PublishRequest()
     let status = await stream(process, stepID: stepID, runID: runID, root: root) { [weak self] line in
       // release.sh's markers: a skipped step passes, a failed one says why, an artifact joins the run, a publish
@@ -378,6 +378,10 @@ final class WorkflowStore {
       guard line.hasPrefix("::") else { return }
       if let file = GitHubReleaseRequest.file(fromMarker: line) {
         requested.file = file
+        return
+      }
+      if let file = AppStoreUploadRequest.file(fromMarker: line) {
+        requested.appStore = file
         return
       }
       if let artifact = WorkflowRun.Artifact(marker: line, stepID: stepID) {
@@ -402,12 +406,33 @@ final class WorkflowStore {
     await measureArtifacts(of: stepID, in: root)
     guard status == 0 else { return false }
     if let file = requested.file { return await publishRelease(file, step: step, runID: runID, root: root) }
+    if let file = requested.appStore { return await attachAppStoreBuild(file, stepID: stepID, runID: runID, root: root) }
     return true
   }
 
-  /// The `::publish github <file>` a step's script printed.
+  /// The `::publish github <file>` and `::publish appstore <file>` a step's script printed.
   private final class PublishRequest: @unchecked Sendable {
     var file: URL?
+    var appStore: URL?
+  }
+
+  /// Waits for App Store Connect to process the build the appstore step uploaded and attaches it to its version, with
+  /// the App Store Connect key (in-process; the script only names the build). The step was confirmed with the run.
+  private func attachAppStoreBuild(_ file: URL, stepID: String, runID: UUID, root: URL) async -> Bool {
+    let log: @Sendable (String) -> Void = { [weak self] line in
+      Task { @MainActor in self?.append(runID, stepID, root, line) }
+    }
+    do {
+      let request = try AppStoreUploadRequest.load(file)
+      guard let config = ReleaseConfig.load(from: root) else { throw AppStoreConnectAPI.Failure(message: "No release.env.") }
+      let api = try AppStoreConnectAPI(config: config)
+      try await AppStoreBuildPublisher.attach(request, api: api, log: log)
+      return true
+    } catch {
+      append(runID, stepID, root, error.localizedDescription)
+      setStep(root, stepID) { $0.note = error.localizedDescription }
+      return false
+    }
   }
 
   /// Publishes the GitHub release a step's script asked for, in-process with the project account's sign-in

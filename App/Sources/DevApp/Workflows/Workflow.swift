@@ -191,7 +191,11 @@ nonisolated struct Workflow: Codable, Hashable, Identifiable, Sendable {
     if !(config?["DIRECT_DOWNLOAD"] ?? "").isEmpty { add(.direct, to: &release) }
     add(.bundle, to: &release)
     if !(config?["GITHUB_REPO"] ?? "").isEmpty { add(.github, to: &release) }
-    if config?["APP_STORE"] == "yes" { add(.appstore, to: &release) }
+    if let config, config["APP_STORE"] == "yes" {
+      // The App Store's platform, which can be iOS for a Mac app released on GitHub (APP_STORE_PLATFORM).
+      let platform = config.appStorePlatform
+      add(.appstore, platform == (config["PLATFORM"].isEmpty ? "macos" : config["PLATFORM"]) ? nil : ReleasePlatform(rawValue: platform), to: &release)
+    }
 
     var check = Workflow(id: "pull-request", name: "Pull Request", trigger: Trigger(branch: "main"))
     add(.build, to: &check)

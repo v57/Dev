@@ -493,12 +493,100 @@ import Testing
     #expect(live.readOnly[.testers] != nil)
   }
 
-  @Test func aVersionTheServiceDoesntHaveWritesNothingOfIts() async throws {
+  @Test func aVersionTheServiceDoesntHaveIsMadeWhenPublished() async throws {
     let stub = appStoreStub()
     stub.answers["GET /v1/builds?filter[app]=A1&filter[preReleaseVersion.version]=9.9&sort=-uploadedDate&limit=1"] = (200, ["data": []])
     let live = try await appStore(stub).fetch(version: "9.9")
-    #expect(live.readOnly[.changelog]?.contains("9.9") == true)
+    #expect(live.readOnly[.changelog] == nil)
+    #expect(live.summary.contains("9.9"))
     #expect(live.readOnly[.testers] != nil)
+    // Without a version named, there's nothing to make.
+    #expect(try await appStore(stub).fetch(version: nil).readOnly[.changelog] == nil)
+  }
+
+  @Test func publishingToANewVersionRenamesTheOneInPreparation() async throws {
+    let stub = appStoreStub()
+    stub.answers["GET /v1/builds?filter[app]=A1&filter[preReleaseVersion.version]=1.3&sort=-uploadedDate&limit=1"] = (200, ["data": []])
+    stub.answers["GET /v1/apps/A1/appStoreVersions?filter[platform]=IOS&limit=50"] = stub.answers["GET /v1/apps/A1/appStoreVersions?filter[platform]=IOS&limit=20"]
+    try await appStore(stub).publish(
+      [StoreChange(field: .changelog, title: "", locale: "en-US", liveLocale: "en-US", new: "New")], version: "1.3") { _ in }
+    let renamed = stub.writes().first { $0.line == "PATCH /v1/appStoreVersions/V2" }
+    #expect(((renamed?.body["data"] as? [String: Any])?["attributes"] as? [String: Any])?["versionString"] as? String == "1.3")
+  }
+
+  @Test func theReviewAttachmentComparesByFileName() {
+    #expect(StoreDestination.appStore.matches(live: "Demo.mp4", local: "~/Movies/Demo.mp4", field: .reviewAttachment))
+    #expect(!StoreDestination.appStore.matches(live: "Old.mp4", local: "~/Movies/Demo.mp4", field: .reviewAttachment))
+    #expect(StoreDestination.appStore.slot(.reviewAttachment)?.isSent == true)
+  }
+
+  @Test func theReviewAttachmentReplacesTheVersionsOther() async throws {
+    let stub = appStoreStub()
+    stub.answers["GET /v1/appStoreReviewDetails/R1/appStoreReviewAttachments"] = (200, ["data": [attributes("RA1", ["fileName": "Old.mov"])]])
+    stub.answers["DELETE /v1/appStoreReviewAttachments/RA1"] = (204, [:])
+    stub.answers["POST /v1/appStoreReviewAttachments"] = (201, ["data": attributes("RA2", ["uploadOperations": [] as [Any]])])
+    stub.answers["PATCH /v1/appStoreReviewAttachments/RA2"] = (200, ["data": []])
+    let live = try await appStore(stub).fetch(version: "1.2")
+    #expect(live.texts[.init(field: .reviewAttachment, locale: nil)] == "Old.mov")
+    let file = FileManager.default.temporaryDirectory.appendingPathComponent("Review \(UUID().uuidString).mp4")
+    try Data("video".utf8).write(to: file)
+    defer { try? FileManager.default.removeItem(at: file) }
+    try await appStore(stub).publish([StoreChange(field: .reviewAttachment, title: "", new: file.path)], version: "1.2") { _ in }
+    let lines = stub.writes().map(\.line)
+    #expect(lines == [
+      "DELETE /v1/appStoreReviewAttachments/RA1", "POST /v1/appStoreReviewAttachments", "PATCH /v1/appStoreReviewAttachments/RA2",
+    ])
+    let reserved = stub.writes()[1].body["data"] as? [String: Any]
+    #expect((reserved?["attributes"] as? [String: Any])?["fileName"] as? String == file.lastPathComponent)
+  }
+
+  @Test func anUploadedBuildIsAttachedOnceProcessed() async throws {
+    let stub = Stub([
+      "GET /v1/apps?filter[bundleId]=dev.v57.app": (200, ["data": [["id": "A1"]]]),
+      "GET /v1/apps/A1/appStoreVersions?filter[platform]=IOS&limit=50": (200, ["data": [
+        attributes("V1", ["versionString": "1.0", "appVersionState": "READY_FOR_DISTRIBUTION"]),
+      ]]),
+      "POST /v1/appStoreVersions": (201, ["data": attributes("V2", ["versionString": "1.1", "appVersionState": "PREPARE_FOR_SUBMISSION"])]),
+      "PATCH /v1/appStoreVersions/V2/relationships/build": (204, [:]),
+    ])
+    let builds = "GET /v1/builds?filter[app]=A1&filter[version]=877&filter[preReleaseVersion.version]=1.1&filter[preReleaseVersion.platform]=IOS&limit=1"
+    stub.answers[builds] = (200, ["data": [] as [Any]])
+    let api = AppStoreConnectAPI(keyID: "K", issuerID: "I", privateKey: P256.Signing.PrivateKey(), send: stub.send)
+    let request = AppStoreUploadRequest(bundleID: "dev.v57.app", platform: "ios", version: "1.1", build: "877")
+    let polls = Counter()
+    try await AppStoreBuildPublisher.attach(request, api: api, poll: 1, timeout: 10, sleep: { _ in
+      // Not listed yet, then processing, then valid.
+      let count = polls.next()
+      stub.lock.withLock {
+        stub.answers[builds] = (200, ["data": [attributes("B9", ["processingState": count == 1 ? "PROCESSING" : "VALID"])]])
+      }
+    }) { _ in }
+    #expect(polls.value == 2)
+    let writes = stub.writes()
+    #expect(writes.map(\.line) == ["POST /v1/appStoreVersions", "PATCH /v1/appStoreVersions/V2/relationships/build"])
+    let made = (writes[0].body["data"] as? [String: Any])?["attributes"] as? [String: Any]
+    #expect(made?["versionString"] as? String == "1.1" && made?["platform"] as? String == "IOS")
+    #expect((writes[1].body["data"] as? [String: Any])?["id"] as? String == "B9")
+  }
+
+  @Test func aBuildThatNeverProcessesFailsAfterTheTimeout() async throws {
+    let stub = Stub(["GET /v1/apps?filter[bundleId]=dev.v57.app": (200, ["data": [["id": "A1"]]])])
+    stub.answers["GET /v1/builds?filter[app]=A1&filter[version]=5&filter[preReleaseVersion.version]=1.0&filter[preReleaseVersion.platform]=IOS&limit=1"] =
+      (200, ["data": [attributes("B1", ["processingState": "PROCESSING"])]])
+    let api = AppStoreConnectAPI(keyID: "K", issuerID: "I", privateKey: P256.Signing.PrivateKey(), send: stub.send)
+    await #expect(throws: AppStoreConnectAPI.Failure.self) {
+      try await AppStoreBuildPublisher.attach(
+        AppStoreUploadRequest(bundleID: "dev.v57.app", platform: "ios", version: "1.0", build: "5"), api: api, poll: 1, timeout: 3,
+        sleep: { _ in }) { _ in }
+    }
+    #expect(stub.writes().isEmpty)
+    #expect(AppStoreUploadRequest.file(fromMarker: "::publish appstore /tmp/a b.json")?.path == "/tmp/a b.json")
+  }
+
+  nonisolated final class Counter: @unchecked Sendable {
+    private let lock = NSLock()
+    private(set) var value = 0
+    func next() -> Int { lock.withLock { value += 1; return value } }
   }
 
   @Test func appStoreConnectSendsOnlyTheChangesAndCreatesMissingLocales() async throws {

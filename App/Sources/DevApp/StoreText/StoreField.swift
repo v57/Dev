@@ -190,8 +190,9 @@ nonisolated enum StoreDestination: String, CaseIterable, Identifiable, Codable, 
         StoreSlot(.appPrivacy, "App Privacy", nil, hint: "No API: answer it by hand in App Store Connect", isSent: false),
         StoreSlot(.reviewNotes, "Notes for App Review", .bytes(4000)),
         StoreSlot(.reviewContact, "App Review Contact", nil, hint: "Sign-in credentials go only into App Store Connect"),
-        // Attachments go up through upload reservations; Dev names the file and leaves the upload to the reader.
-        StoreSlot(.reviewAttachment, "App Review Attachment", nil, hint: "A file on this Mac: attach it in App Store Connect", isSent: false),
+        // A file on this Mac (a demo video, say), uploaded through App Store Connect's reservations; the version's
+        // other attachments are replaced.
+        StoreSlot(.reviewAttachment, "App Review Attachment", nil, hint: "A file on this Mac, uploaded for App Review"),
         StoreSlot(.changelog, "What's New", .characters(4000)),
         StoreSlot(
           .testers, "TestFlight What to Test", .characters(4000), hint: "Apple documents no limit; 4000 as for What's New",
@@ -271,6 +272,8 @@ nonisolated enum StoreDestination: String, CaseIterable, Identifiable, Codable, 
   /// Whether the service already says what the local text says. Answers compare by what the local file answers: a
   /// question it leaves open doesn't make a difference.
   func matches(live: String, local: String, field: StoreField) -> Bool {
+    // The service has the attachment's file name; the text is the file's path on this Mac.
+    if field == .reviewAttachment { return live == (local as NSString).lastPathComponent }
     guard field.isStructured else { return isSame(live, local, field: field) }
     return StoreStructured.covers(live: live, local: local, field: field)
   }

@@ -124,16 +124,11 @@ nonisolated struct AppStoreConnectAPI: Sendable {
     bundleID: String, platform: String, files: [String: [URL]], replaceExisting: Bool,
     progress: @Sendable (String) -> Void
   ) async throws {
-    let apps = Self.data(try await request("GET", "/v1/apps?filter[bundleId]=\(bundleID)"))
-    guard let appID = apps.first?["id"] as? String else { throw Failure(message: "No app with bundle ID \(bundleID).") }
-    let ascPlatform = platform == "macos" ? "MAC_OS" : "IOS"
+    let appID = try await appID(bundleID: bundleID)
+    let ascPlatform = Self.ascPlatform(platform)
     let versions = Self.data(try await request(
       "GET", "/v1/apps/\(appID)/appStoreVersions?filter[platform]=\(ascPlatform)&limit=20"))
-    let editable = ["PREPARE_FOR_SUBMISSION", "DEVELOPER_REJECTED", "REJECTED", "METADATA_REJECTED", "INVALID_BINARY"]
-    guard let version = versions.first(where: {
-      editable.contains(Self.attribute($0, "appStoreState") as? String ?? "")
-        || editable.contains(Self.attribute($0, "appVersionState") as? String ?? "")
-    }), let versionID = version["id"] as? String else {
+    guard let version = versions.first(where: { Self.editableStates.contains(Self.state(of: $0)) }), let versionID = version["id"] as? String else {
       throw Failure(message: "The app has no version in Prepare for Submission. Create one in App Store Connect first.")
     }
     progress("Version \(Self.attribute(version, "versionString") as? String ?? "")")
@@ -147,37 +142,48 @@ nonisolated struct AppStoreConnectAPI: Sendable {
         progress("\(locale): no matching localization on the version, skipped")
         continue
       }
-      let first = urls.first.map(ScreenshotLibrary.pixelSize) ?? (0, 0)
-      let type = Self.displayType(width: first.0, height: first.1, platform: platform)
       let sets = Self.data(try await request(
         "GET", "/v1/appStoreVersionLocalizations/\(localizationID)/appScreenshotSets"))
-      var setID = sets.first { Self.attribute($0, "screenshotDisplayType") as? String == type }?["id"] as? String
-      if setID == nil {
-        let created = try await request("POST", "/v1/appScreenshotSets", body: [
-          "data": ["type": "appScreenshotSets", "attributes": ["screenshotDisplayType": type],
-                   "relationships": ["appStoreVersionLocalization": ["data": ["type": "appStoreVersionLocalizations", "id": localizationID]]]],
-        ])
-        setID = Self.data(created).first?["id"] as? String
-      }
-      guard let setID else { continue }
-      if replaceExisting {
-        let existing = Self.data(try await request("GET", "/v1/appScreenshotSets/\(setID)/appScreenshots"))
-        for shot in existing {
-          if let id = shot["id"] as? String { _ = try await request("DELETE", "/v1/appScreenshots/\(id)") }
-        }
-      }
+      // One set per display type: the iPhone's and the iPad's pictures go to their own sets, in the files' order.
+      var types: [String] = []
+      var byType: [String: [URL]] = [:]
       for url in urls {
-        try await upload(url, to: setID)
-        progress("\(locale): uploaded \(url.lastPathComponent)")
+        let size = ScreenshotLibrary.pixelSize(url)
+        let type = Self.displayType(width: size.0, height: size.1, platform: platform)
+        if byType[type] == nil { types.append(type) }
+        byType[type, default: []].append(url)
+      }
+      for type in types {
+        var setID = sets.first { Self.attribute($0, "screenshotDisplayType") as? String == type }?["id"] as? String
+        if setID == nil {
+          let created = try await request("POST", "/v1/appScreenshotSets", body: [
+            "data": ["type": "appScreenshotSets", "attributes": ["screenshotDisplayType": type],
+                     "relationships": ["appStoreVersionLocalization": ["data": ["type": "appStoreVersionLocalizations", "id": localizationID]]]],
+          ])
+          setID = Self.data(created).first?["id"] as? String
+        }
+        guard let setID else { continue }
+        if replaceExisting {
+          let existing = Self.data(try await request("GET", "/v1/appScreenshotSets/\(setID)/appScreenshots"))
+          for shot in existing {
+            if let id = shot["id"] as? String { _ = try await request("DELETE", "/v1/appScreenshots/\(id)") }
+          }
+        }
+        for url in byType[type] ?? [] {
+          try await upload(url, as: "appScreenshots", relationship: ("appScreenshotSet", "appScreenshotSets", setID))
+          progress("\(locale): uploaded \(url.lastPathComponent) (\(type))")
+        }
       }
     }
   }
 
-  private func upload(_ url: URL, to setID: String) async throws {
+  /// Uploads a file through App Store Connect's reservations (screenshots, App Review attachments): reserve it under
+  /// its parent, send its parts where the reservation says, then mark it uploaded with its checksum.
+  func upload(_ url: URL, as type: String, relationship: (key: String, type: String, id: String)) async throws {
     let data = try Data(contentsOf: url)
-    let reserved = try await request("POST", "/v1/appScreenshots", body: [
-      "data": ["type": "appScreenshots", "attributes": ["fileName": url.lastPathComponent, "fileSize": data.count],
-               "relationships": ["appScreenshotSet": ["data": ["type": "appScreenshotSets", "id": setID]]]],
+    let reserved = try await request("POST", "/v1/\(type)", body: [
+      "data": ["type": type, "attributes": ["fileName": url.lastPathComponent, "fileSize": data.count],
+               "relationships": [relationship.key: ["data": ["type": relationship.type, "id": relationship.id]]]],
     ])
     guard let shot = Self.data(reserved).first, let shotID = shot["id"] as? String,
           let operations = Self.attribute(shot, "uploadOperations") as? [[String: Any]]
@@ -197,9 +203,64 @@ nonisolated struct AppStoreConnectAPI: Sendable {
       }
     }
     let checksum = Insecure.MD5.hash(data: data).map { String(format: "%02x", $0) }.joined()
-    _ = try await request("PATCH", "/v1/appScreenshots/\(shotID)", body: [
-      "data": ["type": "appScreenshots", "id": shotID, "attributes": ["uploaded": true, "sourceFileChecksum": checksum]],
+    _ = try await request("PATCH", "/v1/\(type)/\(shotID)", body: [
+      "data": ["type": type, "id": shotID, "attributes": ["uploaded": true, "sourceFileChecksum": checksum]],
     ])
+  }
+
+  // MARK: Apps and versions
+
+  /// App Store Connect's platform name.
+  static func ascPlatform(_ platform: String) -> String { platform == "macos" ? "MAC_OS" : "IOS" }
+
+  /// The states a version's text, screenshots and build can change in.
+  static let editableStates: Set<String> = [
+    "PREPARE_FOR_SUBMISSION", "DEVELOPER_REJECTED", "REJECTED", "METADATA_REJECTED", "INVALID_BINARY",
+  ]
+
+  static func state(of version: [String: Any]) -> String {
+    attribute(version, "appVersionState") as? String ?? attribute(version, "appStoreState") as? String ?? ""
+  }
+
+  func appID(bundleID: String) async throws -> String {
+    let encoded = bundleID.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? bundleID
+    guard let id = Self.data(try await request("GET", "/v1/apps?filter[bundleId]=\(encoded)")).first?["id"] as? String else {
+      throw Failure(message: "App Store Connect has no app with the bundle ID \(bundleID). Add it in App Store Connect ▸ Apps first.")
+    }
+    return id
+  }
+
+  /// The app's version `versionString` on a platform, made when the app has none: the version in preparation is
+  /// renamed to it (App Store Connect keeps one per platform), else a new one is made. Answers its id and state.
+  func version(_ versionString: String, appID: String, platform: String, progress: @Sendable (String) -> Void) async throws
+    -> (id: String, state: String)
+  {
+    let versions = Self.data(try await request(
+      "GET", "/v1/apps/\(appID)/appStoreVersions?filter[platform]=\(Self.ascPlatform(platform))&limit=50"))
+    if let match = versions.first(where: { Self.attribute($0, "versionString") as? String == versionString }),
+       let id = match["id"] as? String {
+      return (id, Self.state(of: match))
+    }
+    if let open = versions.first(where: { Self.editableStates.contains(Self.state(of: $0)) }), let id = open["id"] as? String {
+      let old = Self.attribute(open, "versionString") as? String ?? ""
+      _ = try await request("PATCH", "/v1/appStoreVersions/\(id)", body: [
+        "data": ["type": "appStoreVersions", "id": id, "attributes": ["versionString": versionString]],
+      ])
+      progress("Renamed version \(old) in preparation to \(versionString)")
+      return (id, Self.state(of: open))
+    }
+    let created = try await request("POST", "/v1/appStoreVersions", body: [
+      "data": [
+        "type": "appStoreVersions",
+        "attributes": ["platform": Self.ascPlatform(platform), "versionString": versionString],
+        "relationships": ["app": ["data": ["type": "apps", "id": appID]]],
+      ],
+    ])
+    guard let version = Self.data(created).first, let id = version["id"] as? String else {
+      throw Failure(message: "App Store Connect did not make version \(versionString).")
+    }
+    progress("Made version \(versionString)")
+    return (id, Self.state(of: version))
   }
 }
 
@@ -289,7 +350,7 @@ struct AppStoreUploadSheet: View {
   }
 
   private func finalFiles() -> [String: [URL]] {
-    library?.uploadFiles() ?? [:]
+    library?.uploadFiles(platform: config?.appStorePlatform ?? "macos") ?? [:]
   }
 
   private func upload(_ files: [String: [URL]]) async {
@@ -306,7 +367,7 @@ struct AppStoreUploadSheet: View {
       let bundleID = try await Self.bundleID(root: root, config: config)
       lines.append("App \(bundleID)")
       try await api.uploadScreenshots(
-        bundleID: bundleID, platform: config["PLATFORM"].isEmpty ? "macos" : config["PLATFORM"],
+        bundleID: bundleID, platform: config.appStorePlatform,
         files: files, replaceExisting: replace
       ) { line in
         Task { @MainActor in lines.append(line) }
