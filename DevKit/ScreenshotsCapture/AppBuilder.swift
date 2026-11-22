@@ -29,6 +29,9 @@
         "-scheme", build.scheme, "-configuration", build.configuration, "-destination", target.destination,
         "-derivedDataPath", derivedData, "-quiet", "build",
       ]
+      // The simulators run this Mac's architecture alone, and a prebuilt library may have only that slice (SSH's
+      // libssh2 for the simulator is arm64): the generic destination would build, and fail to link, the other one.
+      if target != .mac { arguments.append("ARCHS=\(Self.hostArchitecture)") }
       log("Building \(build.scheme) (\(build.configuration), \(target == .mac ? "Mac" : "Simulator"))\(local.map { " from \($0)" } ?? "")…")
       // RELEASE_BUILD_LOCK: heavy builds on this Mac take turns on this lock file (lockf).
       let result = environment["RELEASE_BUILD_LOCK"].flatMap { $0.isEmpty ? nil : $0 }.map { lock in
@@ -42,6 +45,15 @@
         throw CaptureError("xcodebuild built no app in \(products.path)")
       }
       return app
+    }
+
+    /// The architecture this Mac's simulators run.
+    static var hostArchitecture: String {
+      #if arch(arm64)
+        "arm64"
+      #else
+        "x86_64"
+      #endif
     }
 
     /// DEV_SCREENSHOTS_DERIVED_DATA (a build folder of this Mac's, an absolute path), else the config's.
