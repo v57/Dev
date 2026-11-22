@@ -30,9 +30,9 @@ nonisolated struct ReleaseConfig: Equatable, Sendable {
     ("APP_STORE", ""),
   ]
 
-  /// The App Store's own version and platform, written under APP_STORE only when set: an app on GitHub for the Mac at
-  /// 0.1.0 can ship 1.0 for iPhone and iPad through the App Store.
-  static let appStoreFields: [String] = ["APP_STORE_VERSION", "APP_STORE_PLATFORM"]
+  /// The App Store's own version, platform and scheme, written under APP_STORE only when set: an app on GitHub for the
+  /// Mac at 0.1.0 can ship 1.0 for iPhone and iPad through the App Store, from an iOS target of its own.
+  static let appStoreFields: [String] = ["APP_STORE_VERSION", "APP_STORE_PLATFORM", "APP_STORE_SCHEME"]
 
   /// The platform App Store Connect gets this app for (`macos` or `ios`): APP_STORE_PLATFORM, else PLATFORM, else
   /// macOS. Store Text and the screenshot upload write to that platform's version.

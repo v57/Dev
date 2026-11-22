@@ -26,6 +26,11 @@ import Testing
     #expect(mac.contains("App 0.1.0 (7), macos"), "\(mac)")
     let (given, _) = try project.run(["--dry-run", "--platform", "ios", "--version", "1.1", "--build", "7", "bundle"])
     #expect(given.contains("App 1.1 (7), ios"), "\(given)")
+    let separate = try Project("APP_NAME=App\nSCHEME=App\nVERSION=0.1.0\nAPP_STORE=yes\nAPP_STORE_VERSION=1.0\nAPP_STORE_PLATFORM=ios\nAPP_STORE_SCHEME='App iOS'\n")
+    let (target, _) = try separate.run(["--dry-run", "--platform", "ios", "--build", "7", "bundle"])
+    #expect(target.contains("App 1.0 (7), ios, scheme App iOS"), "\(target)")
+    let (macTarget, _) = try separate.run(["--dry-run", "--build", "7", "bundle"])
+    #expect(macTarget.contains("App 0.1.0 (7), macos, scheme App ->"), "\(macTarget)")
   }
 
   @Test func devKeepsTheAppStoresVersionAndPlatform() {

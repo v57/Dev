@@ -9,7 +9,8 @@
 #                            [--version X.Y.Z] [--build N] [--commit REV] [--no-zip] [--local] [--dry-run] STEP...
 #
 # The version: --version, else VERSION in release.env, else the Xcode project's MARKETING_VERSION. iOS ships only through
-# the App Store, whose version can run apart from the direct downloads': an ios run takes APP_STORE_VERSION when set.
+# the App Store, whose version can run apart from the direct downloads': an ios run takes APP_STORE_VERSION when set,
+# and APP_STORE_SCHEME when the iOS app is a target of its own (Code iOS beside the Mac app's Code).
 # --build and --commit pin the build number (else the commit count) and the commit the manifest names (else HEAD),
 # so every step of one run agrees when the branch moves on while it runs.
 # --local: a test release from this Mac's checkouts (the project's <App>-Local.xcworkspace, RELEASE_PINS=branch,
@@ -118,7 +119,7 @@ APP_NAME=""; SCHEME=""; PROJECT=""; WORKSPACE=""; PLATFORM="macos"; TEAM_ID=""
 CONFIGURATION="Release"; TEST_SCHEME=""; TEST_DESTINATION=""; SCREENSHOT_TEST=""
 SCREENSHOT_LOCALES="en"; SCREENSHOT_DESTINATION=""; DIRECT_DOWNLOAD="zip dmg"; DIRECT_ARCHS="universal"
 DIRECT_SETTINGS=""; NOTARY_PROFILE=""; GITHUB_REPO=""; GITHUB_DRAFT="yes"; APP_STORE="no"
-APP_STORE_VERSION=""; APP_STORE_PLATFORM=""
+APP_STORE_VERSION=""; APP_STORE_PLATFORM=""; APP_STORE_SCHEME=""
 ASC_KEY_ID=""; ASC_ISSUER_ID=""; ASC_KEY_PATH=""
 PACKAGE_PATH=""; WINDOWS_PRODUCT=""; WINDOWS_HOST=""; WINDOWS_ARCHS=""; LINUX_PRODUCT=""; LINUX_HOST=""; LINUX_STATIC="yes"
 LINUX_JOBS=4; SWIFTUI_PATH=""
@@ -151,7 +152,7 @@ read_env() {
 
 RELEASE_KEYS="APP_NAME SCHEME PROJECT WORKSPACE PLATFORM TEAM_ID VERSION CONFIGURATION TEST_SCHEME TEST_DESTINATION
   SCREENSHOT_TEST SCREENSHOT_LOCALES SCREENSHOT_DESTINATION DIRECT_DOWNLOAD DIRECT_ARCHS DIRECT_SETTINGS NOTARY_PROFILE
-  GITHUB_REPO GITHUB_DRAFT APP_STORE APP_STORE_VERSION APP_STORE_PLATFORM PACKAGE_PATH WINDOWS_PRODUCT WINDOWS_HOST WINDOWS_ARCHS WINDOWS_RELEASE_ROOT LINUX_PRODUCT
+  GITHUB_REPO GITHUB_DRAFT APP_STORE APP_STORE_VERSION APP_STORE_PLATFORM APP_STORE_SCHEME PACKAGE_PATH WINDOWS_PRODUCT WINDOWS_HOST WINDOWS_ARCHS WINDOWS_RELEASE_ROOT LINUX_PRODUCT
   LINUX_HOST LINUX_STATIC LINUX_JOBS LINUX_CATEGORIES SWIFTUI_PATH ANDROID_PRODUCT ANDROID_KEYSTORE ANDROID_KEY_ALIAS
   ANDROID_KEYCHAIN_ITEM GOOGLE_PLAY GOOGLE_PLAY_TRACK GOOGLE_PLAY_KEY_PATH GOOGLE_PLAY_PACKAGE MS_STORE MS_STORE_APP_ID
   MS_STORE_TENANT_ID MS_STORE_CLIENT_ID RELEASE_PINS"
@@ -197,6 +198,8 @@ DERIVED=()
 
 # The App Store's version for iOS, which ships nowhere else (VERSION stays the GitHub releases' version).
 if [ -z "$ARG_VERSION" ] && [ "$PLATFORM" = ios ] && [ -n "$APP_STORE_VERSION" ]; then VERSION="$APP_STORE_VERSION"; fi
+# Its scheme, when the iOS app is a target apart from the Mac app's.
+if [ "$PLATFORM" = ios ] && [ -n "$APP_STORE_SCHEME" ]; then SCHEME="$APP_STORE_SCHEME"; fi
 
 APPLE=0
 case "$PLATFORM" in
