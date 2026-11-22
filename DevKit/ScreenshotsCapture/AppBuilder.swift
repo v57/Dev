@@ -14,24 +14,50 @@
     static func build(
       _ build: ScreenshotConfig.Build, for target: Target, root: URL, log: (String) -> Void
     ) throws -> URL {
+      let environment = ProcessInfo.processInfo.environment
       var arguments: [String] = []
-      if let workspace = build.workspace { arguments += ["-workspace", workspace] }
-      if let project = build.project { arguments += ["-project", project] }
+      // DEV_SCREENSHOTS_LOCAL=1: the project's <App>-Local.xcworkspace (the sibling checkouts) when it has one.
+      let local = environment["DEV_SCREENSHOTS_LOCAL"] == "1" ? localWorkspace(in: root) : nil
+      if let local {
+        arguments += ["-workspace", local]
+      } else {
+        if let workspace = build.workspace { arguments += ["-workspace", workspace] }
+        if let project = build.project { arguments += ["-project", project] }
+      }
+      let derivedData = Self.derivedData(build)
       arguments += [
         "-scheme", build.scheme, "-configuration", build.configuration, "-destination", target.destination,
-        "-derivedDataPath", build.derivedData, "-quiet", "build",
+        "-derivedDataPath", derivedData, "-quiet", "build",
       ]
-      log("Building \(build.scheme) (\(build.configuration), \(target == .mac ? "Mac" : "Simulator"))…")
-      let result = Shell.run("xcodebuild", arguments, in: root)
+      log("Building \(build.scheme) (\(build.configuration), \(target == .mac ? "Mac" : "Simulator"))\(local.map { " from \($0)" } ?? "")…")
+      // RELEASE_BUILD_LOCK: heavy builds on this Mac take turns on this lock file (lockf).
+      let result = environment["RELEASE_BUILD_LOCK"].flatMap { $0.isEmpty ? nil : $0 }.map { lock in
+        Shell.run("/usr/bin/lockf", [lock, "xcodebuild"] + arguments, in: root)
+      } ?? Shell.run("xcodebuild", arguments, in: root)
       guard result.succeeded else {
         throw CaptureError("xcodebuild failed:\n" + result.tail())
       }
-      let products = root.appendingPathComponent(build.derivedData)
-        .appendingPathComponent("Build/Products/\(build.configuration)\(target.productsFolder)")
+      let products = Self.products(build, for: target, root: root)
       guard let app = findApp(in: products, named: build.scheme) else {
         throw CaptureError("xcodebuild built no app in \(products.path)")
       }
       return app
+    }
+
+    /// DEV_SCREENSHOTS_DERIVED_DATA (a build folder of this Mac's, an absolute path), else the config's.
+    static func derivedData(_ build: ScreenshotConfig.Build) -> String {
+      ProcessInfo.processInfo.environment["DEV_SCREENSHOTS_DERIVED_DATA"].flatMap { $0.isEmpty ? nil : $0 } ?? build.derivedData
+    }
+
+    /// Where the build's apps land for a target.
+    static func products(_ build: ScreenshotConfig.Build, for target: Target, root: URL) -> URL {
+      URL(fileURLWithPath: derivedData(build), relativeTo: root).standardizedFileURL
+        .appendingPathComponent("Build/Products/\(build.configuration)\(target.productsFolder)")
+    }
+
+    /// The `*-Local.xcworkspace` at the project's root, if any.
+    static func localWorkspace(in root: URL) -> String? {
+      (try? FileManager.default.contentsOfDirectory(atPath: root.path))?.sorted().first { $0.hasSuffix("-Local.xcworkspace") }
     }
 
     /// `<scheme>.app`, else the newest app in the folder.

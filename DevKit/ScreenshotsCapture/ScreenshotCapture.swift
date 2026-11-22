@@ -160,7 +160,7 @@
       }
       guard let build = config.build else { throw CaptureError("the config has neither build nor mac.app") }
       if options.skipBuild {
-        let products = root.appendingPathComponent(build.derivedData).appendingPathComponent("Build/Products/\(build.configuration)")
+        let products = AppBuilder.products(build, for: .mac, root: root)
         if let app = AppBuilder.findApp(in: products, named: build.scheme) { return app }
       }
       return try AppBuilder.build(build, for: .mac, root: root, log: log)
@@ -173,8 +173,7 @@
       }
       guard let build = config.build else { throw CaptureError("the config has neither build nor ios.app") }
       if options.skipBuild {
-        let products = root.appendingPathComponent(build.derivedData)
-          .appendingPathComponent("Build/Products/\(build.configuration)-iphonesimulator")
+        let products = AppBuilder.products(build, for: .simulator, root: root)
         if let app = AppBuilder.findApp(in: products, named: build.scheme) { return app }
       }
       return try AppBuilder.build(build, for: .simulator, root: root, log: log)
