@@ -21,6 +21,8 @@ import VaultUI
 /// selection the detail pane routes.
 struct SidebarView: View {
   let model: SidebarViewModel
+  /// The split view's columns, for the bottom bar's sidebar toggle.
+  @Binding var columns: NavigationSplitViewVisibility
 
   /// The shared open-catalog store: the context menu asks it before removing
   /// a project whose catalog it is showing (unsaved edits / a run in flight
@@ -52,7 +54,7 @@ struct SidebarView: View {
 
   var body: some View {
     @Bindable var model = model
-    KitSidebar(selection: $model.selection, searchText: $search, searchPrompt: "Search Projects") {
+    KitSidebar(selection: $model.selection, searchText: $search, searchPrompt: "Search Projects", columnVisibility: $columns) {
       // The window's account (hidden while Personal is the only one).
       VaultAccountPicker(meta: String(localized: "\(model.projects.count) projects"))
       // A long Projects list keeps its title in view (the section does it), and the sections it pushes off wait as

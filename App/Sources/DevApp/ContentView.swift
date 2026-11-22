@@ -24,6 +24,9 @@ struct ContentView: View {
   /// action only works from a view update.
   @State private var settingsRequests = 0
   @State private var model = SidebarViewModel()
+  /// The split view's columns: the sidebar's bottom bar hides it, and the Show Sidebar button the detail column
+  /// leads with while it's hidden brings it back (without that button a hidden sidebar stayed hidden).
+  @State private var columns: NavigationSplitViewVisibility = .all
   /// The window's account (`DevWindow`); its projects fill the sidebar.
   @Environment(\.vault) private var vault
   /// The demo project a screenshot launch imported: scenes that open a tool come back to it.
@@ -52,13 +55,14 @@ struct ContentView: View {
 
   var body: some View {
     @Bindable var model = model
-    NavigationSplitView {
-      // The kit sidebar's own bottom bar has the toggle.
-      SidebarView(model: model)
+    NavigationSplitView(columnVisibility: $columns) {
+      // The kit sidebar's own bottom bar has the toggle; the detail's Show Sidebar button brings it back.
+      SidebarView(model: model, columns: $columns)
         .kitSidebarColumn()
         .toolbar(removing: .sidebarToggle)
     } detail: {
       detailPane
+        .kitSidebarToggle(columnVisibility: $columns)
     }
     .environment(createIcon)
     .environment(localizationStore)
