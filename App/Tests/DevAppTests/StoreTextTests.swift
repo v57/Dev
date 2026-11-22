@@ -583,6 +583,49 @@ import Testing
     #expect(AppStoreUploadRequest.file(fromMarker: "::publish appstore /tmp/a b.json")?.path == "/tmp/a b.json")
   }
 
+  @Test func appStoreStatusReportsBuildsAndWhatIsMissingWithoutContactValues() async throws {
+    let build = ["id": "B7", "type": "builds",
+                 "attributes": ["version": "42", "processingState": "VALID", "uploadedDate": "2026-11-23T10:00:00Z"],
+                 "relationships": ["preReleaseVersion": ["data": ["id": "P1", "type": "preReleaseVersions"]]]] as [String: Any]
+    let stub = Stub([
+      "GET /v1/apps?filter[bundleId]=dev.v57.app": (200, ["data": [attributes("A1", ["name": "App", "sku": "app"])]]),
+      "GET /v1/builds?filter[app]=A1&filter[preReleaseVersion.platform]=IOS&sort=-uploadedDate&limit=10&include=preReleaseVersion":
+        (200, ["data": [build], "included": [attributes("P1", ["version": "1.0"])]]),
+      "GET /v1/apps/A1/appStoreVersions?filter[platform]=IOS&limit=20&include=build": (200, ["data": [
+        attributes("V1", ["versionString": "1.0", "appVersionState": "PREPARE_FOR_SUBMISSION"]),
+      ]]),
+      "GET /v1/appStoreVersions/V1/appStoreVersionLocalizations?limit=50": (200, ["data": [
+        attributes("L1", ["locale": "en-US", "description": "Text", "keywords": "a,b", "supportUrl": "https://x"]),
+      ]]),
+      "GET /v1/appStoreVersionLocalizations/L1/appScreenshotSets?limit=50": (200, ["data": [
+        attributes("S1", ["screenshotDisplayType": "APP_IPHONE_67"]),
+      ]]),
+      "GET /v1/appScreenshotSets/S1/appScreenshots?limit=1": (200, ["data": [["id": "x"]], "meta": ["paging": ["total": 4]]]),
+      "GET /v1/appStoreVersions/V1/appStoreReviewDetail": (200, ["data": attributes("R1", [
+        "contactFirstName": "Maya", "contactLastName": "Doe", "contactPhone": "", "contactEmail": "maya@example.com",
+      ])]),
+      "GET /v1/apps/A1/appInfos": (200, ["data": [attributes("I1", ["state": "PREPARE_FOR_SUBMISSION"])]]),
+      "GET /v1/appInfos/I1/appInfoLocalizations?limit=50": (200, ["data": [attributes("IL1", ["locale": "en-US", "name": "App"])]]),
+    ])
+    let api = AppStoreConnectAPI(keyID: "K", issuerID: "I", privateKey: P256.Signing.PrivateKey(), send: stub.send)
+    let status = try await AppStoreStatus.read(api: api, bundleID: "dev.v57.app", platform: "ios", version: "1.0")
+    let builds = status["builds"] as? [[String: Any]] ?? []
+    #expect(builds.first?["build"] as? String == "42" && builds.first?["version"] as? String == "1.0")
+    #expect(builds.first?["processingState"] as? String == "VALID")
+    let selected = status["selected"] as? [String: Any]
+    #expect(selected?["build"] is NSNull)
+    let locales = selected?["locales"] as? [[String: Any]]
+    #expect((locales?.first?["screenshots"] as? [String: Int])?["APP_IPHONE_67"] == 4)
+    let missing = status["missing"] as? [String] ?? []
+    #expect(missing.contains("No build attached to 1.0"))
+    #expect(missing.contains("App Review contact: contactPhone"))
+    #expect(missing.contains("Primary category") && missing.contains("Age rating") && missing.contains("Copyright"))
+    #expect(missing.contains("en-US: privacy policy URL"))
+    let text = String(describing: status)
+    #expect(!text.contains("maya@example.com") && !text.contains("Maya"))
+    #expect(stub.writes().isEmpty)
+  }
+
   nonisolated final class Counter: @unchecked Sendable {
     private let lock = NSLock()
     private(set) var value = 0

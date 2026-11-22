@@ -151,6 +151,15 @@ nonisolated enum MCPServer {
            ["project": projectArg], required: ["project"]),
       tool("get_runs", "A project's recent workflow runs, newest first, with each step's state, the end of its log, and the files the run made (artifacts: path, kind, platform, size).",
            ["project": projectArg], required: ["project"]),
+      tool("get_app_store_status", "Where the project's app stands in App Store Connect (GET requests with the App Store Connect key only): its record, its versions on the platform with the build each has, its ten newest builds (build number, marketing version, processing state, export compliance), the selected version's text and screenshot counts per locale and whether its App Review contact is complete (never the values), its category, age rating, content rights and price, and a list of what's still missing before it can be submitted. App Privacy has no API.",
+           ["project": projectArg, "platform": ["type": "string", "description": "ios or macos; empty is release.env's APP_STORE_PLATFORM, else ios"],
+            "version": ["type": "string", "description": "The version to check; empty is the one in preparation"]],
+           required: ["project"]),
+      tool("attach_app_store_build", "Attaches a build App Store Connect has processed to the version it belongs to (making the version when the app has none). It doesn't wait: a build still processing fails, try again later. Never submits for review. Needs the publish permission.",
+           ["project": projectArg, "version": ["type": "string", "description": "The marketing version, e.g. 1.0"],
+            "build": ["type": "string", "description": "The build number"],
+            "platform": ["type": "string", "description": "ios or macos; empty is release.env's APP_STORE_PLATFORM, else ios"]],
+           required: ["project", "version", "build"]),
     ]
   }
 
@@ -341,6 +350,35 @@ nonisolated enum MCPServer {
       try require(.read, "read runs")
       let root = try project(arguments)
       return try json(WorkflowHistoryFile.runs(for: root).prefix(10).map { $0 })
+    case "get_app_store_status":
+      let root = try project(arguments)
+      try require(.read, "read \(root.lastPathComponent) in App Store Connect")
+      let (api, bundleID, platform) = try appStoreConnect(root, arguments)
+      let version = (arguments["version"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+      final class Box: @unchecked Sendable { var value: Result<[String: Any], Error> = .success([:]) }
+      let box = Box()
+      _ = blocking {
+        do { box.value = .success(try await AppStoreStatus.read(api: api, bundleID: bundleID, platform: platform, version: version)) }
+        catch { box.value = .failure(error) }
+        return ""
+      }
+      return try box.value.get()
+    case "attach_app_store_build":
+      let root = try project(arguments)
+      let version = arguments["version"] as? String ?? "", build = arguments["build"] as? String ?? ""
+      guard !version.isEmpty, !build.isEmpty else { throw ToolError(message: "Give the version and the build number.") }
+      try require(.publish, "attach build \(build) to version \(version) of \(root.lastPathComponent) in App Store Connect")
+      let (api, bundleID, platform) = try appStoreConnect(root, arguments)
+      final class Box: @unchecked Sendable { var value: Result<[String], Error> = .success([]) }
+      let box = Box()
+      _ = blocking {
+        do { box.value = .success(try await AppStoreStatus.attach(api: api, bundleID: bundleID, platform: platform, version: version, build: build)) }
+        catch { box.value = .failure(error) }
+        return ""
+      }
+      let lines = try box.value.get()
+      AgentPermissions.log("Attached build \(build) to \(version) of \(root.lastPathComponent) in App Store Connect")
+      return lines
     default:
       throw ToolError(message: "Unknown tool \(name)")
     }
@@ -389,6 +427,18 @@ nonisolated enum MCPServer {
     let expanded = (value as NSString).expandingTildeInPath
     if known.contains(where: { $0.root == expanded }) { return URL(fileURLWithPath: expanded) }
     throw ToolError(message: "No project \"\(value)\" in Dev. Known: \(known.map(\.name).joined(separator: ", ")).")
+  }
+
+  /// The App Store Connect key, bundle ID (store.json's) and platform of a project.
+  private static func appStoreConnect(_ root: URL, _ arguments: [String: Any]) throws -> (AppStoreConnectAPI, String, String) {
+    guard let config = ReleaseConfig.load(from: root) else { throw ToolError(message: "\(root.lastPathComponent) has no release.env.") }
+    let api = try AppStoreConnectAPI(config: config)
+    guard let bundleID = StoreTexts(root: root).settings().bundleID, !bundleID.isEmpty else {
+      throw ToolError(message: "Enter the bundle ID in Store Text's Setup (store.json's bundleID).")
+    }
+    var platform = (arguments["platform"] as? String ?? "").lowercased()
+    if platform.isEmpty { platform = config["APP_STORE_PLATFORM"].isEmpty ? "ios" : config["APP_STORE_PLATFORM"] }
+    return (api, bundleID, platform)
   }
 
   /// Checks the reader's permission; "Ask First" asks the open app.
