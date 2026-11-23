@@ -945,13 +945,28 @@ notarize() {
     || fail "notarization of $(basename "$1") failed (xcrun notarytool log <id> --keychain-profile $NOTARY_PROFILE)"
 }
 
+# Staples a notarized file. Apple publishes the ticket a little after notarytool reports Accepted, so a staple right
+# away can fail with "Record not found" (error 65): it's tried again for up to two minutes.
+staple() {
+  echo "\$ xcrun stapler staple $1"
+  [ "$DRY_RUN" = 1 ] && return 0
+  local try
+  for try in 1 2 3 4 5 6 7; do
+    xcrun stapler staple "$1" && return 0
+    [ "$try" = 7 ] && break
+    echo "the ticket isn't published yet; trying again in 20 seconds"
+    sleep 20
+  done
+  return 1
+}
+
 # Signs, notarizes and staples a .app in place.
 notarize_app() {
   local app="$1" upload="$OUT/notarize-$(basename "$1" .app).zip"
   run codesign --verify --deep --strict "$app"
   run ditto -c -k --keepParent "$app" "$upload"
   notarize "$upload"
-  run xcrun stapler staple "$app"
+  staple "$app"
   run rm -f "$upload"
 }
 
@@ -975,7 +990,7 @@ package() {
     if [ -n "$seal" ]; then run codesign --sign "$IDENTITY" --timestamp "$OUT/$name.dmg"; fi
     if [ "$seal" = notarize ]; then
       notarize "$OUT/$name.dmg"
-      run xcrun stapler staple "$OUT/$name.dmg"
+      staple "$OUT/$name.dmg"
     fi
     artifact package "$OUT/$name.dmg" ;;
   esac
