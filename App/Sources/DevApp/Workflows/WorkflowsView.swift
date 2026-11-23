@@ -617,10 +617,15 @@ struct WorkflowsView: View {
                 .accessibilityLabel("Command")
               }
           } else {
+            // Copied from its menu, not selected: selectable text (AppKit's) as a row's labelled field crashed Dev when
+            // an accessibility client read it as the page went away (SwiftUI asked the text for its label, which asked
+            // SwiftUI back, until the stack overflowed; an agent listing elements, 2026-11-23).
             FormRow("Command", systemImage: "apple.terminal", hue: .green, field: Text(step.commandLine)
               .kitFont(.mono)
-              .textSelection(.enabled)
-              .frame(maxWidth: .infinity, alignment: .leading))
+              .frame(maxWidth: .infinity, alignment: .leading)
+              .kitContextMenu {
+                Button("Copy Command", systemImage: "doc.on.doc") { KitPasteboard.copy(step.commandLine) }
+              })
           }
           FormRow("Run at the same time as the step before", systemImage: "arrow.left.and.right", hue: .gray) {
             Toggle("Run at the same time as the step before", isOn: binding(workflow, index, \.parallel))
