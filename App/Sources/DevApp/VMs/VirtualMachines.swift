@@ -199,8 +199,15 @@ final class VMStore {
       addresses[vm.id] = name
       return name
     }
-    addresses[vm.id] = found
+    // Kept only once SSH answers there: a guest that just started may still hold last boot's lease (another bridge
+    // the next time, 192.168.64.2 → 192.168.65.3), and a cached dead address failed every later step.
+    if await Self.answersSSH(found) { addresses[vm.id] = found }
     return found
+  }
+
+  /// Whether port 22 at `address` accepts a connection within 3 seconds.
+  nonisolated static func answersSSH(_ address: String) async -> Bool {
+    await LineProcess.run("/usr/bin/nc", ["-z", "-G", "3", address, "22"]).status == 0
   }
 
   /// The `.local` name the machine at `address` answers to: its `hostname` over SSH (a Linux shell and Windows'
