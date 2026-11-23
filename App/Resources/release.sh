@@ -419,6 +419,13 @@ linux_sh() {
 # What a remote build shows of its output (all of it is in the log): errors, what it fetches, links and stages.
 REMOTE_SHOWN='error:|[Bb]uild complete|^Building |^Staged|^Fetching|^Cloning|^Computing|^Creating working copy|Linking |dev-release-file|^stripped: |^Swift version|^[0-9]+\.[0-9]+\.[0-9]+$'
 
+# The paths a remote build names on "<tag>: PATH" lines. PowerShell's progress records (CLIXML) can land on the
+# same line ahead of one ("…MarkdownWidev-release-file: C:\…-x64.zip"), so the tag is found anywhere in a line, and a
+# path ends before the next "<" (a path never has one).
+release_lines() {
+  grep -o "$1: [^<]*" "$2" | sed "s/^$1: //; s/[[:space:]]*\$//"
+}
+
 # remote_run SCRIPT: the platform's script on HOST, its output in OUT/remote-<step>.log, shown as REMOTE_SHOWN keeps
 # it (the end of the log when it fails); the files it names on "dev-release-file: PATH" lines come back into OUT.
 remote_run() {
@@ -446,13 +453,13 @@ remote_run() {
     # Windows' ACLs arrive as odd modes (rw----r-x).
     chmod 644 "$OUT/$name"
     REMOTE_FILES+=("$OUT/$name")
-  done < <(sed -n 's/^dev-release-file: //p' "$log")
+  done < <(release_lines dev-release-file "$log")
   # "dev-release-debug: PATH": debug info kept with the run (OUT/debug/), not a download.
   while IFS= read -r file; do
     [ -n "$file" ] || continue
     mkdir -p "$OUT/debug"
     scp -q "${SSH_OPTS[@]}" "$HOST:$file" "$OUT/debug/" || echo "note: copying $file failed (debug info only)"
-  done < <(sed -n 's/^dev-release-debug: //p' "$log")
+  done < <(release_lines dev-release-debug "$log")
 }
 
 # render_icon: the project's Icon Composer icon (AppIcon.icon first) rendered on this Mac by actool, as ICON_ICNS
