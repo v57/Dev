@@ -660,15 +660,19 @@ final class WorkflowStore {
       append(runID, stepID, root, "Starting \(vm.name)…")
       await store.start(vm)
     }
+    // Until SSH answers, not just until there's an address: a machine that just started has none of its own yet, and
+    // the one known from before (its `.local` name, last boot's lease) failed the step at once.
     var address: String?
-    for _ in 0..<30 {
-      address = await store.address(of: vm)
-      if address != nil { break }
+    for _ in 0..<60 {
+      if let found = await store.address(of: vm) {
+        if await VMStore.answersSSH(found) { address = found; break }
+        store.forgetAddress(of: vm)
+      }
       try? await Task.sleep(for: .seconds(4))
       if Task.isCancelled { return nil }
     }
     guard let address else {
-      setStep(root, stepID) { $0.note = String(localized: "no address for \(vm.name)") }
+      setStep(root, stepID) { $0.note = String(localized: "\(vm.name) didn't answer over SSH") }
       return nil
     }
     let settings = VMSettings.load(vm.id)
