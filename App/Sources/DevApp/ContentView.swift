@@ -29,6 +29,8 @@ struct ContentView: View {
   @State private var columns: NavigationSplitViewVisibility = .all
   /// The window's account (`DevWindow`); its projects fill the sidebar.
   @Environment(\.vault) private var vault
+  /// The window is the key one: its agent bridge answers the next request.
+  @Environment(\.appearsActive) private var appearsActive
   /// The demo project a screenshot launch imported: scenes that open a tool come back to it.
   @State private var demoProject: Int64?
   @State private var createIcon = CreateIcon()
@@ -84,8 +86,13 @@ struct ContentView: View {
       workflows.vms = vms
       agents.workflows = workflows
       agents.screenshots = screenshots
+      agents.show()
       workflows.watchedRoots = model.projects.compactMap(\.rootURL)
       AppInstalls.shared.track(model.projects.compactMap(\.rootURL))
+    }
+    .onDisappear { agents.hide() }
+    .onChange(of: appearsActive) { _, active in
+      if active { agents.show() }
     }
     .onChange(of: model.projects.compactMap(\.rootURL)) { _, roots in
       workflows.watchedRoots = roots

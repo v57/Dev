@@ -25,6 +25,25 @@ struct ApprovalsTests {
     #expect(agents.waiting.map(\.id) == [third.id])
   }
 
+  @Test func oneWindowAnswersARequestTheLastActiveOnScreen() {
+    let first = AgentBridge()
+    let second = AgentBridge()
+    defer {
+      first.hide()
+      second.hide()
+    }
+    #expect(AgentBridge.answering !== first && AgentBridge.answering !== second)
+    first.show()
+    second.show()
+    #expect(AgentBridge.answering === second)
+    first.show()  // the first window became active again
+    #expect(AgentBridge.answering === first)
+    first.hide()  // and closed
+    #expect(AgentBridge.answering === second)
+    second.hide()
+    #expect(AgentBridge.answering !== second)
+  }
+
   @Test func listsWorkflowFilesWithATriggerNobodyApproved() throws {
     let root = URL(fileURLWithPath: NSTemporaryDirectory()).appending(path: "dev-approvals-\(UUID().uuidString)")
     let bare = URL(fileURLWithPath: NSTemporaryDirectory()).appending(path: "dev-approvals-bare-\(UUID().uuidString)")

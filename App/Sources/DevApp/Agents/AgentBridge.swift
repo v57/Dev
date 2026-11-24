@@ -32,12 +32,36 @@ final class AgentBridge {
   @ObservationIgnored weak var workflows: WorkflowStore?
   @ObservationIgnored weak var screenshots: ScreenshotsStore?
 
+  /// The bridges of the windows on screen, the one last active at the end. Each window has its own bridge and its own
+  /// workflow store, so a request goes to one of them, never to all: when every bridge answered, one request started
+  /// a run per window (and windows SwiftUI kept after closing them answered too), each copy building into the same
+  /// run folder at once (2026-11-24).
+  private static var onScreen: [WeakBridge] = []
+  private static var requests: Broadcast.Observation?
+  private struct WeakBridge { weak var bridge: AgentBridge? }
+
+  /// The bridge that answers the next request: the window last active among those on screen.
+  static var answering: AgentBridge? { onScreen.last(where: { $0.bridge != nil })?.bridge }
+
+  /// The window is on screen or just became active: its bridge answers from now on.
+  func show() {
+    Self.onScreen.removeAll { $0.bridge == nil || $0.bridge === self }
+    Self.onScreen.append(WeakBridge(bridge: self))
+  }
+
+  /// The window went away: its bridge stops answering.
+  func hide() {
+    Self.onScreen.removeAll { $0.bridge == nil || $0.bridge === self }
+  }
+
   init() {
     // A screenshot or test launch beside the real app must not answer for it.
     guard !LaunchOptions.isScreenshotMode else { return }
-    observers.append(Broadcast.observe(AgentChannel.request) { [weak self] info in
-      MainActor.assumeIsolated { self?.receive(info) }
-    })
+    if Self.requests == nil {
+      Self.requests = Broadcast.observe(AgentChannel.request) { info in
+        MainActor.assumeIsolated { AgentBridge.answering?.receive(info) }
+      }
+    }
     observers.append(Broadcast.observe(AgentChannel.changed) { [weak self] info in
       guard let path = info["project"] else { return }
       MainActor.assumeIsolated {
