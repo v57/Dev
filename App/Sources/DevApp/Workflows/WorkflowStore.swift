@@ -651,7 +651,9 @@ final class WorkflowStore {
     _ vmName: String, stepID: String, runID: UUID, root: URL
   ) async -> (target: String, system: VirtualMachine.System)? {
     guard let store = vms else { return nil }
-    if store.machines.isEmpty { await store.refresh() }
+    // UTM's state now, not the list's: a machine stopped outside Dev (by hand, a script, the Mac's sleep) still showed
+    // as started, so the step waited for an SSH that never came instead of starting it (2026-11-25).
+    await store.refresh()
     guard let vm = store.machines.first(where: { $0.name == vmName }) else {
       setStep(root, stepID) { $0.note = String(localized: "no UTM machine named \(vmName)") }
       return nil

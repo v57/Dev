@@ -145,6 +145,8 @@ final class VMStore {
       }
       return vm
     }
+    // A stopped machine's address is last boot's: the next start may get another lease.
+    for vm in machines where !vm.status.isRunning { addresses[vm.id] = nil }
     for vm in machines where vm.status.isRunning && addresses[vm.id] == nil {
       _ = await address(of: vm)
     }
