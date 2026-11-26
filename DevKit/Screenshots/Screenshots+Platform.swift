@@ -108,6 +108,8 @@ import Foundation
           },
         ]
       }
+
+      static var screen: String? { nil }
     }
   }
 
@@ -142,6 +144,13 @@ import Foundation
 
       /// The simulator takes the picture of the whole screen.
       static func present() async -> Int? { nil }
+
+      /// The pixels of the screen the app's window is on, `2007x2853`: an iPhone Duo has two, and the capture takes
+      /// the one the app is on (`UIScreen.main` is its outer screen whichever is lit).
+      static var screen: String? {
+        guard let size = window?.windowScene?.screen.nativeBounds.size else { return nil }
+        return "\(Int(size.width))x\(Int(size.height))"
+      }
     }
   }
 
@@ -153,6 +162,7 @@ import Foundation
       static func reportFocus() {}
       static func waitForWindow() async {}
       static func present() async -> Int? { nil }
+      static var screen: String? { nil }
     }
   }
 #endif

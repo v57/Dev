@@ -5,6 +5,29 @@ import Testing
 @testable import DevScreenshotsCapture
 
 struct ScreenshotConfigTests {
+  #if os(macOS)
+    /// An iPhone Duo: simctl won't choose between its screens, and the app says which its window is on.
+    @Test func aDeviceWithTwoScreensIsCapturedOnTheAppsScreen() {
+      typealias Display = SimulatorCapturer.Display
+      let output = """
+        Detected file type from extension: PNG
+        An error was encountered processing the command (domain=NSPOSIXErrorDomain, code=22):
+        Cannot choose between 2 displays. Specify one with --display:
+            --display=3  LCD-1 (primary-1) 2007x2853
+            --display=1  LCD (primary) 1398x2034
+        Invalid argument
+        """
+      let displays = Display.list(in: output)
+      #expect(displays.map(\.id) == ["3", "1"])
+      #expect(displays.first { $0.size.matches(Display.Size("2007x2853")!) }?.id == "3")
+      // Held the other way, and the closed phone.
+      #expect(displays.first { $0.size.matches(Display.Size("2853x2007")!) }?.id == "3")
+      #expect(displays.first { $0.size.matches(Display.Size("1398x2034")!) }?.id == "1")
+      #expect(displays.first(where: \.isPrimary)?.id == "1")
+      #expect(Display.list(in: "Invalid argument").isEmpty)
+    }
+  #endif
+
   @Test func missingKeysTakeTheirDefaults() throws {
     let json = #"{ "scenes": [{ "id": "01-main" }] }"#
     let config = try JSONDecoder().decode(ScreenshotConfig.self, from: Data(json.utf8))

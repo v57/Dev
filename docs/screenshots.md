@@ -52,6 +52,12 @@ The package is `DevKit/` in this repo (`Package.swift` at the root):
 | scene `caption` | none | the caption key in the development language, for `framing` and the App Store |
 | scene `relaunch` | false | a fresh launch even when the app takes scenes in one launch |
 
+An **iPhone Duo** (`"iPhone Duo"` in `devices`, platform `iphone`) has two screens, and simctl won't choose between
+them: the picture is of the one the app's window is on (the app says so in its `ready`, `screen=2007x2853`), or, for an
+app without `Screenshots.prepare()`, of the one that is lit. It is taken as the simulator stands, closed (1398 × 2034)
+or unfolded (2853 × 2007, laid out like an iPad): simctl can't move the hinge, so open it in the Simulator before the
+capture for the unfolded pictures. Both go to `iphone-duo/`, so a capture in the other posture replaces them.
+
 Pictures: `<output>/mac/<locale>/<id>.png`, `<output>/<device-slug>/<locale>/<id>.png`, and `-dark` before `.png` for
 dark. A run that captures some scenes keeps the others' pictures.
 

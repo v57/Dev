@@ -83,7 +83,9 @@ public enum Screenshots {
   private static func present(delay: Double, scene: String?) async {
     try? await Task.sleep(for: .seconds(delay))
     let window = await Platform.present()
-    ScreenshotSignal.send((window.map { "ready window=\($0)" } ?? "ready") + (scene.map { " scene=\($0)" } ?? ""))
+    ScreenshotSignal.send(
+      (window.map { "ready window=\($0)" } ?? "ready") + (scene.map { " scene=\($0)" } ?? "")
+        + (Platform.screen.map { " screen=\($0)" } ?? ""))
   }
 
   /// The next scenes, one JSON line each on the input, sent once the picture before is taken.
@@ -114,7 +116,7 @@ extension ScreenshotConfig.Scene {
 }
 
 /// What the app and `dev-screenshots` exchange: environment variables at launch, `dev-screenshot: …` lines on stdout
-/// (`hello pid=… [scenes]`, `reopen`, `activate`, `focus active|inactive`, `ready [window=…] [scene=…]`) and, for apps
+/// (`hello pid=… [scenes]`, `reopen`, `activate`, `focus active|inactive`, `ready [window=…] [scene=…] [screen=<width>x<height>]`) and, for apps
 /// with a scene handler,
 /// the next scene as a JSON line on stdin, or on the FIFO `DEV_SCREENSHOT_INPUT` names.
 public enum ScreenshotSignal {

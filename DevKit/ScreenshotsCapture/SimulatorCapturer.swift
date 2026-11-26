@@ -1,6 +1,8 @@
 #if os(macOS)
+  import CoreGraphics
   import DevScreenshots
   import Foundation
+  import ImageIO
 
   /// Takes pictures of an iOS app in a simulator with `simctl`: installs it, sets the appearance and a clean status
   /// bar, launches it with the scene's arguments and takes the whole screen once the app says it is ready (or, for
@@ -94,11 +96,11 @@
             instance = launched
             try launched.waitForFirstReady(delay: shot.scene.delay, timeout: timeout)
             // A cold launch can say it's ready before its first frames reach the screen (a blank window).
-            try steadyScreenshot(to: shot.file)
+            try steadyScreenshot(to: shot.file, screen: launched.screen)
             report(shot, nil)
             continue
           }
-          try screenshot(to: shot.file)
+          try screenshot(to: shot.file, screen: instance?.screen)
           report(shot, nil)
         } catch {
           report(shot, error)
@@ -122,6 +124,8 @@
       let bundleID: String
       private(set) var usesKit = false
       private(set) var takesScenes = false
+      /// The pixels of the screen the app said its window is on, in its last `ready`.
+      private(set) var screen: Display.Size?
       private var quitDone = false
 
       init(capturer: SimulatorCapturer, first shot: CaptureShot, locale: String) throws {
@@ -215,6 +219,9 @@
             usesKit = true
             takesScenes = words.contains("scenes")
           } else if words.first == "ready" {
+            if let said = words.first(where: { $0.hasPrefix("screen=") }) {
+              screen = Display.Size(String(said.dropFirst("screen=".count)))
+            }
             let named = words.first { $0.hasPrefix("scene=") }.map { String($0.dropFirst("scene=".count)) }
             if named == scene { return true }
           }
@@ -236,11 +243,11 @@
 
     /// Shoots until two pictures in a row are the same (at most `steadyTries`, `steadyInterval` apart), so a launch
     /// still drawing its first frames isn't what's kept.
-    private func steadyScreenshot(to file: URL) throws {
+    private func steadyScreenshot(to file: URL, screen: Display.Size?) throws {
       var previous: Data?
       Thread.sleep(forTimeInterval: Self.firstFrameSettle)
       for _ in 0..<Self.steadyTries {
-        try screenshot(to: file)
+        try screenshot(to: file, screen: screen)
         let picture = try Data(contentsOf: file)
         if picture == previous { return }
         previous = picture
@@ -253,11 +260,93 @@
     static let steadyTries = 8
     static let steadyInterval: TimeInterval = 0.6
 
-    private func screenshot(to file: URL) throws {
+    /// The whole screen. A device with two (an iPhone Duo: the outer screen and the unfolded one) makes simctl ask
+    /// which: the one the app said its window is on (`screen`); for an app without the kit, the one that is lit (the
+    /// other is black), the outer one first.
+    private func screenshot(to file: URL, screen: Display.Size?) throws {
       try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
       try? FileManager.default.removeItem(at: file)
-      let result = Shell.run("xcrun", ["simctl", "io", device.udid, "screenshot", "--type=png", file.path])
+      func shoot(_ display: Display?) -> Shell.Result {
+        try? FileManager.default.removeItem(at: file)
+        return Shell.run(
+          "xcrun",
+          ["simctl", "io", device.udid, "screenshot", "--type=png"] + (display.map { ["--display=\($0.id)"] } ?? [])
+            + [file.path])
+      }
+      var result = shoot(nil)
+      if !result.succeeded {
+        let displays = Display.list(in: result.output)
+        if let screen, let display = displays.first(where: { $0.size.matches(screen) }) {
+          result = shoot(display)
+        } else {
+          let outerFirst = displays.filter(\.isPrimary) + displays.filter { !$0.isPrimary }
+          for display in outerFirst {
+            result = shoot(display)
+            if result.succeeded, !Display.isBlack(file) { break }
+          }
+          // Every screen black (the app's own black screen): the outer one.
+          if result.succeeded, Display.isBlack(file), let outer = outerFirst.first { result = shoot(outer) }
+        }
+      }
       guard result.succeeded else { throw CaptureError("simctl screenshot failed:\n" + result.tail()) }
+    }
+
+    /// One of a simulator's screens, as simctl lists them when it can't choose:
+    /// `--display=3  LCD-1 (primary-1) 2007x2853`.
+    struct Display: Equatable {
+      var id: String
+      var isPrimary: Bool
+      var size: Size
+
+      struct Size: Equatable {
+        var width: Int
+        var height: Int
+
+        init(width: Int, height: Int) {
+          self.width = width
+          self.height = height
+        }
+
+        /// `2007x2853`.
+        init?(_ text: String) {
+          let parts = text.split(separator: "x").compactMap { Int($0) }
+          guard parts.count == 2 else { return nil }
+          self.init(width: parts[0], height: parts[1])
+        }
+
+        /// The same screen whichever way it is held.
+        func matches(_ other: Size) -> Bool {
+          (width == other.width && height == other.height) || (width == other.height && height == other.width)
+        }
+      }
+
+      static func list(in output: String) -> [Display] {
+        output.split(separator: "\n").compactMap { line in
+          let words = line.split(separator: " ")
+          guard let first = words.first, first.hasPrefix("--display="), let last = words.last,
+            let size = Size(String(last))
+          else { return nil }
+          return Display(
+            id: String(first.dropFirst("--display=".count)), isPrimary: words.contains("(primary)"), size: size)
+        }
+      }
+
+      /// Whether the picture is black all over: a screen that isn't lit. A lit one has at least its status bar.
+      static func isBlack(_ file: URL) -> Bool {
+        guard let source = CGImageSourceCreateWithURL(file as CFURL, nil),
+          let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
+        else { return false }
+        let side = 64
+        var pixels = [UInt8](repeating: 0, count: side * side * 4)
+        guard
+          let context = CGContext(
+            data: &pixels, width: side, height: side, bitsPerComponent: 8, bytesPerRow: side * 4,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)
+        else { return false }
+        context.interpolationQuality = .low
+        context.draw(image, in: CGRect(x: 0, y: 0, width: side, height: side))
+        return !pixels.enumerated().contains { $0.offset % 4 != 3 && $0.element > 12 }
+      }
     }
   }
 #endif
