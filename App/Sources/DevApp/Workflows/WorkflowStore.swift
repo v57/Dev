@@ -247,8 +247,20 @@ final class WorkflowStore {
       if step.parallel, !stages.isEmpty { stages[stages.count - 1].append(step) } else { stages.append([step]) }
     }
 
+    for step in workflow.steps {
+      if let vm = step.vmName { RunMachines.shared.users[vm, default: []].insert(runID) }
+    }
+
     var failed = false
-    for stage in stages {
+    for (index, stage) in stages.enumerated() {
+      defer {
+        // A VM no later stage uses shuts down before the next stage starts (one VM at a time: Windows is off before
+        // Ubuntu boots).
+        let later = Set(stages[(index + 1)...].joined().compactMap(\.vmName))
+        for vm in Set(stage.compactMap(\.vmName)).subtracting(later) {
+          await RunMachines.shared.release(vm, from: runID, store: vms)
+        }
+      }
       if Task.isCancelled { break }
       if failed && !workflow.continueOnFailure {
         for step in stage { setStep(root, step.id) { $0.state = .skipped; $0.note = String(localized: "an earlier step failed") } }
@@ -300,6 +312,10 @@ final class WorkflowStore {
     processes[root] = nil
     accounts[root] = nil
     saveHistory()
+    // The VMs of stages a cancel never reached.
+    for (vm, users) in RunMachines.shared.users where users.contains(runID) {
+      await RunMachines.shared.release(vm, from: runID, store: vms)
+    }
   }
 
   /// Runs one step and answers whether it passed.
@@ -504,12 +520,17 @@ final class WorkflowStore {
   }
 
   #if DEBUG
+    /// The store that answers debug commands.
+    private static weak var debugAnswerer: WorkflowStore?
+
     /// Debug builds take commands without a click: post the distributed notification `dev.v57.dev.workflows` with
     /// `run <workflow id> <project folder>`, `cancel <project folder>`, or `dump <project folder>` (the run in flight
-    /// or the last one, with each step's jobs, runners and log tails, to /tmp/dev-workflows.txt).
+    /// or the last one, with each step's jobs, runners and log tails, to /tmp/dev-workflows.txt). One window's store
+    /// answers, as with agent requests: every window's store started its own run.
     private func listenForDebugCommands() async {
       for await note in Broadcast.messages(named: "dev.v57.dev.workflows") {
-        guard let command = note[Broadcast.objectKey] else { continue }
+        if Self.debugAnswerer == nil { Self.debugAnswerer = self }
+        guard Self.debugAnswerer === self, let command = note[Broadcast.objectKey] else { continue }
         let parts = command.split(separator: " ", maxSplits: 2).map(String.init)
         switch parts.first {
         case "run" where parts.count == 3:
@@ -658,8 +679,14 @@ final class WorkflowStore {
       setStep(root, stepID) { $0.note = String(localized: "no UTM machine named \(vmName)") }
       return nil
     }
-    if !vm.status.isRunning {
+    if let stopping = RunMachines.shared.stopping[vm.id] {
+      append(runID, stepID, root, "Waiting for \(vm.name) to shut down…")
+      await stopping.value
+      await store.refresh()
+    }
+    if store.machines.first(where: { $0.id == vm.id })?.status.isRunning != true {
       append(runID, stepID, root, "Starting \(vm.name)…")
+      RunMachines.shared.started[vm.name] = vm
       await store.start(vm)
     }
     // Until SSH answers, not just until there's an address: a machine that just started has none of its own yet, and
@@ -939,4 +966,33 @@ final class WorkflowStore {
 
 nonisolated extension String {
   var nilIfEmpty: String? { isEmpty ? nil : self }
+}
+
+/// The UTM machines runs use, shared by every window's store (each window has its own): which ones a run started, which
+/// runs still have steps to come on each, and the shutdowns in progress.
+final class RunMachines {
+  static let shared = RunMachines()
+
+  /// The machines a run started (by name), as they were then: shut down once no run still needs them, without looking
+  /// them up again (the store's list was empty for a moment while UTM started another machine). One that was already
+  /// running stays on.
+  var started: [String: VirtualMachine] = [:]
+  /// The runs with steps still to come on each machine (by name).
+  var users: [String: Set<UUID>] = [:]
+  /// Shutdowns in progress, by machine id: a step that wants the machine waits for its shutdown, then starts it again.
+  var stopping: [String: Task<Void, Never>] = [:]
+
+  /// The run `runID` needs `vmName` no more: when no other run does and a run started it, it shuts down (the guest
+  /// is asked first), and a run that wants it meanwhile waits for that. The shutdown isn't the run's child task, so a
+  /// cancelled run still shuts its machines down.
+  func release(_ vmName: String, from runID: UUID, store: VMStore?) async {
+    users[vmName]?.remove(runID)
+    guard users[vmName]?.isEmpty ?? true else { return }
+    users[vmName] = nil
+    guard let store, let vm = started.removeValue(forKey: vmName) else { return }
+    let shutdown = Task { @MainActor in await store.shutDown(vm) }
+    stopping[vm.id] = shutdown
+    await shutdown.value
+    if stopping[vm.id] == shutdown { stopping[vm.id] = nil }
+  }
 }

@@ -170,11 +170,43 @@ final class VMStore {
   func stop(_ vm: VirtualMachine) async { await control(vm, "stop") }
   func suspend(_ vm: VirtualMachine) async { await control(vm, "suspend") }
 
-  private func control(_ vm: VirtualMachine, _ verb: String) async {
+  /// Shuts the guest down cleanly and waits until UTM says it stopped: over SSH (`sudo -n poweroff`, `shutdown /s`),
+  /// else UTM's request (the power button, which Ubuntu's desktop left in `stopping` for 17 minutes); `stop`'s
+  /// power-off when it hasn't stopped after `timeout`.
+  func shutDown(_ vm: VirtualMachine, timeout: Duration = .seconds(120)) async {
+    let settings = VMSettings.load(vm.id)
+    let system = settings.system ?? vm.guessedSystem
+    let user = settings.user.isEmpty ? Self.sshUser(for: vm) : settings.user
+    var asked = false
+    if let address = await address(of: vm), await Self.answersSSH(address) {
+      let command = system == .windows ? "shutdown /s /t 0" : "sudo -n poweroff"
+      let result = await LineProcess.run(
+        "/usr/bin/ssh",
+        ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=accept-new",
+         "\(user)@\(address)", command])
+      // poweroff drops the connection (255); sudo without NOPASSWD answers 1 at once.
+      asked = result.status == 0 || result.status == 255
+    }
+    if !asked { await control(vm, "stop", options: ["--request"]) }
+    let clock = ContinuousClock()
+    let deadline = clock.now + timeout
+    while clock.now < deadline {
+      try? await Task.sleep(for: .seconds(5))
+      await refresh()
+      // Missing from the list isn't stopped: `utmctl list` can answer with no machines while UTM is busy.
+      if machines.first(where: { $0.id == vm.id })?.status == .stopped {
+        addresses[vm.id] = nil
+        return
+      }
+    }
+    await stop(vm)
+  }
+
+  private func control(_ vm: VirtualMachine, _ verb: String, options: [String] = []) async {
     guard let utmctl = Self.utmctl else { return }
     pending.insert(vm.id)
     defer { pending.remove(vm.id) }
-    let result = await LineProcess.run(utmctl, [verb, vm.id])
+    let result = await LineProcess.run(utmctl, [verb, vm.id] + options)
     if result.status != 0 { error = "\(verb) \(vm.name): \(result.output)" }
     if verb != "start" { addresses[vm.id] = nil }
     await refresh()
