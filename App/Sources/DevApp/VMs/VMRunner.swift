@@ -109,7 +109,8 @@ final class VMRunner {
     tar -czf - "${excludes[@]}" -s ",^\.,dev-sync/$DEV_NAME," -C "$DEV_ROOT" . \
       | ssh "${SSH_OPTS[@]}" "$DEV_TARGET" "tar -xzf - -C ." || exit $?
     echo "::run $DEV_COMMAND"
-    ssh "${SSH_OPTS[@]}" "$DEV_TARGET" "cd dev-sync\\$DEV_NAME && $DEV_COMMAND"
+    # Through cmd, whichever shell the guest's SSH gives: Windows PowerShell 5 (OpenSSH's default there) has no &&.
+    ssh "${SSH_OPTS[@]}" "$DEV_TARGET" "cmd /c \"cd /d dev-sync\\$DEV_NAME && $DEV_COMMAND\""
     status=$?
     echo "::exit $status"
     exit $status
